@@ -533,11 +533,7 @@ class HLSProxy:
             error_msg = str(e).lower()
             is_temporary_error = any(x in error_msg for x in ['403', 'forbidden', '502', 'bad gateway', 'timeout', 'connection', 'temporarily unavailable'])
             
-            extractor_name = "unknown"
-            if DLHDExtractor and isinstance(extractor, DLHDExtractor):
-                extractor_name = "DLHDExtractor"
-            elif VavooExtractor and isinstance(extractor, VavooExtractor):
-                extractor_name = "VavooExtractor"
+            extractor_name = type(extractor).__name__ if extractor else "unknown"
 
             # Se è un errore temporaneo (sito offline), logga solo un WARNING senza traceback
             if is_temporary_error:
@@ -1351,13 +1347,7 @@ class HLSProxy:
             "extractors_loaded": list(self.extractors.keys()),
             "modules": {
                 "playlist_builder": PlaylistBuilder is not None,
-                "vavoo_extractor": VavooExtractor is not None,
-                "dlhd_extractor": DLHDExtractor is not None,
-                "vixsrc_extractor": VixSrcExtractor is not None,
-                "sportsonline_extractor": SportsonlineExtractor is not None,
-                "mixdrop_extractor": MixdropExtractor is not None,
-                "voe_extractor": VoeExtractor is not None,
-                "streamtape_extractor": StreamtapeExtractor is not None,
+                **{f"{key}_extractor": True for key in EXTRACTOR_REGISTRY},
             },
             "proxy_config": {
                 "global_proxies": f"{len(GLOBAL_PROXIES)} proxies loaded",
