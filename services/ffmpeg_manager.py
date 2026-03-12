@@ -168,46 +168,44 @@ class FFmpegManager:
         logger.info(f"Starting FFmpeg for {stream_id} with key: {clearkey}")
         logger.info(f"Command: {cmd}")
         
-        log_file = open(os.path.join(stream_dir, "ffmpeg.log"), "w")
-        log_file.write(f"Command: {cmd}\n\n")
-        log_file.flush()
+        log_path = os.path.join(stream_dir, "ffmpeg.log")
         try:
-            process = await asyncio.create_subprocess_exec(
-                *cmd,
-                stdout=asyncio.subprocess.PIPE,
-                stderr=asyncio.subprocess.PIPE
-            )
+            with open(log_path, "w") as log_file:
+                log_file.write(f"Command: {cmd}\n\n")
+                log_file.flush()
 
-            self.processes[stream_id] = process
-            self.active_streams[stream_id] = url
-            
-            # Wait for the playlist to appear (up to 30 seconds)
-            for _ in range(300):  # Wait up to 30 seconds
-                if os.path.exists(playlist_path):
-                    log_file.close()
-                    break
-                # Check if process died
-                if process.returncode is not None:
-                    stdout, stderr = await process.communicate()
-                    log_file.write(f"STDERR: {stderr.decode()}\n")
-                    log_file.write(f"STDOUT: {stdout.decode()}\n")
-                    log_file.close()
-                    logger.error(f"FFmpeg process died. Stderr: {stderr.decode()[:500]}")
-                    return None
-                await asyncio.sleep(0.1)
-            else:
-                log_file.close()
-            
+                process = await asyncio.create_subprocess_exec(
+                    *cmd,
+                    stdout=asyncio.subprocess.PIPE,
+                    stderr=asyncio.subprocess.PIPE
+                )
+
+                self.processes[stream_id] = process
+                self.active_streams[stream_id] = url
+
+                # Wait for the playlist to appear (up to 30 seconds)
+                for _ in range(300):
+                    if os.path.exists(playlist_path):
+                        break
+                    # Check if process died
+                    if process.returncode is not None:
+                        stdout, stderr = await process.communicate()
+                        log_file.write(f"STDERR: {stderr.decode()}\n")
+                        log_file.write(f"STDOUT: {stdout.decode()}\n")
+                        logger.error(f"FFmpeg process died. Stderr: {stderr.decode()[:500]}")
+                        return None
+                    await asyncio.sleep(0.1)
+
             if not os.path.exists(playlist_path):
                  logger.error("Timeout waiting for playlist generation")
-                 # Kill process?
                  try:
                      process.terminate()
-                 except: pass
+                 except ProcessLookupError:
+                     pass
                  return None
-                
+
             return f"{stream_id}/index.m3u8"
-            
+
         except Exception as e:
             logger.error(f"Failed to start FFmpeg: {e}")
             return None

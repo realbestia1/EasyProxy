@@ -59,6 +59,12 @@ def create_app():
     app.router.add_get('/builder', proxy.handle_builder)
     app.router.add_get('/info', proxy.handle_info_page)
     app.router.add_get('/api/info', proxy.handle_api_info)
+
+    # Health check endpoint for Render/HF Spaces
+    async def health_check(request):
+        return web.json_response({"status": "ok"})
+    app.router.add_get('/health', health_check)
+    app.router.add_get('/healthz', health_check)
     app.router.add_get('/key', proxy.handle_key_request)
     app.router.add_get('/proxy/manifest.m3u8', proxy.handle_proxy_request)
     app.router.add_get('/proxy/hls/manifest.m3u8', proxy.handle_proxy_request)
@@ -98,19 +104,12 @@ def create_app():
         try:
             if not os.path.abspath(file_path).startswith(os.path.abspath("temp_hls")):
                  return web.Response(status=403, text="Access denied")
-        except:
+        except (ValueError, OSError):
             return web.Response(status=403, text="Access denied")
 
         if not os.path.exists(file_path):
             return web.Response(status=404, text="Segment not found")
-            
-        # Notify manager to keep stream alive
-        if hasattr(app, 'ffmpeg_manager'):
-             app.ffmpeg_manager.touch_stream(stream_id)
-        
-        if not os.path.exists(file_path):
-            return web.Response(status=404, text="Segment not found")
-            
+
         # Notify manager to keep stream alive
         if hasattr(app, 'ffmpeg_manager'):
              app.ffmpeg_manager.touch_stream(stream_id)

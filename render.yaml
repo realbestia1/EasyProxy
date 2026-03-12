@@ -1,0 +1,22 @@
+services:
+  - type: web
+    name: easyproxy
+    runtime: docker
+    dockerfilePath: ./Dockerfile
+    plan: free
+    healthCheckPath: /health
+    envVars:
+      - key: PORT
+        value: 7860
+      - key: API_PASSWORD
+        sync: false
+      - key: GLOBAL_PROXY
+        sync: false
+      - key: TRANSPORT_ROUTES
+        sync: false
+      - key: MPD_MODE
+        value: legacy
+      - key: DVR_ENABLED
+        value: false
+      - key: LOG_LEVEL
+        value: WARNING

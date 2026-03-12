@@ -1,0 +1,44 @@
+# Git
+.git
+.gitignore
+.gitattributes
+
+# Python
+__pycache__
+*.pyc
+*.pyo
+*.egg-info
+.eggs
+dist
+build
+
+# Virtual environments
+venv
+.venv
+env
+
+# IDE
+.vscode
+.idea
+*.swp
+*.swo
+
+# Docker
+Dockerfile*
+docker-compose*.yml
+.dockerignore
+
+# Docs & CI
+README.md
+LICENSE
+.github
+
+# Env files (secrets)
+.env
+.env.*
+!.env.example
+
+# Temp files
+temp_hls
+recordings
+*.log
