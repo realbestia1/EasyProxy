@@ -22,7 +22,7 @@ COPY . .
 LABEL org.opencontainers.image.title="HLS Proxy Server"
 LABEL org.opencontainers.image.description="Server proxy universale per stream HLS con supporto Vavoo, DLHD e playlist builder"
 LABEL org.opencontainers.image.version="2.5.0"
-LABEL org.opencontainers.image.source="https://github.com/nzo66/EasyProxy"
+LABEL org.opencontainers.image.source="https://github.com/matcip81/magic-time"
 
 # Esponi la porta su cui l'applicazione è in ascolto.
 EXPOSE 7860
