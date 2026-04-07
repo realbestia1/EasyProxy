@@ -294,8 +294,65 @@ class VixSrcExtractor:
                 stream_headers = self.base_headers.copy()
                 stream_headers["referer"] = url
                 
-                logger.info(f"✅ VixSrc URL extracted successfully: {final_url}")
+                logger.info(f"✅ VixSrc master URL extracted: {final_url}")
                 
+                # ── QUALITY SELECTION: fetcha il master e restituisce la rendition più alta ──
+                # Così manifest_rewriter NON entra nel path speciale VixSrc (che non proxa le URL)
+                # ma nel path standard che proxa correttamente tutto, fix cross-IP.
+                try:
+                    master_response = await self._make_robust_request(
+                        final_url,
+                        headers=stream_headers,
+                        retries=2,
+                        initial_delay=1
+                    )
+                    if master_response and master_response.status_code == 200:
+                        master_text = master_response.text
+                        # Parsifica le varianti dal master HLS
+                        master_lines = master_text.split('\n')
+                        variants = []
+                        for idx, line in enumerate(master_lines):
+                            if line.startswith('#EXT-X-STREAM-INF:'):
+                                bw_match = re.search(r'BANDWIDTH=(\d+)', line)
+                                res_match = re.search(r'RESOLUTION=(\d+)x(\d+)', line)
+                                if bw_match and idx + 1 < len(master_lines):
+                                    variant_url = master_lines[idx + 1].strip()
+                                    if variant_url and not variant_url.startswith('#'):
+                                        variants.append({
+                                            'bandwidth': int(bw_match.group(1)),
+                                            'height': int(res_match.group(2)) if res_match else 0,
+                                            'inf_line': line,
+                                            'url': variant_url
+                                        })
+                        
+                        if variants:
+                            best = max(variants, key=lambda v: (v['height'], v['bandwidth']))
+                            # Risolvi URL relativo della rendition rispetto al master
+                            from urllib.parse import urljoin
+                            best_url = best['url']
+                            if not best_url.startswith('http'):
+                                best_url = urljoin(final_url, best_url)
+                            # Eredita token/query params dal master se non presenti
+                            master_parsed = urlparse(final_url)
+                            best_parsed = urlparse(best_url)
+                            if master_parsed.query and not best_parsed.query:
+                                best_url += f"?{master_parsed.query}"
+                            
+                            logger.info(f"✅ VixSrc quality selection: {best['height']}p ({best['bandwidth']}bps) → {best_url}")
+                            
+                            return {
+                                "destination_url": best_url,
+                                "request_headers": stream_headers,
+                                "mediaflow_endpoint": self.mediaflow_endpoint,
+                            }
+                        else:
+                            logger.warning("⚠️ No variants found in master, returning master as-is")
+                    else:
+                        logger.warning(f"⚠️ Master fetch failed ({master_response.status_code if master_response else 'None'}), returning master URL")
+                except Exception as qs_err:
+                    logger.warning(f"⚠️ Quality selection failed, returning master URL: {qs_err}")
+                
+                # Fallback: restituisci il master se la quality selection fallisce
                 return {
                     "destination_url": final_url,
                     "request_headers": stream_headers,
