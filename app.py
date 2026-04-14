@@ -73,6 +73,8 @@ def create_app():
     app.router.add_get('/extractor', proxy.handle_extractor_request)
     # ✅ NUOVO: Endpoint compatibilità MFP per estrazione
     app.router.add_get('/extractor/video', proxy.handle_extractor_request)
+    app.router.add_get('/extractor/video.m3u8', proxy.handle_extractor_request)
+    app.router.add_get('/extractor/video.mp4', proxy.handle_extractor_request)
     
     # ✅ NUOVO: Route per segmenti con estensioni corrette per compatibilità player
     app.router.add_get('/proxy/hls/segment.ts', proxy.handle_proxy_request)

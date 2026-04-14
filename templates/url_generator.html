@@ -120,6 +120,7 @@
                             <option value="streamtape">StreamTape</option>
                             <option value="supervideo">SuperVideo</option>
                             <option value="streamwish">StreamWish</option>
+                            <option value="streamhg">StreamHG</option>
                             <option value="filemoon">FileMoon</option>
                             <option value="filelions">FileLions</option>
                             <option value="uqload">Uqload</option>
@@ -148,6 +149,16 @@
                     <label class="block text-sm font-semibold text-slate-700 dark:text-slate-200 mb-2">Video URL</label>
                     <input id="extractorUrl" type="url" placeholder="https://host.example/embed/..."
                         class="w-full px-4 py-3 rounded-xl border border-slate-300 dark:border-slate-600 bg-slate-50 dark:bg-slate-700/50 text-slate-900 dark:text-white focus:outline-none focus:border-sky-500">
+                </div>
+                <div>
+                    <label class="block text-sm font-semibold text-slate-700 dark:text-slate-200 mb-2">Estensione endpoint</label>
+                    <select id="extractorExtension"
+                        class="w-full px-4 py-3 rounded-xl border border-slate-300 dark:border-slate-600 bg-slate-50 dark:bg-slate-700/50 text-slate-900 dark:text-white focus:outline-none focus:border-sky-500">
+                        <option value="">Nessuna estensione</option>
+                        <option value=".m3u8">.m3u8</option>
+                        <option value=".mp4">.mp4</option>
+                    </select>
+                    <p class="mt-2 text-xs text-slate-500 dark:text-slate-400">Scegli prima di generare URL. Esempio: VixSrc con <code>.m3u8</code>, Mixdrop con <code>.mp4</code>.</p>
                 </div>
                 <label class="flex items-center gap-3 rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-700/30 px-4 py-3 text-sm text-slate-700 dark:text-slate-200">
                     <input id="extractorRedirectStream" type="checkbox" class="h-4 w-4 accent-sky-600">
@@ -291,6 +302,7 @@
         function generateExtractorUrl() {
             const host = document.getElementById('extractorHost').value.trim();
             const url = document.getElementById('extractorUrl').value.trim();
+            const extension = document.getElementById('extractorExtension').value;
             const apiPassword = document.getElementById('apiPassword').value.trim();
             const redirectStream = document.getElementById('extractorRedirectStream').checked;
             const result = document.getElementById('extractorResult');
@@ -302,7 +314,7 @@
 
             const params = new URLSearchParams();
             params.set('host', host);
-            params.set('url', url);
+            params.set('d', url);
             if (redirectStream) {
                 params.set('redirect_stream', 'true');
             }
@@ -310,7 +322,9 @@
                 params.set('api_password', apiPassword);
             }
 
-            result.value = `${buildBaseUrl()}/extractor/video?${params.toString()}`;
+            const extractorPath = `/extractor/video${extension}`;
+
+            result.value = `${buildBaseUrl()}${extractorPath}?${params.toString()}`;
         }
 
         async function generateBatch() {

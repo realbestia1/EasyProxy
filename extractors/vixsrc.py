@@ -23,7 +23,16 @@ class VixSrcExtractor:
 
     def __init__(self, request_headers: dict, proxies: list = None):
         self.request_headers = request_headers
-        self.base_headers = {
+        self.base_headers = self._default_headers()
+        self.session = None
+        self.mediaflow_endpoint = "hls_manifest_proxy"
+        self._session_lock = asyncio.Lock()
+        self.proxies = proxies or []
+        self.is_vixsrc = True
+
+    @staticmethod
+    def _default_headers() -> dict:
+        return {
             "user-agent": (
                 "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
                 "AppleWebKit/537.36 (KHTML, like Gecko) "
@@ -34,11 +43,11 @@ class VixSrcExtractor:
             "accept-encoding": "gzip, deflate",
             "connection": "keep-alive",
         }
-        self.session = None
-        self.mediaflow_endpoint = "hls_manifest_proxy"
-        self._session_lock = asyncio.Lock()
-        self.proxies = proxies or []
-        self.is_vixsrc = True
+
+    def _fresh_headers(self, **extra_headers) -> dict:
+        headers = self._default_headers()
+        headers.update(extra_headers)
+        return headers
 
     @staticmethod
     def _normalize_base_site(url: str) -> str:
@@ -90,7 +99,7 @@ class VixSrcExtractor:
             self.session = ClientSession(
                 timeout=timeout,
                 connector=connector,
-                headers=self.base_headers,
+                headers=self._default_headers(),
                 cookie_jar=aiohttp.CookieJar(),
             )
         return self.session
@@ -221,7 +230,7 @@ class VixSrcExtractor:
             headers={
                 "accept": "application/json, text/plain, */*",
                 "referer": url,
-                **self.base_headers,
+                **self._default_headers(),
             },
         )
 
@@ -317,6 +326,7 @@ class VixSrcExtractor:
             headers={
                 "Referer": f"{site_url}/",
                 "Origin": f"{site_url}",
+                **self._default_headers(),
             },
         )
 
@@ -344,7 +354,7 @@ class VixSrcExtractor:
                 logger.info("URL is already a VixSrc manifest, no extraction required.")
                 return {
                     "destination_url": url,
-                    "request_headers": self.base_headers,
+                    "request_headers": self._fresh_headers(),
                     "mediaflow_endpoint": self.mediaflow_endpoint,
                 }
 
@@ -352,21 +362,18 @@ class VixSrcExtractor:
                 self._raise_if_embed_expired(url)
                 response = await self._make_robust_request(
                     url,
-                    headers={
-                        "referer": self._normalize_base_site(url) + "/",
-                        **self.base_headers,
-                    },
+                    headers=self._fresh_headers(
+                        referer=self._normalize_base_site(url) + "/"
+                    ),
                 )
             elif "iframe" in url:
                 site_url = url.split("/iframe")[0]
                 version = await self.version(site_url)
                 response = await self._make_robust_request(
                     url,
-                    headers={
-                        "x-inertia": "true",
-                        "x-inertia-version": version,
-                        **self.base_headers,
-                    },
+                    headers=self._fresh_headers(
+                        **{"x-inertia": "true", "x-inertia-version": version}
+                    ),
                 )
 
                 iframe_data = await self._parse_html_simple(response.text, "iframe")
@@ -374,11 +381,9 @@ class VixSrcExtractor:
                     iframe_url = iframe_data["src"]
                     response = await self._make_robust_request(
                         iframe_url,
-                        headers={
-                            "x-inertia": "true",
-                            "x-inertia-version": version,
-                            **self.base_headers,
-                        },
+                        headers=self._fresh_headers(
+                            **{"x-inertia": "true", "x-inertia-version": version}
+                        ),
                     )
                 else:
                     raise ExtractorError("No iframe found in response")
@@ -387,10 +392,7 @@ class VixSrcExtractor:
                 if embed_url:
                     response = await self._make_robust_request(
                         embed_url,
-                        headers={
-                            "referer": url,
-                            **self.base_headers,
-                        },
+                        headers=self._fresh_headers(referer=url),
                     )
                 else:
                     response = await self._make_robust_request(url)
@@ -406,8 +408,7 @@ class VixSrcExtractor:
 
             try:
                 final_url = self._extract_playlist_from_embed(script_content)
-                stream_headers = self.base_headers.copy()
-                stream_headers["referer"] = url
+                stream_headers = self._fresh_headers(Referer=url)
 
                 logger.info("VixSrc URL extracted successfully: %s", final_url)
                 return {

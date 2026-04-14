@@ -89,6 +89,7 @@ if MPD_MODE == "legacy":
     LiveTVExtractor,
     F16PxExtractor,
 ) = None, None, None, None, None
+StreamHGExtractor = None
 
 logger = logging.getLogger(__name__)
 
@@ -243,6 +244,13 @@ try:
     logger.info("✅ StreamWishExtractor module loaded.")
 except ImportError:
     logger.warning("⚠️ StreamWishExtractor module not found.")
+
+try:
+    from extractors.streamhg import StreamHGExtractor
+
+    logger.info("✅ StreamHGExtractor module loaded.")
+except ImportError:
+    logger.warning("⚠️ StreamHGExtractor module not found.")
 
 try:
     from extractors.supervideo import SupervideoExtractor
@@ -640,6 +648,12 @@ class HLSProxy:
                             request_headers, proxies=GLOBAL_PROXIES
                         )
                     return self.extractors[key]
+                elif host == "streamhg":
+                    if key not in self.extractors:
+                        self.extractors[key] = StreamHGExtractor(
+                            request_headers, proxies=GLOBAL_PROXIES
+                        )
+                    return self.extractors[key]
                 elif host == "supervideo":
                     if key not in self.extractors:
                         self.extractors[key] = SupervideoExtractor(
@@ -729,6 +743,26 @@ class HLSProxy:
                 proxy_list = [proxy] if proxy else []
                 if key not in self.extractors:
                     self.extractors[key] = SportsonlineExtractor(
+                        request_headers, proxies=proxy_list
+                    )
+                return self.extractors[key]
+            elif (
+                re.search(r"/e/[^/?#]+", url, re.IGNORECASE) is not None
+                and any(
+                    d in url.lower()
+                    for d in [
+                        "dhcplay.com/",
+                        "vibuxer.com/",
+                        "streamhg.com/",
+                        "masukestin.com/",
+                    ]
+                )
+            ):
+                key = "streamhg"
+                proxy = get_proxy_for_url("streamhg", TRANSPORT_ROUTES, GLOBAL_PROXIES)
+                proxy_list = [proxy] if proxy else []
+                if key not in self.extractors:
+                    self.extractors[key] = StreamHGExtractor(
                         request_headers, proxies=proxy_list
                     )
                 return self.extractors[key]
@@ -1502,8 +1536,11 @@ class HLSProxy:
                     "message": "EasyProxy Extractor API",
                     "usage": {
                         "endpoint": "/extractor/video",
+                        "host_endpoint": "/extractor/video.m3u8",
+                        "mp4_host_endpoint": "/extractor/video.mp4",
                         "parameters": {
-                            "url": "(Required) URL to extract. Supports plain text, URL encoded, or Base64.",
+                            "d": "(Required) URL to extract. Supports plain text, URL encoded, or Base64.",
+                            "url": "(Alias) Same as 'd'.",
                             "host": "(Optional) Force specific extractor (bypass auto-detect).",
                             "redirect_stream": "(Optional) 'true' to redirect to stream, 'false' for JSON.",
                             "api_password": "(Optional) API Password if configured.",
@@ -1528,6 +1565,7 @@ class HLSProxy:
                         "maxstream",
                         "okru",
                         "streamwish",
+                        "streamhg",
                         "supervideo",
                         "dropload",
                         "uqload",
@@ -1538,9 +1576,10 @@ class HLSProxy:
                         "f16px",
                     ],
                     "examples": [
-                        f"{request.scheme}://{request.host}/extractor/video?url=https://vavoo.to/channel/123",
-                        f"{request.scheme}://{request.host}/extractor/video?host=vavoo&url=https://custom-link.com",
-                        f"{request.scheme}://{request.host}/extractor/video?url=BASE64_STRING",
+                        f"{request.scheme}://{request.host}/extractor/video?d=https://vavoo.to/channel/123",
+                        f"{request.scheme}://{request.host}/extractor/video.m3u8?host=vavoo&d=https://custom-link.com",
+                        f"{request.scheme}://{request.host}/extractor/video.mp4?host=mixdrop&d=https://mixdrop.co/e/ABC123XYZ",
+                        f"{request.scheme}://{request.host}/extractor/video?d=BASE64_STRING",
                     ],
                 }
                 return web.json_response(help_response)
@@ -2793,6 +2832,33 @@ class HLSProxy:
                         "parameters": [
                             {"name": "host", "in": "query", "schema": {"type": "string"}},
                             {"name": "url", "in": "query", "schema": {"type": "string"}},
+                            {"name": "api_password", "in": "query", "schema": {"type": "string"}},
+                        ],
+                        "responses": {"200": {"description": "Extractor response"}},
+                        **({"security": security} if requires_password else {}),
+                    }
+                },
+                "/extractor/video.m3u8": {
+                    "get": {
+                        "summary": "Extractor compatibility endpoint with m3u8 suffix",
+                        "description": "Alias for host-forced extractor requests using an m3u8-style path.",
+                        "parameters": [
+                            {"name": "host", "in": "query", "schema": {"type": "string"}},
+                            {"name": "url", "in": "query", "schema": {"type": "string"}},
+                            {"name": "api_password", "in": "query", "schema": {"type": "string"}},
+                        ],
+                        "responses": {"200": {"description": "Extractor response"}},
+                        **({"security": security} if requires_password else {}),
+                    }
+                },
+                "/extractor/video.mp4": {
+                    "get": {
+                        "summary": "Extractor compatibility endpoint with mp4 suffix",
+                        "description": "Alias for host-forced extractor requests where the resolved media is typically a direct MP4 stream.",
+                        "parameters": [
+                            {"name": "host", "in": "query", "schema": {"type": "string"}},
+                            {"name": "url", "in": "query", "schema": {"type": "string"}},
+                            {"name": "d", "in": "query", "schema": {"type": "string"}},
                             {"name": "api_password", "in": "query", "schema": {"type": "string"}},
                         ],
                         "responses": {"200": {"description": "Extractor response"}},

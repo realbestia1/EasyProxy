@@ -982,7 +982,7 @@
                 <div class="endpoint-card">
                     <div class="endpoint-header">
                         <span class="endpoint-method">GET</span>
-                        <code class="endpoint-path">/extractor/video?url=&lt;URL&gt;</code>
+                        <code class="endpoint-path">/extractor/video?d=&lt;URL&gt;</code>
                     </div>
                     <p class="endpoint-description">
                         Advanced Extraction API.
@@ -1115,19 +1115,23 @@
                     </h3>
                     <div class="example-block">
                         1. JSON Response (default):<br>
-                        /extractor/video?url=https://vavoo.to/channel/123
+                        /extractor/video?d=https://vavoo.to/channel/123
                     </div>
                     <div class="example-block">
                         2. Immediate redirect:<br>
-                        /extractor/video?url=https://daddylive.mp/stream.php&redirect_stream=true
+                        /extractor/video?d=https://daddylive.mp/stream.php&redirect_stream=true
                     </div>
                     <div class="example-block">
                         3. With manual host:<br>
-                        /extractor/video?host=vavoo&url=https://custom-link.com/123
+                        /extractor/video.m3u8?host=vavoo&d=https://custom-link.com/123
+                    </div>
+                    <div class="example-block">
+                        3b. Direct MP4 host:<br>
+                        /extractor/video.mp4?host=mixdrop&d=https://mixdrop.co/e/ABC123XYZ
                     </div>
                     <div class="example-block">
                         4. URL Base64:<br>
-                        /extractor/video?url=aHR0cHM6Ly9leGFtcGxlLmNvbS92aWRlbw==
+                        /extractor/video?d=aHR0cHM6Ly9leGFtcGxlLmNvbS92aWRlbw==
                     </div>
 
                     <h3
