@@ -188,6 +188,8 @@ class MP4Decrypter:
         self.trun_sample_sizes = array.array("I")
         self.current_sample_info = []
         self.encryption_overhead = 0
+        self.track_kid_map = {}  # track_id -> KID (bytes) from tenc box
+        self._last_extracted_kid = None  # temp storage during moov processing
 
     def decrypt_segment(self, combined_segment: bytes) -> bytes:
         """
@@ -412,14 +414,9 @@ class MP4Decrypter:
         """
         Retrieves the decryption key for a given track ID from the key map.
         
-        For multi-key scenarios (e.g., separate video/audio keys), the key_map
-        contains KID->KEY mappings. Since we don't have the KID for the current
-        track at this point, we use a simple strategy:
-        - If there's only 1 key, use it (original behavior)
-        - If there are multiple keys, return based on track_id index (0=first key, 1=second, etc.)
-        
-        This works because typically track 1 = video, track 2 = audio, and
-        the keys are passed in order: video_kid,audio_kid : video_key,audio_key
+        Uses the real KID extracted from the tenc box (stored in track_kid_map
+        during moov processing) to look up the correct key from key_map.
+        This supports any number of KID:KEY pairs correctly.
 
         Args:
             track_id (int): The track ID.
@@ -427,11 +424,17 @@ class MP4Decrypter:
         Returns:
             bytes: The decryption key for the specified track ID.
         """
+        # Best: look up the actual KID for this track from the tenc box
+        if track_id in self.track_kid_map:
+            kid = self.track_kid_map[track_id]
+            if kid in self.key_map:
+                return self.key_map[kid]
+        
+        # Single key: use it directly
         if len(self.key_map) == 1:
             return next(iter(self.key_map.values()))
         
-        # Multi-key: return key by index based on track_id
-        # Track IDs are typically 1-based, so we use (track_id - 1) as index
+        # Last resort fallback: index-based (for segments without moov/tenc info)
         keys_list = list(self.key_map.values())
         key_index = (track_id - 1) % len(keys_list)
         return keys_list[key_index]
@@ -571,14 +574,33 @@ class MP4Decrypter:
             MP4Atom: Processed 'trak' atom with updated track information.
         """
         parser = MP4Parser(trak.data)
+        atoms = parser.list_atoms()
         new_trak_data = bytearray()
 
-        for atom in iter(parser.read_atom, None):
+        # Extract track_id from tkhd
+        track_id = None
+        for atom in atoms:
+            if atom.atom_type == b"tkhd":
+                if len(atom.data) > 20:
+                    version = atom.data[0] if isinstance(atom.data[0], int) else ord(atom.data[0])
+                    if version == 1:
+                        track_id = struct.unpack_from(">I", atom.data, 20)[0]
+                    else:
+                        track_id = struct.unpack_from(">I", atom.data, 12)[0]
+                break
+
+        self._last_extracted_kid = None
+
+        for atom in atoms:
             if atom.atom_type == b"mdia":
                 new_mdia = self._process_mdia(atom)
                 new_trak_data.extend(new_mdia.pack())
             else:
                 new_trak_data.extend(atom.pack())
+
+        # Store KID mapping for this track (extracted from tenc inside sinf)
+        if track_id is not None and self._last_extracted_kid is not None:
+            self.track_kid_map[track_id] = self._last_extracted_kid
 
         return MP4Atom(b"trak", len(new_trak_data) + 8, new_trak_data)
 
@@ -705,6 +727,9 @@ class MP4Decrypter:
             if atom.atom_type in {b"sinf", b"schi", b"tenc", b"schm"}:
                 if atom.atom_type == b"sinf":
                     codec_format = self._extract_codec_format(atom)
+                    kid = self._extract_kid_from_sinf(atom)
+                    if kid is not None:
+                        self._last_extracted_kid = kid
                 continue  # Skip encryption-related atoms
             new_entry_data.extend(atom.pack())
 
@@ -727,6 +752,28 @@ class MP4Decrypter:
         for atom in iter(parser.read_atom, None):
             if atom.atom_type == b"frma":
                 return atom.data
+        return None
+
+    def _extract_kid_from_sinf(self, sinf: MP4Atom) -> Optional[bytes]:
+        """
+        Extracts the default KID from the 'tenc' box inside sinf -> schi -> tenc.
+        
+        tenc layout: version(1) + flags(3) + reserved(2) + isProtected(1) + perSampleIVSize(1) + default_KID(16)
+        So KID is at offset 8..24 of tenc data.
+
+        Args:
+            sinf (MP4Atom): The 'sinf' atom.
+
+        Returns:
+            Optional[bytes]: The 16-byte KID or None.
+        """
+        parser = MP4Parser(sinf.data)
+        for atom in iter(parser.read_atom, None):
+            if atom.atom_type == b"schi":
+                schi_parser = MP4Parser(atom.data)
+                for schi_atom in iter(schi_parser.read_atom, None):
+                    if schi_atom.atom_type == b"tenc" and len(schi_atom.data) >= 24:
+                        return bytes(schi_atom.data[8:24])
         return None
 
 
