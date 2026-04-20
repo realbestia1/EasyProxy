@@ -63,7 +63,7 @@ RUN git clone https://github.com/ThePhaseless/Byparr.git /app/byparr_src \
 WORKDIR /app
 # Usiamo init e fetch invece di clone perché la cartella contiene già i solver
 RUN git init . \
-    && git remote add origin https://github.com/realbestia1/EasyProxy \
+    && git remote add origin https://github.com/chorso206/EasyProxyRB \
     && git fetch \
     && git checkout -f main
 
