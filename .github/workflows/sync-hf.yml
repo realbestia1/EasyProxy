@@ -1,6 +1,7 @@
+name: Sync della repo sullo Space HF 
 env: 
-HF_USERNAME: Forchettone  
-HF_SPACE: Forchettone 
+HF_USERNAME: Forchettone 
+HF_SPACE: Forchettone
 on: 
 schedule: - cron: "0 3 * * *" 
 workflow_dispatch: 
