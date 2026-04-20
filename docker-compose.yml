@@ -1,12 +1,18 @@
-services:  
+services:
   easyproxy:
     image: ghcr.io/realbestia1/easyproxy:full
     container_name: easyproxy
     restart: unless-stopped
     shm_size: "2gb"
+    cap_add:
+      - NET_ADMIN
+    devices:
+      - /dev/net/tun:/dev/net/tun
     ports:
-      - '${PORT:-7860}:${PORT:-7860}' #modifica la variabile "PORT" per cambiare la porta
+      - '${PORT:-7860}:${PORT:-7860}'
     environment:
-      - API_PASSWORD=ep      #qui inserisci la tua password personalizzata
+      - API_PASSWORD=ep
       - PORT=7860
       - FLARESOLVERR_TIMEOUT=30
+      - ENABLE_WARP=true            # Imposta a true per attivare WARP integrato
+      - WARP_LICENSE_KEY=           # Inserisci qui la tua chiave WARP+ (opzionale)

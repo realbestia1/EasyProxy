@@ -3,6 +3,7 @@ import logging
 import random
 from aiohttp import ClientSession, ClientTimeout, TCPConnector
 from aiohttp_socks import ProxyConnector
+from config import get_proxy_for_url, TRANSPORT_ROUTES, get_connector_for_proxy
 from bs4 import BeautifulSoup, SoupStrainer
 
 logger = logging.getLogger(__name__)
@@ -25,12 +26,12 @@ class OkruExtractor:
     def _get_random_proxy(self):
         return random.choice(self.proxies) if self.proxies else None
 
-    async def _get_session(self):
+    async def _get_session(self, url: str = None):
         if self.session is None or self.session.closed:
             timeout = ClientTimeout(total=60, connect=30, sock_read=30)
-            proxy = self._get_random_proxy()
+            proxy = get_proxy_for_url(url, TRANSPORT_ROUTES, self.proxies) if url else self._get_random_proxy()
             if proxy:
-                connector = ProxyConnector.from_url(proxy)
+                connector = get_connector_for_proxy(proxy)
             else:
                 connector = TCPConnector(limit=0, limit_per_host=0, keepalive_timeout=60, enable_cleanup_closed=True, force_close=False, use_dns_cache=True)
             self.session = ClientSession(timeout=timeout, connector=connector, headers={'User-Agent': self.base_headers["user-agent"]})
@@ -38,7 +39,7 @@ class OkruExtractor:
 
     async def extract(self, url: str, **kwargs) -> dict:
         """Extract Okru URL."""
-        session = await self._get_session()
+        session = await self._get_session(url)
         
         async with session.get(url) as response:
             text = await response.text()

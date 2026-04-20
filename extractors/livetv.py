@@ -4,6 +4,7 @@ import re
 from urllib.parse import urljoin, urlparse, unquote
 from aiohttp import ClientSession, ClientTimeout, TCPConnector, FormData
 from aiohttp_socks import ProxyConnector
+from config import get_proxy_for_url, TRANSPORT_ROUTES, get_connector_for_proxy
 
 logger = logging.getLogger(__name__)
 
@@ -35,12 +36,12 @@ class LiveTVExtractor:
     def _get_random_proxy(self):
         return random.choice(self.proxies) if self.proxies else None
 
-    async def _get_session(self):
+    async def _get_session(self, url: str = None):
         if self.session is None or self.session.closed:
             timeout = ClientTimeout(total=60, connect=30, sock_read=30)
-            proxy = self._get_random_proxy()
+            proxy = get_proxy_for_url(url, TRANSPORT_ROUTES, self.proxies) if url else self._get_random_proxy()
             if proxy:
-                connector = ProxyConnector.from_url(proxy)
+                connector = get_connector_for_proxy(proxy)
             else:
                 connector = TCPConnector(limit=0, limit_per_host=0, keepalive_timeout=60, enable_cleanup_closed=True, force_close=False, use_dns_cache=True)
             self.session = ClientSession(timeout=timeout, connector=connector, headers={'User-Agent': self.base_headers["user-agent"]})
@@ -49,7 +50,7 @@ class LiveTVExtractor:
     async def extract(self, url: str, stream_title: str = None, **kwargs) -> dict:
         """Extract LiveTV URL and required headers."""
         try:
-            session = await self._get_session()
+            session = await self._get_session(url)
             
             # Get the channel page
             async with session.get(url) as response:
@@ -131,7 +132,7 @@ class LiveTVExtractor:
 
     async def _process_player_option(self, api_base: str, method: str, post: str, nume: str, type_: str) -> dict:
         """Process player option to get stream URL."""
-        session = await self._get_session()
+        session = await self._get_session(api_base)
         
         if method == "wp_json":
             api_url = f"{api_base}{post}/{type_}/{nume}"

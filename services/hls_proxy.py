@@ -41,14 +41,23 @@ from config import (
     API_PASSWORD,
     check_password,
     MPD_MODE,
+    VERSION_MODE,
+    APP_VERSION,
+    ENABLE_WARP,
+    ENABLE_REMUXING,
+    WARP_EXCLUDE_DOMAINS,
+    WARP_PROXY_URL,
 )
 from extractors.generic import GenericHLSExtractor, ExtractorError
 from services.manifest_rewriter import ManifestRewriter
 
-# Legacy MPD converter (used when MPD_MODE=legacy)
+# Global registry for domains already bypassed in WARP to avoid redundant os.system calls
+BYPASSED_WARP_DOMAINS = set()
+
+# Legacy MPD converter (used when MPD_MODE is not ffmpeg)
 MPDToHLSConverter = None
 decrypt_segment = None
-if MPD_MODE == "legacy":
+if MPD_MODE in ("legacy", "none", "disabled"):
     try:
         from utils.mpd_converter import MPDToHLSConverter
         from utils.drm_decrypter import decrypt_segment
@@ -338,6 +347,78 @@ class HLSProxy:
         # This reuses connections for the same proxy to improve performance
         self.proxy_sessions = {}
 
+        # Version information
+        self.latest_version = "Checking..."
+        self.warp_status = "Disabled" if not ENABLE_WARP else "Checking..."
+
+        # Version information
+        self.latest_version = "Checking..."
+
+    async def start_tasks(self):
+        """Starts background tasks for the proxy."""
+        asyncio.create_task(self._update_latest_version())
+        # Always start WARP check (universal trace method)
+        asyncio.create_task(self._update_warp_status_loop())
+
+    async def _update_warp_status_loop(self):
+        """Periodically checks WARP status via Cloudflare trace (Universal)."""
+        while True:
+            try:
+                # We use the proxy session to check if the SOCKS5H proxy is working
+                session, _ = await self._get_proxy_session("https://www.cloudflare.com/cdn-cgi/trace")
+                async with session.get("https://www.cloudflare.com/cdn-cgi/trace", timeout=5) as resp:
+                    if resp.status == 200:
+                        text = await resp.text()
+                        if "warp=on" in text:
+                            self.warp_status = "Connected"
+                        else:
+                            self.warp_status = "Disconnected"
+                    else:
+                        self.warp_status = "Error"
+            except Exception:
+                self.warp_status = "Disconnected"
+            
+            await asyncio.sleep(60) # Check every minute
+
+    async def _update_latest_version(self):
+        """Periodically checks GitHub for the latest version in the background."""
+        while True:
+            await self._refresh_latest_version()
+            # Check every hour in background
+            await asyncio.sleep(3600)
+
+    async def _refresh_latest_version(self):
+        """Checks GitHub config.py for the latest version with cache busting.
+        Can be called on-demand (e.g. on page refresh).
+        """
+        try:
+            # Use a timestamp to bypass GitHub's cache
+            cache_buster = int(time.time())
+            url = f"https://raw.githubusercontent.com/realbestia1/EasyProxy/main/config.py?t={cache_buster}"
+            
+            # Use a direct session with a short timeout to not block UI too long
+            session = await self._get_session()
+            async with session.get(url, timeout=2) as resp:
+                if resp.status == 200:
+                    text = await resp.text()
+                    # Use regex to find APP_VERSION = "..." or '...'
+                    match = re.search(r'APP_VERSION\s*=\s*["\']([^"\']+)["\']', text)
+                    if match:
+                        new_version = match.group(1)
+                        if self.latest_version != new_version:
+                            self.latest_version = new_version
+                            logger.info(f"🆕 Latest version updated: {self.latest_version}")
+                    else:
+                        if self.latest_version == "Checking...":
+                            self.latest_version = "Unknown"
+                else:
+                    if self.latest_version == "Checking...":
+                        self.latest_version = "Error"
+        except Exception as e:
+            if self.latest_version == "Checking...":
+                self.latest_version = "Unknown"
+            logger.debug(f"Version check skipped or failed: {e}")
+
     @staticmethod
     def _strip_fake_png_header_from_ts(content: bytes) -> bytes:
         """
@@ -436,7 +517,9 @@ class HLSProxy:
 
         return ts, nonce, fingerprint, key_path
 
-    async def _get_session(self, prefer_default_family: bool = False):
+    async def _get_session(self, prefer_default_family: bool = False, url: str = None):
+        if url:
+            self._check_dynamic_warp_bypass(url)
         target_attr = "flex_session" if prefer_default_family else "session"
         session = getattr(self, target_attr)
         if session is None or session.closed:
@@ -456,7 +539,53 @@ class HLSProxy:
             setattr(self, target_attr, session)
         return session
 
+    def _check_dynamic_warp_bypass(self, url: str):
+        """Dynamically adds domain to WARP bypass if it matches known patterns."""
+        if not ENABLE_WARP or VERSION_MODE != "Full":
+            return
+            
+        # Patterns for domains that usually block Cloudflare/WARP
+        # Cinemacity, VixSrc, etc.
+        bypass_patterns = [
+            "cccdn.net", "cinemacity.cc"
+        ]
+        
+        try:
+            from urllib.parse import urlsplit
+            domain = urlsplit(url).netloc
+            if not domain: return
+            
+            # If domain matches any pattern and hasn't been bypassed yet
+            is_problematic = any(p in domain.lower() for p in bypass_patterns)
+
+            if is_problematic:
+                if domain not in BYPASSED_WARP_DOMAINS:
+                    # Always bypass base domain for these providers
+                    base_domain = ".".join(domain.split(".")[-2:])
+                    logging.info(f"⚡ [Dynamic Bypass] Adding {base_domain} (and {domain}) to WARP exclusion list...")
+                    
+                    os.system(f"warp-cli --accept-tos tunnel host add {base_domain} > /dev/null 2>&1")
+                    os.system(f"warp-cli --accept-tos tunnel host add {domain} > /dev/null 2>&1")
+                    
+                    # In Proxy mode, we must also update the local exclusion list
+                    if base_domain not in WARP_EXCLUDE_DOMAINS:
+                        WARP_EXCLUDE_DOMAINS.append(base_domain)
+                    if domain not in WARP_EXCLUDE_DOMAINS:
+                        WARP_EXCLUDE_DOMAINS.append(domain)
+                    
+                    BYPASSED_WARP_DOMAINS.add(domain)
+                    BYPASSED_WARP_DOMAINS.add(base_domain)
+                    time.sleep(1.0)
+        except Exception as e:
+            logging.error(f"❌ Error in dynamic WARP bypass: {e}")
+
     async def _get_proxy_session(self, url: str):
+        """Get a session with proxy support for the given URL."""
+        self._check_dynamic_warp_bypass(url)
+        
+        # Debug: Check current egress IP for this domain (optional, slow if enabled)
+        # if any(p in url for p in ["vavoo", "mediahub"]):
+        #    logger.info(f"🔍 Requesting {url} via {'DIRECT' if any(d in url for d in BYPASSED_WARP_DOMAINS) else 'WARP'}")
         """Get a session with proxy support for the given URL.
 
         Sessions are cached and reused for the same proxy to improve performance.
@@ -465,7 +594,11 @@ class HLSProxy:
         - session: The aiohttp ClientSession to use
         - proxy_url: The proxy URL being used, or None for direct connection
         """
+        # Trigger dynamic bypass check before getting proxy settings
+        self._check_dynamic_warp_bypass(url)
+        
         proxy = get_proxy_for_url(url, TRANSPORT_ROUTES, GLOBAL_PROXIES)
+
         prefer_default_family = "ai.the-sunmoon.site/key/" in url
 
         if proxy:
@@ -482,13 +615,22 @@ class HLSProxy:
             # Create new session and cache it
             logger.info(f"🌍 Creating proxy session: {proxy}")
             try:
+                # Gestione manuale di socks5h per compatibilità con aiohttp-socks
+                connector_url = proxy
+                rdns = True # Default per SOCKS5
+                if connector_url.startswith("socks5h://"):
+                    connector_url = connector_url.replace("socks5h://", "socks5://")
+                    rdns = True
+                    logger.debug(f"🕵️ SOCKS5h detected: forcing remote DNS resolution")
+
                 # Unlimited connections for maximum speed
                 connector = ProxyConnector.from_url(
-                    proxy,
+                    connector_url,
                     limit=0,  # Unlimited connections
                     limit_per_host=0,  # Unlimited per host
                     keepalive_timeout=60,  # Keep connections alive longer
                     family=socket.AF_INET,  # Force IPv4
+                    rdns=rdns,
                 )
                 timeout = ClientTimeout(total=30)
                 session = ClientSession(timeout=timeout, connector=connector)
@@ -813,10 +955,12 @@ class HLSProxy:
                         request_headers, proxies=proxy_list
                     )
                 return self.extractors[key]
-            elif "popcdn.day" in url:
+            elif "popcdn.day" in url or "freeshot.live" in url:
                 key = "freeshot"
                 proxy = get_proxy_for_url(
-                    "popcdn.day", TRANSPORT_ROUTES, GLOBAL_PROXIES
+                    "popcdn.day" if "popcdn.day" in url else "freeshot.live", 
+                    TRANSPORT_ROUTES, 
+                    GLOBAL_PROXIES
                 )
                 proxy_list = [proxy] if proxy else []
                 if key not in self.extractors:
@@ -1140,6 +1284,15 @@ class HLSProxy:
                 stream_url = result["destination_url"]
                 stream_headers = result.get("request_headers", {})
                 captured_manifest = result.get("captured_manifest")
+                warp_bypass = result.get("warp_bypass", False)
+
+                # Se l'estrattore richiede il bypass di WARP, aggiungiamo il flag all'URL
+                if warp_bypass:
+                    if "?" in stream_url:
+                        stream_url += "&direct=1"
+                    else:
+                        stream_url += "?direct=1"
+                    logger.info(f"⚡ WARP Bypass forced for this stream: {stream_url[:50]}...")
 
 
             # Se redirect_stream è False, restituisci il JSON con i dettagli (stile MediaFlow)
@@ -1495,6 +1648,7 @@ class HLSProxy:
                 "expired vixsrc embed url" in error_msg
                 or ("vixsrc" in error_msg and "expired" in error_msg and "embed" in error_msg)
             )
+            is_not_found = "404" in error_msg or "not found" in error_msg
             is_temporary_error = any(
                 x in error_msg
                 for x in [
@@ -1518,11 +1672,17 @@ class HLSProxy:
                 logger.info("Expired VixSrc embed URL rejected: %s", str(e))
                 return web.Response(text=str(e), status=410)
 
-            # Se è un errore temporaneo (sito offline), logga solo un WARNING senza traceback
+            if is_not_found:
+                logger.warning(f"🔍 {extractor_name}: Content not found (404). File missing or possible IP block. (Try opening the link in a browser to verify) - {str(e)}")
+                return web.Response(text=f"Content not found: {str(e)}", status=404)
+
+            # Gestione errori di connessione o blocchi
             if is_temporary_error:
-                logger.warning(
-                    f"⚠️ {extractor_name}: Service temporarily unavailable - {str(e)}"
-                )
+                if "403" in error_msg or "forbidden" in error_msg:
+                    logger.error(f"🚫 {extractor_name}: Access denied (403 Forbidden). Possible IP block or WAF protection. - {str(e)}")
+                else:
+                    logger.warning(f"📡 {extractor_name}: Connection failed (Timeout/Connection Error). Site might be down or IP is blocked. - {str(e)}")
+                
                 return web.Response(
                     text=f"Service temporarily unavailable: {str(e)}", status=503
                 )
@@ -1634,10 +1794,16 @@ class HLSProxy:
                 f"🔍 Extracting: {url} (Host: {host_param}, Redirect: {redirect_stream})"
             )
 
+            # Collect all query parameters to pass to the extractor
+            extractor_kwargs = dict(request.query)
+            extractor_kwargs.pop('url', None) # Remove to avoid duplicate argument error
+            extractor_kwargs.pop('d', None)   # Remove to avoid duplicate argument error
+            extractor_kwargs['request_headers'] = dict(request.headers)
+
             extractor = await self.get_extractor(
                 url, dict(request.headers), host=host_param
             )
-            result = await extractor.extract(url, request_headers=dict(request.headers))
+            result = await extractor.extract(url, **extractor_kwargs)
 
             stream_url = result["destination_url"]
             stream_headers = result.get("request_headers", {})
@@ -1899,7 +2065,7 @@ class HLSProxy:
             # ✅ Use pooled session for better performance
             # The session already has the proxy configured in its connector
             if self._should_force_direct_from_query(request):
-                session = await self._get_session()
+                session = await self._get_session(url=key_url if 'key_url' in locals() else (stream_url if 'stream_url' in locals() else (url if 'url' in locals() else None)))
                 proxy_used = None
                 logger.info("Using direct session for AES key request (forced)")
             else:
@@ -2121,6 +2287,19 @@ class HLSProxy:
             if "manifest.m3u8" in request.path and "range" in headers:
                 del headers["range"]
 
+            # ✅ FIX: Remove 'zstd' from Accept-Encoding to prevent "Can not decode content-encoding" error
+            if "accept-encoding" in headers:
+                ae = headers["accept-encoding"].lower()
+                if "zstd" in ae:
+                    # Replace zstd with nothing, cleaning up commas
+                    new_ae = ae.replace("zstd", "").replace(", ,", ",").strip(", ")
+                    headers["accept-encoding"] = new_ae
+            elif "Accept-Encoding" in headers:
+                ae = headers["Accept-Encoding"].lower()
+                if "zstd" in ae:
+                    new_ae = ae.replace("zstd", "").replace(", ,", ",").strip(", ")
+                    headers["Accept-Encoding"] = new_ae
+
             # Rimuovi esplicitamente headers che potrebbero rivelare l'IP originale
             for h in ["x-forwarded-for", "x-real-ip", "forwarded", "via"]:
                 if h in headers:
@@ -2155,54 +2334,25 @@ class HLSProxy:
 
             # ✅ Use pooled session for better performance
             if self._should_force_direct_from_query(request):
-                session = await self._get_session()
+                session = await self._get_session(url=key_url if 'key_url' in locals() else (stream_url if 'stream_url' in locals() else (url if 'url' in locals() else None)))
                 session_proxy = None
                 logger.info(
                     f"[Proxy Stream] Using direct session (forced) for: {stream_url}"
                 )
             else:
                 session, session_proxy = await self._get_proxy_session(stream_url)
-                logger.info(
-                    f"📡 [Proxy Stream] Using session{f' via proxy {session_proxy}' if session_proxy else ' (direct)'} for: {stream_url}"
-                )
-            # ✅ TLS FINGERPRINT BYPASS: Use curl_cffi for problematic CDNs (CinemaCity)
-            use_curl_cffi = HAS_CURL_CFFI and "cccdn.net" in stream_url
-            
-            if use_curl_cffi:
-                curl_proxy = f"{request.scheme}://{session_proxy}" if session_proxy else None
-                if curl_proxy and "://" not in curl_proxy: curl_proxy = f"http://{curl_proxy}"
-
-                logger.info(f"🛡️ [Proxy Stream] Using curl_cffi (impersonate=chrome) for: {stream_url}")
                 
-                class CurlContextManager:
-                    def __init__(self, url, headers, proxy):
-                        self.url, self.headers, self.proxy = url, headers, proxy
-                        self.session = None
-                    async def __aenter__(self):
-                        self.session = CurlAsyncSession(impersonate="chrome120")
-                        await self.session.__aenter__()
-                        c_resp = await self.session.get(self.url, headers=self.headers, proxy=self.proxy, timeout=30)
-                        
-                        class AioHttpMock:
-                            def __init__(self, c_resp, session):
-                                self.status = c_resp.status_code
-                                self.headers = c_resp.headers
-                                self.url = c_resp.url
-                                self._content = c_resp.content
-                                self.session = session
-                                class Content:
-                                    def __init__(self, data): self.data = data
-                                    async def iter_chunked(self, n):
-                                        for i in range(0, len(self.data), n): yield self.data[i:i+n]
-                                self.content = Content(c_resp.content)
-                            async def read(self): return self._content
-                        return AioHttpMock(c_resp, self.session)
-                    async def __aexit__(self, exc_type, exc, tb):
-                        if self.session: await self.session.__aexit__(exc_type, exc, tb)
-
-                resp_ctx = CurlContextManager(stream_url, headers, curl_proxy)
-            else:
-                resp_ctx = session.get(stream_url, headers=headers, ssl=not disable_ssl)
+                # ✅ FIX LOG: Determine correct routing for display
+                if session_proxy:
+                    routing = f"WARP (Cloudflare IP)" if session_proxy == WARP_PROXY_URL else f"PROXY ({session_proxy})"
+                else:
+                    routing = "BYPASS (Real IP)"
+                
+                logger.info(
+                    f"📡 [Proxy Stream] {routing} - Using session (direct) for: {stream_url}"
+                )
+            # Use standard aiohttp session
+            resp_ctx = session.get(stream_url, headers=headers, ssl=not disable_ssl)
 
             async with resp_ctx as resp:
                 content_type = resp.headers.get("content-type", "")
@@ -2218,8 +2368,9 @@ class HLSProxy:
                     if is_dood_416:
                         logger.debug(f"ℹ️ DoodStream 416 (benign/range-end): {stream_url}")
                     else:
+                        routing = "BYPASS (Real IP)" if any(d in stream_url for d in BYPASSED_WARP_DOMAINS) else "WARP (Cloudflare IP)"
                         logger.warning(
-                            f"⚠️ Upstream returned error {resp.status} for {stream_url}"
+                            f"⚠️ Upstream returned error {resp.status} for {stream_url} [Routing: {routing}]"
                         )
                     return web.Response(
                         body=error_body,
@@ -2418,7 +2569,7 @@ class HLSProxy:
                                     clearkey_param = ",".join(clearkey_parts)
 
                     # --- LEGACY MODE: MPD -> HLS Conversion ---
-                    if MPD_MODE == "legacy" and MPDToHLSConverter:
+                    if MPD_MODE in ("legacy", "none", "disabled") and MPDToHLSConverter:
                         logger.info(
                             f"🔄 [Legacy Mode] Converting MPD to HLS for {stream_url}"
                         )
@@ -2644,7 +2795,20 @@ class HLSProxy:
     async def handle_root(self, request):
         """Serve la pagina principale index.html."""
         try:
+            # Refresh version on each page load
+            await self._refresh_latest_version()
+            
             html_content = self._read_template("index.html")
+            
+            # Determine version status class
+            is_outdated = self.latest_version not in ["Checking...", "Unknown", "Error", APP_VERSION]
+            version_status_class = "outdated" if is_outdated else ""
+
+            html_content = html_content.replace("{{VERSION_MODE}}", VERSION_MODE)
+            html_content = html_content.replace("{{APP_VERSION}}", APP_VERSION)
+            html_content = html_content.replace("{{LATEST_VERSION}}", self.latest_version)
+            html_content = html_content.replace("{{VERSION_STATUS_CLASS}}", version_status_class)
+            html_content = html_content.replace("{{WARP_STATUS}}", self.warp_status)
             return web.Response(text=html_content, content_type="text/html")
         except Exception as e:
             logger.error(f"❌ Critical error: unable to load 'index.html': {e}")
@@ -2709,7 +2873,20 @@ class HLSProxy:
     async def handle_info_page(self, request):
         """Serve la pagina HTML delle informazioni."""
         try:
+            # Refresh version on each page load
+            await self._refresh_latest_version()
+            
             html_content = self._read_template("info.html")
+
+            # Determine version status class
+            is_outdated = self.latest_version not in ["Checking...", "Unknown", "Error", APP_VERSION]
+            version_status_class = "outdated" if is_outdated else ""
+
+            html_content = html_content.replace("{{VERSION_MODE}}", VERSION_MODE)
+            html_content = html_content.replace("{{APP_VERSION}}", APP_VERSION)
+            html_content = html_content.replace("{{LATEST_VERSION}}", self.latest_version)
+            html_content = html_content.replace("{{VERSION_STATUS_CLASS}}", version_status_class)
+            html_content = html_content.replace("{{WARP_STATUS}}", self.warp_status)
             return web.Response(text=html_content, content_type="text/html")
         except Exception as e:
             logger.error(f"❌ Critical error: unable to load 'info.html': {e}")
@@ -2739,9 +2916,13 @@ class HLSProxy:
 
     async def handle_api_info(self, request):
         """Endpoint API che restituisce le informazioni sul server in formato JSON."""
+        # Refresh version on API call
+        await self._refresh_latest_version()
+        
         info = {
             "proxy": "HLS Proxy Server",
-            "version": "2.5.0",  # Aggiornata per supporto AES-128
+            "version": APP_VERSION,  # Aggiornata per supporto AES-128
+            "mode": VERSION_MODE,
             "status": "✅ Running",
             "features": [
                 "✅ Proxy HLS streams",
@@ -3064,7 +3245,10 @@ class HLSProxy:
             if decrypt_segment is None:
                 return
 
-            session = await self._get_session()
+            # Ensure dynamic WARP bypass for prefetch
+            self._check_dynamic_warp_bypass(url)
+            
+            session = await self._get_session(url=url)
 
             # Download Init (usa cache se possibile)
             init_content = b""
@@ -3130,10 +3314,6 @@ class HLSProxy:
                 "-c",
                 "copy",
                 "-copyts",  # Preserve timestamps to prevent freezing/gap issues
-                "-bsf:v",
-                "h264_mp4toannexb",  # Ensure video is Annex B (MPEG-TS requirement)
-                "-bsf:a",
-                "aac_adtstoasc",  # Ensure audio is ADTS (MPEG-TS requirement)
                 "-f",
                 "mpegts",
                 "pipe:1",
@@ -3182,7 +3362,7 @@ class HLSProxy:
 
         if decrypt_segment is None:
             return web.Response(
-                text="Decrypt not available (MPD_MODE is not legacy)", status=503
+                text="Decrypt not available (MPD_MODE is ffmpeg or disabled)", status=503
             )
 
         # Check cache first
@@ -3297,16 +3477,20 @@ class HLSProxy:
                     None, decrypt_segment, init_content, segment_content, key_id, key
                 )
 
-            # Leggero REMUX to TS
-            ts_content = await self._remux_to_ts(combined_content)
-            if not ts_content:
-                logger.warning("⚠️ Remux failed, serving raw fMP4")
-                # Fallback: serve fMP4 if remux fails
+            # Leggero REMUX to TS (if enabled)
+            if ENABLE_REMUXING:
+                ts_content = await self._remux_to_ts(combined_content)
+                if not ts_content:
+                    logger.warning("⚠️ Remux failed, serving raw fMP4")
+                    ts_content = combined_content
+                    content_type = "video/mp4"
+                else:
+                    content_type = "video/MP2T"
+                    logger.info("⚡ Remuxed fMP4 -> TS")
+            else:
+                logger.debug("⏩ Remuxing disabled, serving raw fMP4")
                 ts_content = combined_content
                 content_type = "video/mp4"
-            else:
-                content_type = "video/MP2T"
-                logger.info("⚡ Remuxed fMP4 -> TS")
 
             # Store in cache
             self.segment_cache[cache_key] = (ts_content, time.time())

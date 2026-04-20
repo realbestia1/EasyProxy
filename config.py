@@ -90,24 +90,46 @@ def parse_transport_routes() -> list:
     return routes
 
 def get_proxy_for_url(url: str, transport_routes: list, global_proxies: list) -> str:
-    """Trova il proxy appropriato per un URL basato su TRANSPORT_ROUTES"""
-    if not url or not transport_routes:
+    """Trova il proxy appropriato per un URL basato su TRANSPORT_ROUTES e impostazioni WARP."""
+    if not url:
         return random.choice(global_proxies) if global_proxies else None
 
-    # Cerca corrispondenze negli URL patterns
-    for route in transport_routes:
-        url_pattern = route['url']
-        if url_pattern in url:
-            proxy_value = route['proxy']
-            if proxy_value:
-                # Se è un singolo proxy, restituiscilo
-                return proxy_value
-            else:
-                # Se proxy è vuoto, usa connessione diretta
-                return None
+    # 0. Bypass esplicito tramite flag nell'URL (forzato da estrattori)
+    if "direct=1" in url or "warp=off" in url or "warp_bypass=1" in url:
+        return None
 
-    # Se non trova corrispondenza, usa global proxies
+    # 1. Cerca corrispondenze esplicite in TRANSPORT_ROUTES (massima priorità)
+    if transport_routes:
+        for route in transport_routes:
+            url_pattern = route['url']
+            if url_pattern in url:
+                proxy_value = route['proxy']
+                return proxy_value if proxy_value else None
+
+    # 2. Gestione WARP (se abilitato e non in modalità VPN di sistema)
+    if ENABLE_WARP:
+        # Controlla se l'URL deve essere escluso (bypass diretto)
+        if any(domain in url.lower() for domain in WARP_EXCLUDE_DOMAINS):
+            return None
+        return WARP_PROXY_URL
+
+    # 3. Se non trova corrispondenza e WARP è spento, usa global proxies
     return random.choice(global_proxies) if global_proxies else None
+
+def get_connector_for_proxy(proxy_url: str, **kwargs):
+    """Crea un ProxyConnector (aiohttp-socks) gestendo correttamente socks5h."""
+    from aiohttp_socks import ProxyConnector
+    if not proxy_url:
+        return None
+        
+    connector_url = proxy_url
+    rdns = kwargs.pop('rdns', False)
+    
+    if connector_url.startswith("socks5h://"):
+        connector_url = connector_url.replace("socks5h://", "socks5://")
+        rdns = True
+        
+    return ProxyConnector.from_url(connector_url, rdns=rdns, **kwargs)
 
 def get_ssl_setting_for_url(url: str, transport_routes: list) -> bool:
     """Determina se SSL deve essere disabilitato per un URL basato su TRANSPORT_ROUTES"""
@@ -122,6 +144,12 @@ def get_ssl_setting_for_url(url: str, transport_routes: list) -> bool:
 
     # Se non trova corrispondenza, SSL abilitato per default
     return False
+
+# --- WARP Configuration ---
+ENABLE_WARP = os.environ.get("ENABLE_WARP", "false").lower() == "true"
+WARP_PROXY_URL = "socks5h://127.0.0.1:1080"
+# Domini da escludere da WARP (bypass diretto tramite IP reale del VPS)
+WARP_EXCLUDE_DOMAINS = ["cinemacity.cc", "cccdn.net", "vavoo", "lokke.app", "mediahubmx"]
 
 # Configurazione proxy
 GLOBAL_PROXIES = parse_proxies('GLOBAL_PROXY')
@@ -140,22 +168,40 @@ RECORDINGS_DIR = os.environ.get("RECORDINGS_DIR", "recordings")
 MAX_RECORDING_DURATION = int(os.environ.get("MAX_RECORDING_DURATION", 28800))  # 8 hours default
 RECORDINGS_RETENTION_DAYS = int(os.environ.get("RECORDINGS_RETENTION_DAYS", 7))  # Auto-cleanup after 7 days
 
+# --- Version/Mode Configuration ---
+APP_VERSION = "2.5.24"
+
+# Detect if we are running in Full or Light mode
+_has_solvers = os.path.exists("flaresolverr") and (os.path.exists("byparr") or os.path.exists("byparr_src"))
+VERSION_MODE = "Full" if _has_solvers else "Light"
+
 # Create recordings directory if DVR is enabled
 if DVR_ENABLED and not os.path.exists(RECORDINGS_DIR):
     os.makedirs(RECORDINGS_DIR)
     logging.info(f"📹 Created recordings directory: {RECORDINGS_DIR}")
 
-# MPD Processing Mode: 'ffmpeg' (transcoding) or 'legacy' (mpd_converter)
-MPD_MODE = os.environ.get("MPD_MODE", "legacy").lower()
+# MPD Processing Mode detection
+_mpd_mode_env = os.environ.get("MPD_MODE", "legacy").lower()
+
+if _mpd_mode_env in ("ffmpeg", "legacy", "none", "disabled"):
+    MPD_MODE = _mpd_mode_env
+else:
+    logging.warning(f"⚠️ MPD_MODE '{_mpd_mode_env}' non valida. Uso 'legacy'.")
+    MPD_MODE = "legacy"
+
+# Il remuxing è attivo di default per legacy/ffmpeg, ma spento per none/disabled
+ENABLE_REMUXING = os.environ.get("ENABLE_REMUXING", "true").lower() in ("true", "1", "yes")
+if MPD_MODE in ("none", "disabled"):
+    ENABLE_REMUXING = False
+
+# Mostra il log solo se la variabile è stata impostata esplicitamente per evitare confusione
+if "MPD_MODE" in os.environ:
+    logging.info(f"🎬 MPD Mode: {MPD_MODE} (Remuxing: {'ON' if ENABLE_REMUXING else 'OFF'})")
 
 # --- FlareSolverr / Byparr Configuration ---
 FLARESOLVERR_URL = os.environ.get("FLARESOLVERR_URL", "http://localhost:8191").rstrip("/")
 FLARESOLVERR_TIMEOUT = int(os.environ.get("FLARESOLVERR_TIMEOUT", 30))
 BYPARR_URL = os.environ.get("BYPARR_URL", "http://localhost:8080").rstrip("/")
-if MPD_MODE not in ("ffmpeg", "legacy"):
-    logging.warning(f"⚠️ MPD_MODE '{MPD_MODE}' is invalid. Using 'legacy' as default.")
-    MPD_MODE = "legacy"
-logging.info(f"🎬 MPD Mode: {MPD_MODE}")
 
 def check_password(request):
     """Verifica la password API se impostata."""

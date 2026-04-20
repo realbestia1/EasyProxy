@@ -731,6 +731,74 @@
             color: #f87171;
             border: 1px solid rgba(239, 68, 68, 0.3);
         }
+
+        .version-badge {
+            background: var(--accent-gradient);
+            padding: 2px 10px;
+            border-radius: 20px;
+            font-size: 0.75rem;
+            font-weight: 700;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+            box-shadow: 0 0 10px rgba(16, 185, 129, 0.4);
+            margin-left: 8px;
+            color: white;
+        }
+
+        .version-info {
+            display: flex;
+            align-items: center;
+            gap: 6px;
+            font-size: 0.75rem;
+            color: var(--text-secondary);
+            background: rgba(255, 255, 255, 0.05);
+            padding: 2px 10px;
+            border-radius: 20px;
+            border: 1px solid var(--border-primary);
+        }
+
+        .version-latest {
+            color: var(--status-online);
+            font-weight: 600;
+            transition: var(--transition-normal);
+        }
+
+        .version-latest.outdated {
+            color: var(--status-error);
+            animation: versionPulse 2s infinite;
+            text-shadow: 0 0 5px rgba(239, 68, 68, 0.4);
+        }
+
+        .warp-badge {
+            margin-left: 6px;
+            padding: 2px 10px;
+            border-radius: 20px;
+            background: rgba(37, 99, 235, 0.1);
+            color: #3b82f6;
+            font-weight: 700;
+            font-size: 0.65rem;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+            border: 1px solid rgba(37, 99, 235, 0.2);
+            display: flex;
+            align-items: center;
+            gap: 4px;
+        }
+
+        .warp-badge::before {
+            content: "";
+            display: inline-block;
+            width: 6px;
+            height: 6px;
+            border-radius: 50%;
+            background: currentColor;
+        }
+
+        @keyframes versionPulse {
+            0% { opacity: 1; transform: scale(1); }
+            50% { opacity: 0.7; transform: scale(1.05); }
+            100% { opacity: 1; transform: scale(1); }
+        }
     </style>
 </head>
 
@@ -741,6 +809,12 @@
             <div class="status-banner">
                 <div class="status-indicator"></div>
                 <span>Server Operational</span>
+                <span class="version-badge">{{VERSION_MODE}}</span>
+                <div class="version-info">
+                    <span>v{{APP_VERSION}}</span>
+                    <span class="version-latest {{VERSION_STATUS_CLASS}}">(Latest: {{LATEST_VERSION}})</span>
+                    <div class="warp-badge">WARP: {{WARP_STATUS}}</div>
+                </div>
             </div>
         </div>
 

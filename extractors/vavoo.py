@@ -8,6 +8,7 @@ from aiohttp import ClientSession, ClientTimeout, TCPConnector
 from aiohttp_socks import ProxyConnector
 from typing import Optional, Dict, Any
 from urllib.parse import quote_plus
+from config import get_proxy_for_url, TRANSPORT_ROUTES, GLOBAL_PROXIES, get_connector_for_proxy
 import random
 
 logger = logging.getLogger(__name__)
@@ -34,7 +35,7 @@ class VavooExtractor:
         }
         self.session = None
         self.mediaflow_endpoint = "proxy_stream_endpoint"
-        self.proxies = proxies or []
+        self.proxies = proxies or GLOBAL_PROXIES
         self._cached_sig = None
         self._cached_sig_ts = 0
 
@@ -42,13 +43,51 @@ class VavooExtractor:
         """Restituisce un proxy casuale dalla lista."""
         return random.choice(self.proxies) if self.proxies else None
         
-    async def _get_session(self):
+    def _check_warp_bypass(self, url: str):
+        """Forces WARP bypass for specific domains within the extractor."""
+        from config import ENABLE_WARP, VERSION_MODE
+        from services.hls_proxy import BYPASSED_WARP_DOMAINS
+        import os
+        if not ENABLE_WARP or VERSION_MODE != "Full":
+            return
+        
+        try:
+            from urllib.parse import urlsplit
+            domain = urlsplit(url).netloc
+            if domain and domain not in BYPASSED_WARP_DOMAINS:
+                # Always bypass these domains for Vavoo/Mediahubmx to ensure IP consistency
+                bypass_domains = ["lokke.app", "vavoo.to", "vavoo.tv", "mediahubmx.cc"]
+                if any(d in domain.lower() for d in bypass_domains):
+                    logger.info(f"⚡ [Vavoo Bypass] Excluding {domain} from WARP...")
+                    os.system(f"warp-cli --accept-tos tunnel host add {domain} > /dev/null 2>&1")
+                    BYPASSED_WARP_DOMAINS.add(domain)
+                    # Also add base domain to global registry
+                    base_domain = ".".join(domain.split(".")[-2:])
+                    BYPASSED_WARP_DOMAINS.add(base_domain)
+                    
+                    # Small sleep to let WARP stabilize routing table
+                    import time
+                    time.sleep(1.0)
+        except:
+            pass
+    
+    async def _get_session(self, url: str = None):
+        # if url:
+        #     self._check_warp_bypass(url)
+
         if self.session is None or self.session.closed:
             timeout = ClientTimeout(total=60, connect=30, sock_read=30)
-            proxy = self._get_random_proxy()
+            
+            # Determina il proxy per l'URL (se fornito)
+            proxy = None
+            if url:
+                proxy = get_proxy_for_url(url, TRANSPORT_ROUTES, self.proxies)
+            else:
+                proxy = self._get_random_proxy()
+                
             if proxy:
-                logger.info(f"Using proxy for Vavoo session.")
-                connector = ProxyConnector.from_url(proxy)
+                logger.info(f"Using proxy for Vavoo session: {proxy}")
+                connector = get_connector_for_proxy(proxy)
             else:
                 connector = TCPConnector(
                     limit=0,
@@ -73,7 +112,7 @@ class VavooExtractor:
         if self._cached_sig and (time.time() - self._cached_sig_ts) < 300:
             return self._cached_sig
 
-        session = await self._get_session()
+        session = await self._get_session(_LOKKE_PING_URL)
         unique_id = hashlib.md5(str(time.time()).encode()).hexdigest()[:16]
         now_ms = int(time.time() * 1000)
         body = {
@@ -133,7 +172,7 @@ class VavooExtractor:
 
     async def _get_ts_signature(self) -> Optional[str]:
         """Get TS signature via ping2 (fallback)."""
-        session = await self._get_session()
+        session = await self._get_session(_TS_PING2_URL)
         for attempt in range(3):
             try:
                 async with session.post(
@@ -154,7 +193,7 @@ class VavooExtractor:
 
     async def _resolve_via_mediahubmx(self, url: str, signature: str) -> Optional[str]:
         """Resolve vavoo play URL via mediahubmx-resolve.json."""
-        session = await self._get_session()
+        session = await self._get_session(_RESOLVE_URL)
         headers = {
             "user-agent": "MediaHubMX/2",
             "accept": "application/json",
@@ -209,9 +248,9 @@ class VavooExtractor:
             if resolved_url:
                 logger.info(f"Resolved via mediahubmx: {resolved_url[:80]}...")
                 stream_headers = {
-                    "user-agent": "MediaHubMX/2",
-                    "referer": "https://vavoo.to/",
-                    "origin": "https://vavoo.to",
+                    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+                    "Referer": "https://vavoo.to",
+                    "Origin": "https://vavoo.to",
                 }
 
         # Step 2: Fallback — TS signature via ping2
@@ -239,6 +278,7 @@ class VavooExtractor:
             "destination_url": resolved_url,
             "request_headers": stream_headers,
             "mediaflow_endpoint": self.mediaflow_endpoint,
+            "warp_bypass": True,
         }
 
     async def close(self):

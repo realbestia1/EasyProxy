@@ -1,709 +1,173 @@
-# 🚀 EasyProxy - Universal Server Proxy for HLS Streaming
+# 🚀 EasyProxy
+
+**Universal HLS/M3U8 Proxy & Stream Extractor**
+A powerful, lightweight proxy server designed to handle HLS, M3U8, and DASH (MPD) streams. It includes specialized extractors for popular streaming services, DRM support, and an integrated DVR system.
 
 [![Python](https://img.shields.io/badge/Python-3.8+-blue.svg)](https://python.org)
 [![Docker](https://img.shields.io/badge/Docker-Ready-blue.svg)](https://docker.com)
-[![HLS](https://img.shields.io/badge/HLS-Streaming-red.svg)](https://developer.apple.com/streaming/)
-
-> **A universal proxy server for HLS, M3U8, and IPTV streaming** 🎬  
-> Native support for Vavoo, DaddyliveHD, and many streaming services  
-> Compatible with Stremio addons when used as a [MediaFlow Proxy](https://github.com/mhdzumair/mediaflow-proxy)  
-> Integrated web interface and zero configuration  
+[![License](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
 
 ---
 
-## 📚 Contents
+## ✨ Features
 
-- [✨ Key Features](#-key-features)
-- [💾 Quick Setup](#-quick-setup)
-- [☁️ Cloud Deploy](#%EF%B8%8F-cloud-deploy)
-- [💻 Local Installation](#-local-installation)
-- [⚙️ Proxy Configuration](#%EF%B8%8F-proxy-configuration)
-- [🧰 Usage](#-usage)
-- [🎯 Practical Examples](#-practical-examples)
-- [📖 Architecture](#-architecture)
-
----
-
-## ✨ Key Features
-
-| 🎯 **Universal Proxy** | 🔐 **Specialized Extractors** | ⚡ **Performance** |
-|------------------------|------------------------|-------------------|
-| HLS, M3U8, MPD, VIXSRC | Vavoo, DaddyliveHD, Sportsonline, VixSrc | Async connections and keep-alive |
-| **🔓 DRM Decryption** | **🎬 MPD to HLS** | **🔑 ClearKey Support** |
-| ClearKey via FFmpeg transcoding | Automatic DASH → HLS conversion | Server-side ClearKey for VLC |
-
-| 🌐 **Multi-format** | 🔄 **Retry Logic** | 🚀 **Scalability** |
-|--------------------|-------------------|------------------|
-| Support for #EXTVLCOPT and #EXTHTTP | Automatic retries | Asynchronous server |
-
-| 🛠️ **Integrated Builder** | 📱 **Web Interface** | 🔗 **Playlist Manager** |
-|--------------------------|----------------------|---------------------|
-| M3U playlist combination | Complete dashboard | Automatic header management |
-| **📼 Integrated DVR** | **⏯️ Smart Record** | **💾 Download** |
-| Record while watching | Simultaneous Start & Watch | Download your recordings |
+- **🌐 Universal Proxy**: Seamlessly handles HLS, M3U8, MPD (DASH), and static video files.
+- **🔓 DRM Support**: ClearKey decryption via FFmpeg transcoding or legacy mode.
+- **🔐 Specialized Extractors**: Native support for Vavoo, DaddyliveHD, Sportsonline, VixSrc, DoodStream, MaxStream, and more.
+- **📼 Integrated DVR**: Record live streams while watching or schedule background recordings.
+- **🛠️ Playlist Builder**: Web interface to combine, manage, and proxy entire M3U playlists.
+- **☁️ Cloud Ready**: Optimized for HuggingFace, Render, Koyeb, and other free-tier platforms.
+- **🛡️ Cloudflare Bypass**: Integrated with FlareSolverr and Byparr for bot protection bypass.
 
 ---
 
-## 💾 Quick Setup
+## 🚀 Quick Start
 
 ### 🐳 Docker (Recommended)
+The **Full** version includes the proxy plus FlareSolverr and Byparr for maximum compatibility.
 
-EasyProxy is available in two versions to suit your needs:
-
-| Version | Tag | Contents | Best for |
-|:---|:---|:---|:---|
-| **Full (Standalone)** | `latest` / `full` | Proxy + FlareSolverr + Byparr | Quick setup, Cloud hosting (Render, HF, etc.) |
-| **Light** | `light` | Only Proxy | Advanced users, custom `docker-compose` setups |
-
-**Quick Start (Full Version):**
 ```bash
+# Light Version (Proxy Only - Default)
 docker run -d -p 7860:7860 --name EasyProxy ghcr.io/realbestia1/easyproxy:latest
+
+# Full Version (Proxy + Solvers)
+docker run -d -p 7860:7860 --name EasyProxy ghcr.io/realbestia1/easyproxy:full
+
+# Full Version + Cloudflare WARP (Bypass IP blocks)
+docker run -d --name EasyProxy --cap-add=NET_ADMIN --device /dev/net/tun -e ENABLE_WARP=true -p 7860:7860 ghcr.io/realbestia1/easyproxy:full
 ```
 
-**Custom Build:**
-```bash
-# Build the full version locally
-docker build -t easyproxy -f Dockerfile.full .
-```
+### 🐍 Python (Local)
 
-### 🐍 Direct Python
+#### Prerequisites (All Platforms)
+- **Python 3.11+**
+- **Git** (for cloning dependencies)
+- **FFmpeg** (for stream recording/remuxing)
 
-```bash
-git clone https://github.com/realbestia1/EasyProxy.git
-cd EasyProxy
-pip install -r requirements.txt
-python -m playwright install
-python app.py
-```
+#### 🪟 Windows Setup
+The easiest way to get the **Full** experience (Proxy + Solvers) on Windows:
+1. Clone the repository and enter the folder.
+2. Run **`start_full.bat`**.
+*This script automatically handles FlareSolverr, Byparr, patches, and dependencies.*
 
-**Server available at:** `http://localhost:7860`
+#### 🐧 Linux / macOS Setup
+1. **Install dependencies**:
+   ```bash
+   pip install -r requirements.txt
+   python -m playwright install chromium
+   ```
+2. **Start EasyProxy**:
+   ```bash
+   python app.py
+   ```
+*Note: For "Full" mode on Linux, you must start FlareSolverr and Byparr manually or use the [Docker](#-docker) version.*
 
-> Note: `pip install -r requirements.txt` installs the Python package for Playwright, but not the browser binaries. If you use browser-assisted extractors, run `python -m playwright install` once after installing dependencies.
+*Access the dashboard at `http://localhost:7860`*
 
 ---
 
-## ☁️ Cloud Deploy
+## 📦 Deployment Options
 
-### ▶️ Render
-
-1. **Projects** → **New → Web Service** → *Public Git Repository*
-2. **Repository**: `https://github.com/realbestia1/EasyProxy`
-3. **Build Command**: `pip install -r requirements.txt`
-4. **Start Command**: `gunicorn --bind 0.0.0.0:7860 --workers 4 --worker-class aiohttp.worker.GunicornWebWorker app:app`
-5. **Deploy**
-
-### 🤖 HuggingFace Spaces
-
-1. Create a new **Space** (SDK: *Docker*)
-2. Upload all files
-3. Automatic deploy
-4. **Ready!**
-
-**Alternative:** Alternatively, you can copy the content of final `Dockerfile-hf` and put it on HuggingFace, setting `api_password` as a secret.
-
-### 🌐 Railway / Heroku
-
-```bash
-# Railway
-railway login && railway init && railway up
-
-# Heroku
-heroku create EasyProxy && git push heroku main
-```
-
-### 🚀 Koyeb
-1. Create a new **Web Service** on Koyeb.
-2. Select **GitHub** as the source and enter the repository URL: `https://github.com/realbestia1/EasyProxy`
-3. Select Dockerfile
-4. Select CPU Eco - Free
-5. Go to **Environment variables**.
-6. Add the `PORT` variable with value `8000` (required by Koyeb).
-7. Deploy!
-
-### 🎯 Optimal Cloud Configuration
-
-**The proxy works without configuration!**
-
-Optimized for:
-- ✅ **Free platforms** (HuggingFace, Render Free)
-- ✅ **Limited servers** (512MB - 1GB RAM)
-- ✅ **Direct streaming** without cache
-- ✅ **Maximum compatibility** with all services
+| Method | Description |
+| :--- | :--- |
+| **Light (Default)** | Standard `docker build .` uses the base `Dockerfile`. |
+| **Full** | Use `Dockerfile.full` for a monolithic build with solvers included. |
+| **Docker Compose** | Run the complete stack (Proxy + Solvers) with `docker-compose up -d`. |
+| **HuggingFace** | Use `Dockerfile-hf` for seamless deployment on HF Spaces. |
+| **Termux** | Support for Android via Python & FFmpeg. |
 
 ---
 
-## 💻 Local Installation
+## ⚙️ Configuration
 
-### 📋 Requirements
+Configure the server via a `.env` file. See `.env.example` for all options.
 
-- **Python 3.8+**
-- **FFmpeg** (necessary for transcoding MPD streams)
-- **FlareSolverr & Byparr** (Required for Deltabit, DoodStream, etc.)
-- **aiohttp**
-- **gunicorn** (optional, recommended for Linux)
+| Variable | Description | Default |
+| :--- | :--- | :--- |
+| `PORT` | Server port | `7860` |
+| `API_PASSWORD` | Optional password for API endpoints | `ep` |
+| `FLARESOLVERR_URL` | URL for FlareSolverr (Not needed in Full version) | `http://localhost:8191` |
+| `FLARESOLVERR_TIMEOUT` | Timeout for FlareSolverr requests (seconds) | `30` |
+| `BYPARR_URL` | URL for Byparr (Not needed in Full version) | `http://localhost:8192` |
+| `DVR_ENABLED` | Enable recording features | `false` |
+| `ENABLE_WARP` | Enable integrated Cloudflare WARP (Full version only) | `false` |
+| `WARP_LICENSE_KEY` | Optional WARP+ license key | - |
 
-> ⚠️ **Note:** If not using Docker, you must install FFmpeg manually:
-> - **Windows**: Download from [ffmpeg.org](https://ffmpeg.org/download.html) and add to PATH
-> - **Linux/Debian**: `sudo apt install ffmpeg`
-> - **macOS**: `brew install ffmpeg`
-> - **Termux**: `pkg install ffmpeg`
+### 🛡️ Cloudflare WARP Integration
+The **Full** version includes an integrated Cloudflare WARP client to bypass IP-based blocks. When enabled, all outgoing traffic (including FlareSolverr and Byparr) is automatically routed through the Cloudflare network.
 
-### 🔧 Full Local Setup (Windows/Linux without Docker)
+**Requirements:**
+To function correctly, the container needs elevated network permissions:
+- **Docker Compose:** Handled automatically in the provided `docker-compose.yml`.
+- **Docker Run:** You must add `--cap-add=NET_ADMIN --device /dev/net/tun`.
+- **Coolify (Git Repository / Dockerfile):**
+  1. Go to your application **Settings** -> **General**.
+  2. In the **Custom Docker Options** field, paste:
+     `--cap-add NET_ADMIN --device /dev/net/tun:/dev/net/tun`
+  3. Click **Save** and **Redeploy**.
 
-To run the full extraction pipeline on your host machine, follow these steps:
-
-#### 1. Setup Solvers (The "Helper" services)
-Download and run the solvers before starting the proxy:
-- **FlareSolverr**: [Download Windows Release](https://github.com/FlareSolverr/FlareSolverr/releases). Extract and run `flaresolverr.exe` (Port 8191).
-- **Byparr**: [Download Windows Release](https://github.com/ThePhaseless/Byparr/releases). Run `byparr-windows-amd64.exe` (Port 8192).
-
-#### 2. Install EasyProxy
+**Example command (Docker Run):**
 ```bash
-# Clone repository
-git clone https://github.com/realbestia1/EasyProxy.git
-cd EasyProxy
-
-# Install Python dependencies
-pip install -r requirements.txt
-
-# Install Playwright browsers (required for extraction)
-python -m playwright install chromium
+docker run -d --name easyproxy --cap-add=NET_ADMIN --device /dev/net/tun -e ENABLE_WARP=true -p 7860:7860 ghcr.io/realbestia1/easyproxy:full
 ```
 
-#### 3. Start
-```bash
-# Start on Windows
-python app.py
+> [!NOTE]
+> If you are deploying on **HuggingFace Spaces**, WARP cannot be used due to security restrictions. Set `ENABLE_WARP=false` in your environment variables.
 
-# Start on Linux (Gunicorn)
-gunicorn --bind 0.0.0.0:7860 --workers 4 --worker-class aiohttp.worker.GunicornWebWorker app:app
-```
-```
-
-### 🐧 Termux (Android)
-
-```bash
-pkg update && pkg upgrade
-pkg install python git ffmpeg -y
-git clone https://github.com/realbestia1/EasyProxy.git
-cd EasyProxy
-pkg install clang libxml2 libxslt -y
-pip install --upgrade pip setuptools wheel
-pip install -r requirements.txt
-python -m playwright install
-python app.py
-```
-
-### 🐳 Advanced Docker
-
-```bash
-# Custom Build (Full version)
-docker build -t EasyProxy -f Dockerfile.full .
-
-# Custom Build (Light version)
-# docker build -t EasyProxy -f Dockerfile.light .
-
-# Run with custom configurations
-docker run -d -p 7860:7860 \
-  --name EasyProxy EasyProxy
-
-# Run with volume for logs
-docker run -d -p 7860:7860 \
-  -v $(pwd)/logs:/app/logs \
-  --name EasyProxy EasyProxy
-```
+> [!TIP]
+> **Automatic Bypass (Vavoo):** Streams from Vavoo and other problematic providers automatically use the `&direct=1` flag to bypass WARP, ensuring they always use the VPS real IP for maximum stability.
 
 ---
 
-## ⚙️ Proxy Configuration
+## 📖 API Usage
+For detailed API documentation and testing, use the built-in **Interactive Docs** available at:
+- `http://localhost:7860/docs` (Swagger UI)
+- `http://localhost:7860/redoc` (ReDoc)
 
-The easiest way to configure proxies is through a `.env` file.
-
-1.  **Create a `.env` file** in the main project folder (you can rename the `.env.example` file).
-2.  **Add your proxy/solver variables** to the `.env` file.
-
-### 🛡️ Solver Configuration (Cloudflare Bypass)
-
-For some providers, EasyProxy requires external "Solvers" to bypass Cloudflare and bot challenges:
-
-| Service | Supported Providers | Description |
-|:---|:---|:---|
-| **FlareSolverr** | Deltabit, Mixdrop, MaxStream | Handles browser verification and redirects. |
-| **Byparr** | DoodStream | Ensures IP consistency for video tokens. |
-
-**Setup with Docker Compose (Recommended):**
-The provided `docker-compose.yml` already includes these services. Simply run:
-```bash
-docker-compose up -d
+### 📺 Streaming Proxy
+Prefix any stream URL with the proxy endpoint to handle headers and DRM.
 ```
-
-**Manual Configuration (.env):**
-```env
-# FlareSolverr (Default port: 8191)
-FLARESOLVERR_URL=http://flaresolverr:8191
-FLARESOLVERR_TIMEOUT=60
-
-# Byparr (Default port: 8192)
-BYPARR_URL=http://byparr:8192
-BYPARR_PORT=8192
+http://localhost:7860/proxy/manifest.m3u8?url=<URL>
 ```
+**Options:**
+- `&clearkey=KID:KEY`: Provide keys for DASH streams.
+- `&h_<Header Name>=<Value>`: Pass custom headers (e.g., `&h_User-Agent=VLC`).
+- `&direct=1` (or `&warp=off`): Force a direct connection, bypassing WARP for this specific stream.  
+  *Example:* `http://localhost:7860/proxy/manifest.m3u8?url=http://example.com/video.m3u8&direct=1`
 
-**Global proxy for all traffic**
-
-```env
-# Global proxy for all traffic
-GLOBAL_PROXY=http://user:pass@myproxy.com:8080
-
-# --- Transport Rules (TRANSPORT_ROUTES) ---
-# Advanced system for proxy routing based on URL patterns.
-# Format: {URL=pattern, PROXY=proxy_url, DISABLE_SSL=true}, {URL=pattern2, PROXY=proxy_url2, DISABLE_SSL=true}
-# - URL: pattern to search for in the URL (e.g., vavoo.to, giokko.ru)
-# - PROXY: proxy to use (leave empty for direct connection)
-# - DISABLE_SSL: to disable SSL verification
-
-TRANSPORT_ROUTES={URL=vavoo.to, PROXY=socks5://proxy1:1080, DISABLE_SSL=true}
-
-# --- Specific Note for MaxStream / Uprot ---
-# Providers like MaxStream and Uprot.net aggressively block Datacenter IPs (AWS, Oracle, etc.).
-# To make them work on a cloud server, use a residential proxy ONLY for these domains:
-TRANSPORT_ROUTES={URL=uprot.net, PROXY=http://user:pass@res-proxy:port},{URL=maxstream.video, PROXY=http://user:pass@res-proxy:port}
-
-# Password to protect the APIs
-API_PASSWORD=mysecretpassword
-
-# --- MPD Processing Mode ---
-# Choose how to handle MPD/DASH streams:
-# - ffmpeg: Transcoding via FFmpeg (requires FFmpeg installed, high CPU but better A/V sync)
-# - legacy: Uses mpd_converter + drm_decrypter (lighter but possible compatibility issues)
-MPD_MODE=legacy
-
-# --- Log Level ---
-# Set the logging verbosity level: DEBUG, INFO, WARNING, ERROR, CRITICAL
-# Default: WARNING (shows only warnings and errors for cleaner output)
-# Use DEBUG for development/troubleshooting, INFO for normal operation details
-LOG_LEVEL=WARNING
-
-# --- DVR/Recording Settings ---
-# Enable DVR/recording functionality (default: false)
-DVR_ENABLED=false
-
-# Directory where recordings will be saved (default: recordings)
-RECORDINGS_DIR=recordings
-
-# Maximum recording duration in seconds (default: 28800 = 8 hours)
-MAX_RECORDING_DURATION=28800
-
-# Auto-delete recordings older than X days (default: 7)
-RECORDINGS_RETENTION_DAYS=7
+### 🔍 Stream Extractor
+Extract direct video links from supported websites.
 ```
-
-Supported variables:
-- `GLOBAL_PROXY`: Fallback proxy for all requests.
-- `TRANSPORT_ROUTES`: Advanced system for proxy routing based on URL patterns.
-- `PORT`: Port the server listens on (default: 7860).
-- `API_PASSWORD`: Password to protect API access.
-- `MPD_MODE`: MPD processing mode (`ffmpeg` or `legacy`). Default: `legacy`.
-- `LOG_LEVEL`: used to config the log level verbosity, see env file for the different values.
-- `DVR_ENABLED`: enables the DVR functionality, <ins>needs to be switched to true</ins>.
-- `RECORDINGS_DIR`: directory where to save recordings.
-- `MAX_RECORDING_DURATION`: max recording duration.
-- `RECORDINGS_RETENTION_DAYS`: days after the recordings are deleted automatically, before deletion recordings completed can be downloaded.
-
-**Example to change the port:**
-
-```env
-# Change the server port (default: 7860)
-PORT=8080
+http://localhost:7860/extractor/video?d=<URL>&redirect_stream=true
 ```
+*Tip: Open `http://localhost:7860/extractor` in your browser for a list of all parameters and supported hosts.*
+
+### 📼 DVR & Recordings
+Manage your recordings via the `/recordings` web UI or API.
+- `/record?url=<URL>&name=<NAME>`: Start recording and watch simultaneously.
+- `/api/recordings/start`: Trigger a background recording.
 
 ---
 
-## 📚 API Endpoints
-
-### 🔍 Extractor API (`/extractor/video`)
-
-This endpoint **cannot be opened directly** without parameters. It is used to extract the direct stream URL from supported services (like Vavoo, DaddyliveHD, etc.).
-
-**Info and Help:**
-If you open `/extractor` or `/extractor/video` without parameters, you will receive a JSON response with instructions and a list of supported hosts.
-
-**How to use:**
-You must add `?d=` (or `?url=`) followed by the video link you want to process.
-
-**Practical Examples:**
-
-1.  **Get JSON with details (Default):**
-    ```
-    http://your-server:7860/extractor/video?d=https://vavoo.to/channel/123
-    ```
-    *Returns a JSON with `destination_url`, `request_headers`, etc.*
-
-2.  **Redirect directly to stream (Redirect):**
-    Add `&redirect_stream=true`. Useful for putting the link directly into a player.
-    ```
-    http://your-server:7860/extractor/video?d=https://vavoo.to/channel/123&redirect_stream=true
-    ```
-    *The server will respond with a 302 redirect to the proxy URL ready for playback.*
-
-3.  **Manually specify the host (Bypass Auto-detect):**
-    If auto-detection fails, you can force the use of a specific extractor with `host=`.
-    ```
-    http://your-server:7860/extractor/video.m3u8?host=vavoo&d=https://custom-link.com/123
-    ```
-
-3b. **Direct MP4 host example (Mixdrop):**
-    ```
-    http://your-server:7860/extractor/video.mp4?host=mixdrop&d=https://mixdrop.co/e/ABC123XYZ
-    ```
-
-4.  **Base64 URL:**
-    You can pass the Base64 encoded URL in the `d` (or `url`) parameter. The server will automatically decode it.
-    ```
-    http://your-server:7860/extractor/video?d=aHR0cHM6Ly9leGFtcGxlLmNvbS92aWRlbw==
-    ```
-
-**Parameters:**
-- `d` (or `url`): **(Required)** The original URL of the video or page. Supports plain text, URL Encoded, or **Base64 Encoded** links.
-- `host`: (Optional) Forces the use of a specific extractor (e.g., `vavoo`, `mixdrop`, `voe`, `streamtape`, `orion`).
-- `redirect_stream`: 
-  - `true`: Immediate redirect to the playable stream.
-  - `false` (default): Returns data in JSON format.
-- `api_password`: (Optional) API password if configured.
-
-**Supported Services:**
-Vavoo, DaddyliveHD, Doodstream, F16px, Fastream, Filelions, Filemoon, Freeshot, LiveTV, Lulustream, Maxstream, Mixdrop, OKru, Orion, Sportsonline, Streamtape, Streamwish, Supervideo, Turbovidplay, Uqload, Vidmoly, Vidoza, VixSrc, Voe and Generic (for any M3U8 URL).
-
-### 📺 Proxy Endpoints
-
-These endpoints handle the actual proxying of video flows.
-
-- **`/proxy/manifest.m3u8`**: Main endpoint for HLS. Also handles automatic conversion from DASH (MPD) to HLS.
-- **`/proxy/hls/manifest.m3u8`**: Specific alias for HLS.
-- **`/proxy/mpd/manifest.m3u8`**: Forces input to be treated as DASH (MPD).
-- **`/proxy/stream`**: Universal proxy for static files (MP4, MKV, AVI) or progressive streams.
-
-**Common Parameters:**
-- `url` (or `d`): URL of the original stream.
-- `h_<header>`: Custom headers (e.g., `h_User-Agent=VLC`).
-- `clearkey`: DRM decryption keys in `KID:KEY` format (for protected MPD streams).
-
-### 📼 DVR / Recordings
-
-The server includes a complete recording system (DVR).
-
-- **`/recordings`**: Web Interface to manage recordings, <ins>if set, also the webpage requested via the browser needs to have the API_PASSWORD in the query string params</ins>.
-- **`/record`**: "Smart" endpoint to start recording and watching simultaneously.
-  - Example: `/record?url=STREAM_URL&name=Movie` -> Starts rec and redirects to stream.
-- **`/api/recordings/start` (POST)**: Starts a recording in the background.
-- **`/api/recordings/{id}/stream`**: Watch a recording. For active recordings, streams in real-time without stopping the recording.
-- **`/api/recordings/{id}/download`**: Download the recorded file.
-
-### 🛠️ Utilities
-
-- **`/builder`**: Web Interface for the Playlist Builder.
-- **`/playlist`**: Endpoint to process entire remote M3U playlists.
-- **`/info`**: HTML page with server status and component versions.
-- **`/api/info`**: JSON API returning server status.
-- **`/proxy/ip`**: Returns the server's public IP address (useful for VPN/Proxy debugging).
-- **`/generate_urls`** (POST): Batch generates proxy URLs (used by the Builder).
-- **`/license`**: Endpoint to handle DRM license requests (if necessary).
-
----
-
-## 📚 Full API Reference
-
-Comprehensive list of all endpoints available in the server.
-
-### 🏠 System & Public
-| Method | Endpoint | Description |
-|:---|:---|:---|
-| `GET` | `/` | Main page with server status. |
-| `GET` | `/info` | Detailed information page. |
-| `GET` | `/builder` | Playlist Builder Web Interface. |
-| `GET` | `/api/info` | Server status API (JSON). |
-| `GET` | `/proxy/ip` | Returns server's public IP (useful for VPN debug). |
-
-### 📺 Proxy & Streaming
-| Method | Endpoint | Description |
-|:---|:---|:---|
-| `GET` | `/proxy/manifest.m3u8` | **Main Entrypoint**. Auto-detect HLS/DASH. |
-| `GET` | `/proxy/hls/manifest.m3u8` | Specific alias for HLS. |
-| `GET` | `/proxy/mpd/manifest.m3u8` | Forces DASH (MPD) input with HLS conversion. |
-| `GET` | `/proxy/stream` | Generic proxy for static (MP4, MKV) or progressive files. |
-| `GET` | `/playlist` | Dynamic M3U playlist generator. |
-
-### 🔍 Extractors
-| Method | Endpoint | Description |
-|:---|:---|:---|
-| `GET` | `/extractor/video` | Extracts direct links from supported sites (Vavoo, DaddyliveHD, etc.). Returns JSON or redirect. |
-
-### 🔐 Keys & DRM
-| Method | Endpoint | Description |
-|:---|:---|:---|
-| `GET` | `/license` | Proxy for DRM licenses (ClearKey/Widevine). |
-| `POST` | `/license` | Proxy for DRM licenses (POST payload support). |
-| `GET` | `/key` | Proxy for standard AES-128 decryption keys. |
-
-### 📼 DVR (Digital Video Recorder)
-| Method | Endpoint | Description |
-|:---|:---|:---|
-| `GET` | `/recordings` | **Web Interface** for recording management. |
-| `GET` | `/record` | Starts recording and redirects to stream (Smart Mode). |
-| `GET` | `/api/recordings` | List all recordings (JSON). |
-| `GET` | `/api/recordings/active` | List only ongoing recordings. |
-| `GET` | `/api/recordings/{id}` | Details of a single recording. |
-| `POST` | `/api/recordings/start` | Starts background recording (JSON payload). |
-| `POST` | `/api/recordings/{id}/stop` | Stops an active recording. |
-| `GET` | `/api/recordings/{id}/stream` | Watch a recording. For active recordings, streams the growing file in real-time without stopping. |
-| `GET` | `/api/recordings/{id}/download` | Download the recorded video file. |
-| `DELETE` | `/api/recordings/{id}` | Delete a recording. |
-
----
-
-## 🧰 Usage
-
-Replace `<server-ip>` with your server's IP address.
-
-### 🎯 Main Web Interface
-
-```
-http://<server-ip>:7860/
-```
-
-### 📺 Universal HLS Proxy
-
-```
-http://<server-ip>:7860/proxy/manifest.m3u8?url=<STREAM_URL>
-```
-
-**Supports:**
-- **HLS (.m3u8)** - Live and VOD streaming
-- **M3U playlist** - IPTV channel lists  
-- **MPD (DASH)** - Adaptive streaming with automatic HLS conversion
-- **MPD + ClearKey DRM** - Server-side CENC decryption (VLC compatible)
-- **VixSrc** - VOD streaming
-- **Sportsonline** - Sports streaming
-- **Mixdrop** - Video file hosting
-- **Voe** - Video hosting
-- **Streamtape** - Video hosting
-- **Orion** - Video streaming
-- **Freeshot/PopCDN** - CDN streaming
-- **Doodstream** - Video hosting
-- **F16px** - Video streaming
-- **Fastream** - Video streaming
-- **Filelions** - Video hosting
-- **Filemoon** - Video hosting
-- **LiveTV** - Live TV streaming
-- **Lulustream** - Video streaming
-- **Maxstream** - Video streaming
-- **OKru** - Video hosting (ok.ru)
-- **Streamwish** - Video streaming
-- **Supervideo** - Video hosting
-- **Turbovidplay** - Video streaming
-- **Uqload** - Video hosting
-- **Vidmoly** - Video streaming
-- **Vidoza** - Video hosting
-
-**Examples:**
-```bash
-# Generic HLS stream
-http://server:7860/proxy/manifest.m3u8?url=https://example.com/stream.m3u8
-
-# MPD with ClearKey DRM (server-side decryption)
-http://server:7860/proxy/manifest.m3u8?url=https://cdn.com/stream.mpd&clearkey=KID:KEY
-
-# IPTV Playlist
-http://server:7860/playlist?url=https://iptv-provider.com/playlist.m3u
-
-# Stream with custom headers
-http://server:7860/proxy/manifest.m3u8?url=https://stream.com/video.m3u8&h_user-agent=VLC&h_referer=https://site.com
-```
-### 📼 DVR (Digital Video Recorder)
-
-Remember that to use the DVR functionality you need to enable it via the env var.
-If the proxy is secured with a password it needs to be sent with the query string in the url: `/recordings?api_password=<password>`.
-
-```
-# Web Interface for recording management
-http://<server-ip>:7860/recordings
-```
-
-### 🔍 Automatic Vavoo Extraction
-
-**Automatically resolves:**
-- vavoo.to links into direct streams
-- Automatic API authentication
-- Optimized headers for streaming
-
-
-### ⚽ Automatic Sportsonline/Sportzonline resolution
-
-**Features:**
-- Resolution of links from `sportsonline.*` and `sportzonline.*`
-- Automatic extraction from iframe
-- Support for Javascript decoding (P.A.C.K.E.R.)
-
-### 🔗 Playlist Builder
-
-```
-http://<server-ip>:7860/builder
-```
-
-**Complete interface for:**
-- ✅ Combining multiple playlists
-- ✅ Automatic Vavoo management
-- ✅ #EXTVLCOPT and #EXTHTTP support  
-- ✅ Automatic #KODIPROP ClearKey extraction
-- ✅ Automatic proxy for all streams
-- ✅ Compatibility with VLC, Kodi, IPTV players
-
-### 🔑 Custom Headers
-
-Add headers with the `h_` prefix:
-
-```
-http://server:7860/proxy/manifest.m3u8?url=STREAM_URL&h_user-agent=CustomUA&h_referer=https://site.com&h_authorization=Bearer token123
-```
-
-**Supported Headers:**
-- `h_user-agent` - Custom User Agent
-- `h_referer` - Reference site  
-- `h_authorization` - Authorization token
-- `h_origin` - Origin domain
-- `h_*` - Any custom header
-
----
-
-## 📖 Architecture
-
-### 🔄 Processing Flow
-
-1. **Stream Request** → Universal proxy endpoint
-2. **Service Detection** → Auto-detect Vavoo/Generic
-3. **URL Extraction** → Real link resolution
-4. **Proxy Stream** → Forward with optimized headers
-5. **Client Response** → Direct compatible stream
-
-### ⚡ Asynchronous System
-
-- **aiohttp** - Non-blocking HTTP client
-- **Connection pooling** - Reuse of connections
-- **Automatic retry** - Intelligent error management
-
-### 🔐 Authentication Management
-
-- **Vavoo** - Automatic signature system
-- **Generic** - Standard Authorization support
-
----
-
-## 🎯 Practical Examples
-
-### 📱 IPTV Player
-
-Configure your player with:
-```
-http://your-server:7860/proxy/manifest.m3u8?url=STREAM_URL
-```
-
-### 🎬 VLC Media Player
-
-```bash
-vlc "http://your-server:7860/proxy/manifest.m3u8?url=https://example.com/stream.m3u8"
-```
-
-### 📺 Kodi
-
-Add as a source:
-```
-http://your-server:7860/proxy/manifest.m3u8?url=PLAYLIST_URL
-```
-
-### 🌐 Web Browser
-
-Open directly in the browser:
-```
-http://your-server:7860/proxy/manifest.m3u8?url=https://stream.example.com/live.m3u8
-```
-
----
-
-### 🔧 Docker Management
-
-```bash
-# Real-time logs
-docker logs -f EasyProxy
-
-# Restart container
-docker restart EasyProxy
-
-# Stop/Start
-docker stop EasyProxy
-docker start EasyProxy
-
-# Complete removal
-docker rm -f EasyProxy
-```
-
----
-
-## 🚀 Performance
-
-### 📊 Typical Benchmarks
-
-| **Metric** | **Value** | **Description** |
-|------------|------------|-----------------|
-| **Latency** | <50ms | Minimal proxy overhead |
-| **Throughput** | Unlimited | Limited by available bandwidth |
-| **Connections** | 1000+ | Supported simultaneous connections |
-| **Memory** | 50-200MB | Typical usage |
-
-### ⚡ Optimizations
-
-- **Connection Pooling** - Reusing HTTP connections
-- **Async I/O** - Non-blocking request handling
-- **Keep-Alive** - Persistent connections
-- **DNS Caching** - Domain resolution cache
+## 🛠️ Integrated Tools
+- **Playlist Builder** (`/builder`): A visual tool to create custom M3U playlists with proxied links.
+- **Server Info** (`/info`): Check status, public IP, and version information.
 
 ---
 
 ## 🤝 Contributing
+Contributions are welcome!
+1. **Fork** the repository.
+2. **Commit** your changes (features, extractors, or bug fixes).
+3. **Open a Pull Request** to the main branch.
 
-Contributions are welcome! To:
-1. **Fork** the repository
-2. **Create** a branch for changes (`git checkout -b feature/AmazingFeature`)
-3. **Commit** the changes (`git commit -m 'Add some AmazingFeature'`)
-4. **Push** to the branch (`git push origin feature/AmazingFeature`)
-5. **Open** a Pull Request
-
-### 🐛 Bug Reporting
-
-To report bugs, open an issue including:
-- Proxy version
-- Operating system
-- Test URL causing the problem
-- Full error log
-
-### 💡 Feature Requests
-
-For new features, open an issue describing:
-- Desired functionality
-- Specific use case
-- Priority (low/medium/high)
+*Found a bug? Open an [Issue](https://github.com/realbestia1/EasyProxy/issues)!*
 
 ---
 
 ## 📄 License
-
-This project is distributed under the MIT license. See the `LICENSE` file for more details.
-
----
+Distributed under the MIT License. See `LICENSE` for more information.
 
 <div align="center">
-
-**⭐ If this project is helpful to you, leave a star! ⭐**
-
-> 🎉 **Enjoy Your Streaming!**  
-> Access your favorite content anywhere, without restrictions, with complete control and optimized performance.
-
+  <p><b>⭐ If this project helped you, please give it a star! ⭐</b></p>
 </div>

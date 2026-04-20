@@ -6,6 +6,7 @@ from urllib.parse import urlparse
 import yarl
 from aiohttp import ClientSession, ClientTimeout, TCPConnector
 from aiohttp_socks import ProxyConnector
+from config import get_proxy_for_url, TRANSPORT_ROUTES, get_connector_for_proxy
 
 logger = logging.getLogger(__name__)
 
@@ -26,12 +27,12 @@ class GenericHLSExtractor:
         """Restituisce un proxy casuale dalla lista."""
         return random.choice(self.proxies) if self.proxies else None
 
-    async def _get_session(self):
+    async def _get_session(self, url: str = None):
         if self.session is None or self.session.closed:
-            proxy = self._get_random_proxy()
+            proxy = get_proxy_for_url(url, TRANSPORT_ROUTES, self.proxies) if url else self._get_random_proxy()
             if proxy:
                 logging.info(f"Utilizzo del proxy {proxy} per la sessione generica.")
-                connector = ProxyConnector.from_url(proxy)
+                connector = get_connector_for_proxy(proxy)
             else:
                 # Create SSL context that doesn't verify certificates
                 ssl_context = ssl.create_default_context()
@@ -54,6 +55,7 @@ class GenericHLSExtractor:
 
     async def extract(self, url, **kwargs):
         # ✅ AGGIORNATO: Rimossa validazione estensioni su richiesta utente.
+        session = await self._get_session(url)
         parsed_url = urlparse(url)
         origin = f"{parsed_url.scheme}://{parsed_url.netloc}"
         

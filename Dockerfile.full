@@ -2,7 +2,7 @@
 # Optimized: Now uses FlareSolverr v3 (Python) and Byparr (Patched)
 # Compatible with AMD64 and ARM64 (Oracle VPS)
 
-FROM python:3.12-bookworm
+FROM python:3.12-slim-bookworm
 
 # 1. Environment Settings
 WORKDIR /app
@@ -11,12 +11,19 @@ ENV FLARESOLVERR_URL=http://localhost:8191
 ENV BYPARR_URL=http://localhost:8192
 ENV BYPARR_PORT=8192
 
-# 2. System Dependencies (FFmpeg, Chromium, Xvfb)
-RUN apt-get update && apt-get install -y \
+# 2. System Dependencies (FFmpeg, Chromium, Xvfb, Cloudflare WARP)
+RUN apt-get update && apt-get install -y --no-install-recommends \
     curl \
     git \
+    gnupg \
+    gpg \
+    && curl -fsSL https://pkg.cloudflareclient.com/pubkey.gpg | gpg --yes --dearmor --output /usr/share/keyrings/cloudflare-warp-archive-keyring.gpg \
+    && echo "deb [signed-by=/usr/share/keyrings/cloudflare-warp-archive-keyring.gpg] https://pkg.cloudflareclient.com/ bookworm main" | tee /etc/apt/sources.list.d/cloudflare-client.list \
+    && apt-get update && apt-get install -y --no-install-recommends \
+    cloudflare-warp \
     ffmpeg \
     xvfb \
+    xauth \
     chromium \
     libnss3 \
     libatk1.0-0 \

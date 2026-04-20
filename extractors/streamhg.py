@@ -5,6 +5,7 @@ from urllib.parse import urljoin, urlparse
 
 from aiohttp import ClientSession, ClientTimeout, TCPConnector
 from aiohttp_socks import ProxyConnector
+from config import get_proxy_for_url, TRANSPORT_ROUTES, get_connector_for_proxy
 
 from utils.packed import unpack
 
@@ -30,12 +31,12 @@ class StreamHGExtractor:
     def _get_random_proxy(self):
         return random.choice(self.proxies) if self.proxies else None
 
-    async def _get_session(self):
+    async def _get_session(self, url: str = None):
         if self.session is None or self.session.closed:
             timeout = ClientTimeout(total=60, connect=30, sock_read=30)
-            proxy = self._get_random_proxy()
+            proxy = get_proxy_for_url(url, TRANSPORT_ROUTES, self.proxies) if url else self._get_random_proxy()
             if proxy:
-                connector = ProxyConnector.from_url(proxy)
+                connector = get_connector_for_proxy(proxy)
             else:
                 connector = TCPConnector(
                     limit=0,
@@ -65,7 +66,7 @@ class StreamHGExtractor:
         return candidates
 
     async def _fetch_html(self, url: str, referer: str) -> tuple[str, str]:
-        session = await self._get_session()
+        session = await self._get_session(url)
         headers = {
             "Referer": referer,
             "User-Agent": self.base_headers["user-agent"],

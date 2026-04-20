@@ -1,7 +1,7 @@
 # Monolithic Dockerfile for HuggingFace Spaces / VPS (Multi-Arch)
 # Includes FlareSolverr v3 (Python) and Byparr (Patched for compatibility)
 
-FROM python:3.12-bookworm
+FROM python:3.12-slim-bookworm
 
 # 1. Environment Settings
 WORKDIR /app
@@ -12,11 +12,12 @@ ENV BYPARR_PORT=8192
 ENV PORT=7860
 
 # 2. System Dependencies
-RUN apt-get update && apt-get install -y \
+RUN apt-get update && apt-get install -y --no-install-recommends \
     curl \
     git \
     ffmpeg \
     xvfb \
+    xauth \
     chromium \
     libnss3 \
     libatk1.0-0 \

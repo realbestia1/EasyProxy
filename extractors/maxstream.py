@@ -8,7 +8,9 @@ from aiohttp import ClientSession, ClientTimeout, TCPConnector
 from aiohttp.resolver import DefaultResolver
 from aiohttp_socks import ProxyConnector
 from bs4 import BeautifulSoup
-from config import GLOBAL_PROXIES, TRANSPORT_ROUTES, get_proxy_for_url
+from config import GLOBAL_PROXIES, TRANSPORT_ROUTES, get_proxy_for_url, get_connector_for_proxy
+
+from utils.smart_request import smart_request
 
 logger = logging.getLogger(__name__)
 
@@ -84,7 +86,7 @@ class MaxstreamExtractor:
         
         timeout = ClientTimeout(total=45, connect=15, sock_read=30)
         if proxy:
-            connector = ProxyConnector.from_url(proxy)
+            connector = get_connector_for_proxy(proxy)
             return ClientSession(timeout=timeout, connector=connector, headers=self.base_headers)
         
         if self.session is None or self.session.closed:
@@ -165,8 +167,21 @@ class MaxstreamExtractor:
                             if proxy: await session.close()
                             return content
                         text = await response.text()
+                        
+                        # Check for Cloudflare challenge in successful response
+                        if any(marker in text.lower() for marker in ["cf-challenge", "ray id", "checking your browser"]):
+                            logger.warning(f"Cloudflare detected on {url} (Proxy: {proxy}), trying FlareSolverr fallback...")
+                            # Fallback to the global smart_request utility
+                            if proxy: await session.close()
+                            return await smart_request(method, url, headers=kwargs.get("headers"), data=kwargs.get("data"), proxies=self.proxies)
+
                         if proxy: await session.close()
                         return text
+                    elif response.status in (403, 503):
+                        # Might be Cloudflare block, try FlareSolverr immediately for this path
+                        logger.warning(f"HTTP {response.status} on {url}, checking with FlareSolverr...")
+                        if proxy: await session.close()
+                        return await smart_request(method, url, headers=kwargs.get("headers"), data=kwargs.get("data"), proxies=self.proxies)
                     else:
                         logger.warning(f"Request to {url} failed (Status {response.status}) [Proxy: {proxy}, StaticIP: {use_ip}]")
             except Exception as e:

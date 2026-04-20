@@ -9,7 +9,7 @@ import aiohttp
 from aiohttp import ClientSession, ClientTimeout, TCPConnector
 from aiohttp_socks import ProxyConnector
 
-from config import FLARESOLVERR_URL, FLARESOLVERR_TIMEOUT, get_proxy_for_url
+from config import FLARESOLVERR_URL, FLARESOLVERR_TIMEOUT, get_proxy_for_url, TRANSPORT_ROUTES, GLOBAL_PROXIES, get_connector_for_proxy
 from utils.packed import eval_solver
 
 logger = logging.getLogger(__name__)
@@ -27,12 +27,14 @@ class MixdropExtractor:
         }
         self.session = None
         self.mediaflow_endpoint = "proxy_stream_endpoint"
-        self.proxies = proxies or []
+        self.proxies = proxies or GLOBAL_PROXIES
 
-    async def _get_session(self):
+    async def _get_session(self, url: str = None):
         if self.session is None or self.session.closed:
             timeout = ClientTimeout(total=60, connect=30, sock_read=30)
-            self.session = ClientSession(timeout=timeout, headers=self.base_headers)
+            proxy = get_proxy_for_url(url, TRANSPORT_ROUTES, self.proxies) if url else None
+            connector = get_connector_for_proxy(proxy) if proxy else TCPConnector(limit=0, use_dns_cache=True)
+            self.session = ClientSession(timeout=timeout, connector=connector, headers=self.base_headers)
         return self.session
 
     async def _request_flaresolverr(self, cmd: str, url: str = None, post_data: str = None, session_id: str = None) -> dict:
@@ -45,7 +47,15 @@ class MixdropExtractor:
             "cmd": cmd,
             "maxTimeout": (FLARESOLVERR_TIMEOUT + 60) * 1000,
         }
-        if url: payload["url"] = url
+        if url: 
+            payload["url"] = url
+            # Determina dinamicamente il proxy per questo specifico URL
+            proxy = get_proxy_for_url(url, TRANSPORT_ROUTES, self.proxies)
+            if proxy:
+                # FlareSolverr richiede il proxy nel formato {"url": "..."}
+                payload["proxy"] = {"url": proxy}
+                logger.debug(f"Mixdrop: Passing proxy to FlareSolverr: {proxy}")
+
         if post_data: payload["postData"] = post_data
         if session_id: payload["session"] = session_id
 
@@ -105,7 +115,7 @@ class MixdropExtractor:
             r'https?://[^\"\']+\.mp4[^\"\']*'  # Direct MP4 URL pattern
         ]
 
-        session = await self._get_session()
+        session = await self._get_session(url)
         
         try:
             final_url = await eval_solver(session, url, headers, patterns)

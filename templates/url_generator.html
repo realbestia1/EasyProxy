@@ -1,5 +1,6 @@
 <!DOCTYPE html>
 <html lang="en" class="h-full">
+
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
@@ -31,50 +32,69 @@
         }
     </style>
 </head>
-<body class="bg-gradient-to-br from-stone-50 via-slate-100 to-cyan-50 dark:from-slate-950 dark:via-slate-900 dark:to-slate-800 min-h-full font-display">
+
+<body
+    class="bg-gradient-to-br from-stone-50 via-slate-100 to-cyan-50 dark:from-slate-950 dark:via-slate-900 dark:to-slate-800 min-h-full font-display">
     <div class="fixed top-4 left-4 z-50">
-        <a href="/" class="flex items-center gap-2 px-4 py-2 rounded-full bg-white/85 dark:bg-slate-800/85 backdrop-blur-sm hover:bg-slate-100 dark:hover:bg-slate-700 transition shadow-lg text-slate-700 dark:text-slate-200 text-sm font-medium">
+        <a href="/"
+            class="flex items-center gap-2 px-4 py-2 rounded-full bg-white/85 dark:bg-slate-800/85 backdrop-blur-sm hover:bg-slate-100 dark:hover:bg-slate-700 transition shadow-lg text-slate-700 dark:text-slate-200 text-sm font-medium">
             <i class="fa-solid fa-arrow-left"></i>
             Home
         </a>
     </div>
 
     <div class="fixed top-4 right-4 z-50">
-        <button id="themeToggle" class="p-2.5 rounded-full bg-white/85 dark:bg-slate-800/85 backdrop-blur-sm hover:bg-slate-100 dark:hover:bg-slate-700 transition shadow-lg">
+        <button id="themeToggle"
+            class="p-2.5 rounded-full bg-white/85 dark:bg-slate-800/85 backdrop-blur-sm hover:bg-slate-100 dark:hover:bg-slate-700 transition shadow-lg">
             <svg class="w-5 h-5 text-amber-500 hidden dark:block" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 3v1m0 16v1m9-9h-1M4 12H3m15.364 6.364l-.707-.707M6.343 6.343l-.707-.707m12.728 0l-.707.707M6.343 17.657l-.707.707M16 12a4 4 0 11-8 0 4 4 0 018 0z"/>
+                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2"
+                    d="M12 3v1m0 16v1m9-9h-1M4 12H3m15.364 6.364l-.707-.707M6.343 6.343l-.707-.707m12.728 0l-.707.707M6.343 17.657l-.707.707M16 12a4 4 0 11-8 0 4 4 0 018 0z" />
             </svg>
             <svg class="w-5 h-5 text-cyan-700 block dark:hidden" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M20.354 15.354A9 9 0 018.646 3.646 9.003 9.003 0 0012 21a9.003 9.003 0 008.354-5.646z"/>
+                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2"
+                    d="M20.354 15.354A9 9 0 018.646 3.646 9.003 9.003 0 0012 21a9.003 9.003 0 008.354-5.646z" />
             </svg>
         </button>
     </div>
 
     <main class="container mx-auto px-4 py-12 max-w-5xl">
-        <section class="rounded-3xl p-8 md:p-10 mb-8 bg-white/70 dark:bg-slate-800/80 border border-white/50 dark:border-slate-700 shadow-xl">
-            <h1 class="text-4xl font-bold bg-gradient-to-r from-teal-600 via-sky-600 to-orange-500 bg-clip-text text-transparent mb-3">URL Generator</h1>
+        <section
+            class="rounded-3xl p-8 md:p-10 mb-8 bg-white/70 dark:bg-slate-800/80 border border-white/50 dark:border-slate-700 shadow-xl">
+            <h1
+                class="text-4xl font-bold bg-gradient-to-r from-teal-600 via-sky-600 to-orange-500 bg-clip-text text-transparent mb-3">
+                URL Generator</h1>
             <p class="text-slate-600 dark:text-slate-300 text-lg">
                 Genera URL proxy, link extractor e richieste batch compatibili con EasyProxy.
             </p>
         </section>
 
-        <section class="bg-white dark:bg-slate-800 rounded-2xl shadow-xl p-6 border border-slate-200 dark:border-slate-700 mb-6">
+        <section
+            class="bg-white dark:bg-slate-800 rounded-2xl shadow-xl p-6 border border-slate-200 dark:border-slate-700 mb-6">
             <label class="block text-sm font-semibold text-slate-700 dark:text-slate-200 mb-2">API Password</label>
             <input id="apiPassword" type="password" placeholder="Opzionale, solo se il server e protetto"
                 class="w-full px-4 py-3 rounded-xl border border-slate-300 dark:border-slate-600 bg-slate-50 dark:bg-slate-700/50 text-slate-900 dark:text-white focus:outline-none focus:border-sky-500">
         </section>
 
         <section class="flex flex-wrap gap-2 mb-6">
-            <button id="tab-proxy" class="tab-button tab-active px-5 py-3 rounded-xl font-semibold text-sm transition-all" data-tab="proxy">Proxy URL</button>
-            <button id="tab-extractor" class="tab-button px-5 py-3 rounded-xl font-semibold text-sm transition-all bg-white dark:bg-slate-800 text-slate-700 dark:text-slate-300 shadow-md" data-tab="extractor">Extractor</button>
-            <button id="tab-batch" class="tab-button px-5 py-3 rounded-xl font-semibold text-sm transition-all bg-white dark:bg-slate-800 text-slate-700 dark:text-slate-300 shadow-md" data-tab="batch">Batch JSON</button>
+            <button id="tab-proxy"
+                class="tab-button tab-active px-5 py-3 rounded-xl font-semibold text-sm transition-all"
+                data-tab="proxy">Proxy URL</button>
+            <button id="tab-extractor"
+                class="tab-button px-5 py-3 rounded-xl font-semibold text-sm transition-all bg-white dark:bg-slate-800 text-slate-700 dark:text-slate-300 shadow-md"
+                data-tab="extractor">Extractor</button>
+            <button id="tab-batch"
+                class="tab-button px-5 py-3 rounded-xl font-semibold text-sm transition-all bg-white dark:bg-slate-800 text-slate-700 dark:text-slate-300 shadow-md"
+                data-tab="batch">Batch JSON</button>
         </section>
 
-        <section id="panel-proxy" class="tab-panel bg-white dark:bg-slate-800 rounded-2xl shadow-xl p-6 border border-slate-200 dark:border-slate-700">
+        <section id="panel-proxy"
+            class="tab-panel bg-white dark:bg-slate-800 rounded-2xl shadow-xl p-6 border border-slate-200 dark:border-slate-700">
             <div class="grid gap-4">
                 <div>
-                    <label class="block text-sm font-semibold text-slate-700 dark:text-slate-200 mb-2">Tipo endpoint</label>
-                    <select id="proxyEndpoint" class="w-full px-4 py-3 rounded-xl border border-slate-300 dark:border-slate-600 bg-slate-50 dark:bg-slate-700/50 text-slate-900 dark:text-white">
+                    <label class="block text-sm font-semibold text-slate-700 dark:text-slate-200 mb-2">Tipo
+                        endpoint</label>
+                    <select id="proxyEndpoint"
+                        class="w-full px-4 py-3 rounded-xl border border-slate-300 dark:border-slate-600 bg-slate-50 dark:bg-slate-700/50 text-slate-900 dark:text-white">
                         <option value="/proxy/hls/manifest.m3u8">HLS Manifest</option>
                         <option value="/proxy/mpd/manifest.m3u8">MPD Manifest</option>
                         <option value="/proxy/stream">Stream</option>
@@ -82,20 +102,43 @@
                     </select>
                 </div>
                 <div>
-                    <label class="block text-sm font-semibold text-slate-700 dark:text-slate-200 mb-2">Destination URL</label>
+                    <label class="block text-sm font-semibold text-slate-700 dark:text-slate-200 mb-2">Destination
+                        URL</label>
                     <input id="destinationUrl" type="url" placeholder="https://example.com/stream.m3u8"
                         class="w-full px-4 py-3 rounded-xl border border-slate-300 dark:border-slate-600 bg-slate-50 dark:bg-slate-700/50 text-slate-900 dark:text-white focus:outline-none focus:border-sky-500">
                 </div>
                 <div>
-                    <label class="block text-sm font-semibold text-slate-700 dark:text-slate-200 mb-2">Request Headers</label>
-                    <textarea id="requestHeaders" rows="5" placeholder='{"User-Agent":"Mozilla/5.0","Referer":"https://site.example/"}'
+                    <label class="block text-sm font-semibold text-slate-700 dark:text-slate-200 mb-2">Request
+                        Headers</label>
+                    <textarea id="requestHeaders" rows="5"
+                        placeholder='{"User-Agent":"Mozilla/5.0","Referer":"https://site.example/"}'
                         class="w-full px-4 py-3 rounded-xl border border-slate-300 dark:border-slate-600 bg-slate-50 dark:bg-slate-700/50 text-slate-900 dark:text-white font-mono text-sm focus:outline-none focus:border-sky-500"></textarea>
                 </div>
+                <div class="flex flex-wrap gap-4 items-center">
+                    <div class="flex-1 min-w-[200px]">
+                        <label
+                            class="flex items-center gap-3 rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-700/30 px-4 py-3 text-sm text-slate-700 dark:text-slate-200 cursor-pointer hover:bg-slate-100 dark:hover:bg-slate-700/50 transition">
+                            <input id="proxyRedirectStream" type="checkbox" class="h-4 w-4 accent-sky-600">
+                            <span>Add <code>redirect_stream=true</code></span>
+                        </label>
+                        <p class="mt-1 ml-1 text-[10px] text-slate-500 dark:text-slate-400 italic">Automatically redirects to the proxied stream URL instead of showing JSON details.</p>
+                    </div>
+                    <div class="flex-1 min-w-[200px]">
+                        <label
+                            class="flex items-center gap-3 rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-700/30 px-4 py-3 text-sm text-slate-700 dark:text-slate-200 cursor-pointer hover:bg-slate-100 dark:hover:bg-slate-700/50 transition">
+                            <input id="proxyDirect" type="checkbox" class="h-4 w-4 accent-sky-600">
+                            <span>Add <code>direct=1</code></span>
+                        </label>
+                        <p class="mt-1 ml-1 text-[10px] text-slate-500 dark:text-slate-400 italic">Forces extraction using the server's real IP, bypassing WARP/VPN (avoids proxy blocks).</p>
+                    </div>
+                </div>
                 <div class="flex gap-3">
-                    <button id="generateProxy" class="px-5 py-3 rounded-xl text-white font-semibold bg-gradient-to-r from-teal-600 to-sky-600 hover:opacity-95 transition">
+                    <button id="generateProxy"
+                        class="px-5 py-3 rounded-xl text-white font-semibold bg-gradient-to-r from-teal-600 to-sky-600 hover:opacity-95 transition">
                         Genera URL
                     </button>
-                    <button id="copyProxyResult" class="px-5 py-3 rounded-xl font-semibold bg-slate-200 dark:bg-slate-700 text-slate-800 dark:text-white transition">
+                    <button id="copyProxyResult"
+                        class="px-5 py-3 rounded-xl font-semibold bg-slate-200 dark:bg-slate-700 text-slate-800 dark:text-white transition">
                         Copia
                     </button>
                 </div>
@@ -104,10 +147,12 @@
             </div>
         </section>
 
-        <section id="panel-extractor" class="tab-panel hidden bg-white dark:bg-slate-800 rounded-2xl shadow-xl p-6 border border-slate-200 dark:border-slate-700">
+        <section id="panel-extractor"
+            class="tab-panel hidden bg-white dark:bg-slate-800 rounded-2xl shadow-xl p-6 border border-slate-200 dark:border-slate-700">
             <div class="grid gap-4">
                 <div>
-                    <label class="block text-sm font-semibold text-slate-700 dark:text-slate-200 mb-2">Host extractor</label>
+                    <label class="block text-sm font-semibold text-slate-700 dark:text-slate-200 mb-2">Host
+                        extractor</label>
                     <div class="grid gap-3 md:grid-cols-[minmax(0,1fr)_220px]">
                         <input id="extractorHost" type="text" placeholder="Host scelto oppure personalizzato"
                             class="w-full px-4 py-3 rounded-xl border border-slate-300 dark:border-slate-600 bg-slate-50 dark:bg-slate-700/50 text-slate-900 dark:text-white focus:outline-none focus:border-sky-500">
@@ -137,15 +182,16 @@
                             <option value="vixsrc">VixSrc</option>
                             <option value="sportsonline">SportsOnline</option>
                             <option value="dlstreams">DLStreams / DaddyLiveHD</option>
-                             <option value="dropload">Dropload</option>
-                             <option value="deltabit">Deltabit</option>
-                             <option value="turbovidplay">TurboVidPlay</option>
+                            <option value="dropload">Dropload</option>
+                            <option value="deltabit">Deltabit</option>
+                            <option value="turbovidplay">TurboVidPlay</option>
                             <option value="livetv">LiveTV</option>
                             <option value="f16px">F16Px</option>
                             <option value="city">CinemaCity</option>
                         </select>
                     </div>
-                    <p class="mt-2 text-xs text-slate-500 dark:text-slate-400">Puoi scegliere dal menu oppure scrivere manualmente un host personalizzato.</p>
+                    <p class="mt-2 text-xs text-slate-500 dark:text-slate-400">Puoi scegliere dal menu oppure scrivere
+                        manualmente un host personalizzato.</p>
                 </div>
                 <div>
                     <label class="block text-sm font-semibold text-slate-700 dark:text-slate-200 mb-2">Video URL</label>
@@ -153,24 +199,42 @@
                         class="w-full px-4 py-3 rounded-xl border border-slate-300 dark:border-slate-600 bg-slate-50 dark:bg-slate-700/50 text-slate-900 dark:text-white focus:outline-none focus:border-sky-500">
                 </div>
                 <div>
-                    <label class="block text-sm font-semibold text-slate-700 dark:text-slate-200 mb-2">Estensione endpoint</label>
+                    <label class="block text-sm font-semibold text-slate-700 dark:text-slate-200 mb-2">Estensione
+                        endpoint</label>
                     <select id="extractorExtension"
                         class="w-full px-4 py-3 rounded-xl border border-slate-300 dark:border-slate-600 bg-slate-50 dark:bg-slate-700/50 text-slate-900 dark:text-white focus:outline-none focus:border-sky-500">
                         <option value="">Nessuna estensione</option>
                         <option value=".m3u8">.m3u8</option>
                         <option value=".mp4">.mp4</option>
                     </select>
-                    <p class="mt-2 text-xs text-slate-500 dark:text-slate-400">Scegli prima di generare URL. Esempio: VixSrc con <code>.m3u8</code>, Mixdrop con <code>.mp4</code>.</p>
+                    <p class="mt-2 text-xs text-slate-500 dark:text-slate-400">Scegli prima di generare URL. Esempio:
+                        VixSrc con <code>.m3u8</code>, Mixdrop con <code>.mp4</code>.</p>
                 </div>
-                <label class="flex items-center gap-3 rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-700/30 px-4 py-3 text-sm text-slate-700 dark:text-slate-200">
-                    <input id="extractorRedirectStream" type="checkbox" class="h-4 w-4 accent-sky-600">
-                    <span>Aggiungi <code>redirect_stream=true</code> per ottenere direttamente lo stream/proxy URL</span>
-                </label>
+                <div class="flex flex-wrap gap-4 items-center">
+                    <div class="flex-1 min-w-[200px]">
+                        <label
+                            class="flex items-center gap-3 rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-700/30 px-4 py-3 text-sm text-slate-700 dark:text-slate-200 cursor-pointer hover:bg-slate-100 dark:hover:bg-slate-700/50 transition">
+                            <input id="extractorRedirectStream" type="checkbox" class="h-4 w-4 accent-sky-600">
+                            <span>Add <code>redirect_stream=true</code></span>
+                        </label>
+                        <p class="mt-1 ml-1 text-[10px] text-slate-500 dark:text-slate-400 italic">Automatically redirects to the proxied stream URL instead of showing JSON details.</p>
+                    </div>
+                    <div class="flex-1 min-w-[200px]">
+                        <label
+                            class="flex items-center gap-3 rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-700/30 px-4 py-3 text-sm text-slate-700 dark:text-slate-200 cursor-pointer hover:bg-slate-100 dark:hover:bg-slate-700/50 transition">
+                            <input id="extractorDirect" type="checkbox" class="h-4 w-4 accent-sky-600">
+                            <span>Add <code>direct=1</code></span>
+                        </label>
+                        <p class="mt-1 ml-1 text-[10px] text-slate-500 dark:text-slate-400 italic">Forces extraction using the server's real IP, bypassing WARP/VPN (avoids proxy blocks).</p>
+                    </div>
+                </div>
                 <div class="flex gap-3">
-                    <button id="generateExtractor" class="px-5 py-3 rounded-xl text-white font-semibold bg-gradient-to-r from-orange-500 to-amber-500 hover:opacity-95 transition">
+                    <button id="generateExtractor"
+                        class="px-5 py-3 rounded-xl text-white font-semibold bg-gradient-to-r from-orange-500 to-amber-500 hover:opacity-95 transition">
                         Genera Extractor URL
                     </button>
-                    <button id="copyExtractorResult" class="px-5 py-3 rounded-xl font-semibold bg-slate-200 dark:bg-slate-700 text-slate-800 dark:text-white transition">
+                    <button id="copyExtractorResult"
+                        class="px-5 py-3 rounded-xl font-semibold bg-slate-200 dark:bg-slate-700 text-slate-800 dark:text-white transition">
                         Copia
                     </button>
                 </div>
@@ -179,10 +243,12 @@
             </div>
         </section>
 
-        <section id="panel-batch" class="tab-panel hidden bg-white dark:bg-slate-800 rounded-2xl shadow-xl p-6 border border-slate-200 dark:border-slate-700">
+        <section id="panel-batch"
+            class="tab-panel hidden bg-white dark:bg-slate-800 rounded-2xl shadow-xl p-6 border border-slate-200 dark:border-slate-700">
             <div class="grid gap-4">
                 <p class="text-sm text-slate-600 dark:text-slate-300">
-                    Invia direttamente il body JSON a <code>/generate_urls</code>. Se lasci quello di default, genera un solo URL proxy.
+                    Invia direttamente il body JSON a <code>/generate_urls</code>. Se lasci quello di default, genera un
+                    solo URL proxy.
                 </p>
                 <textarea id="batchPayload" rows="14"
                     class="w-full px-4 py-3 rounded-xl border border-slate-300 dark:border-slate-600 bg-slate-950 text-slate-100 font-mono text-sm focus:outline-none focus:border-sky-500">{
@@ -197,10 +263,12 @@
   ]
 }</textarea>
                 <div class="flex gap-3">
-                    <button id="generateBatch" class="px-5 py-3 rounded-xl text-white font-semibold bg-gradient-to-r from-sky-600 to-cyan-600 hover:opacity-95 transition">
+                    <button id="generateBatch"
+                        class="px-5 py-3 rounded-xl text-white font-semibold bg-gradient-to-r from-sky-600 to-cyan-600 hover:opacity-95 transition">
                         Invia Batch
                     </button>
-                    <button id="copyBatchResult" class="px-5 py-3 rounded-xl font-semibold bg-slate-200 dark:bg-slate-700 text-slate-800 dark:text-white transition">
+                    <button id="copyBatchResult"
+                        class="px-5 py-3 rounded-xl font-semibold bg-slate-200 dark:bg-slate-700 text-slate-800 dark:text-white transition">
                         Copia
                     </button>
                 </div>
@@ -259,6 +327,8 @@
             const endpoint = document.getElementById('proxyEndpoint').value;
             const destinationUrl = document.getElementById('destinationUrl').value.trim();
             const apiPassword = document.getElementById('apiPassword').value.trim();
+            const isDirect = document.getElementById('proxyDirect').checked;
+            const redirectStream = document.getElementById('proxyRedirectStream').checked;
             const result = document.getElementById('proxyResult');
 
             if (!destinationUrl) {
@@ -295,7 +365,16 @@
                 }
 
                 const data = JSON.parse(text);
-                result.value = (data.urls || []).join('\n');
+                let urls = data.urls || [];
+                if (isDirect || redirectStream) {
+                    urls = urls.map(u => {
+                        const urlObj = new URL(u);
+                        if (isDirect) urlObj.searchParams.set('direct', '1');
+                        if (redirectStream) urlObj.searchParams.set('redirect_stream', 'true');
+                        return urlObj.toString();
+                    });
+                }
+                result.value = urls.join('\n');
             } catch (error) {
                 result.value = `Errore: ${error.message}`;
             }
@@ -307,6 +386,7 @@
             const extension = document.getElementById('extractorExtension').value;
             const apiPassword = document.getElementById('apiPassword').value.trim();
             const redirectStream = document.getElementById('extractorRedirectStream').checked;
+            const isDirect = document.getElementById('extractorDirect').checked;
             const result = document.getElementById('extractorResult');
 
             if (!host || !url) {
@@ -322,6 +402,9 @@
             }
             if (apiPassword) {
                 params.set('api_password', apiPassword);
+            }
+            if (isDirect) {
+                params.set('direct', '1');
             }
 
             const extractorPath = `/extractor/video${extension}`;
@@ -367,4 +450,5 @@
         document.getElementById('copyBatchResult').addEventListener('click', () => copyFrom('batchResult'));
     </script>
 </body>
+
 </html>

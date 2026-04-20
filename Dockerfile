@@ -1,7 +1,7 @@
 # Dockerfile.light - Versione leggera senza FlareSolverr/Byparr integrati
 # Ideale per uso con Docker Compose o solver esterni.
 
-FROM python:3.12-bookworm
+FROM python:3.12-slim-bookworm
 
 # Imposta la directory di lavoro all'interno del container.
 WORKDIR /app
@@ -15,9 +15,10 @@ ENV PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD=0
 ENV PYTHONUNBUFFERED=1
 
 # Installa FFmpeg e Chromium di sistema (importante per molti extractor).
-RUN apt-get update && apt-get install -y \
+RUN apt-get update && apt-get install -y --no-install-recommends \
     ffmpeg \
     xvfb \
+    xauth \
     chromium \
     libnss3 \
     libatk1.0-0 \

@@ -28,7 +28,7 @@ class DLStreamsExtractor:
         # We intentionally avoid hardcoding CDN domains because they rotate frequently.
         self.stream_origin = self.entry_origin
         self.base_headers = {
-            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/147.0.0.0 Safari/537.36",
         }
         self.session = None
         self.mediaflow_endpoint = "hls_manifest_proxy"

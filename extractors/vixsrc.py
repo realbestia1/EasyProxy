@@ -10,6 +10,9 @@ from urllib.parse import parse_qs, parse_qsl, urlencode, urljoin, urlparse, urlu
 import aiohttp
 from aiohttp import ClientSession, ClientTimeout, TCPConnector
 from aiohttp_socks import ProxyConnector
+from config import get_proxy_for_url, TRANSPORT_ROUTES, GLOBAL_PROXIES, get_connector_for_proxy
+
+from utils.smart_request import smart_request
 
 logger = logging.getLogger(__name__)
 
@@ -27,7 +30,7 @@ class VixSrcExtractor:
         self.session = None
         self.mediaflow_endpoint = "hls_manifest_proxy"
         self._session_lock = asyncio.Lock()
-        self.proxies = proxies or []
+        self.proxies = proxies or GLOBAL_PROXIES
         self.is_vixsrc = True
 
     @staticmethod
@@ -79,14 +82,21 @@ class VixSrcExtractor:
                 "Use the original /movie/ or /tv/ URL to refresh tokens."
             )
 
-    async def _get_session(self):
+    async def _get_session(self, url: str = None):
         """Ottiene una sessione HTTP persistente."""
         if self.session is None or self.session.closed:
             timeout = ClientTimeout(total=60, connect=30, sock_read=30)
-            proxy = self._get_random_proxy()
+            
+            # Determina il proxy per l'URL (se fornito)
+            proxy = None
+            if url:
+                proxy = get_proxy_for_url(url, TRANSPORT_ROUTES, self.proxies)
+            else:
+                proxy = self._get_random_proxy()
+                
             if proxy:
                 logger.info("Using proxy %s for VixSrc session.", proxy)
-                connector = ProxyConnector.from_url(proxy)
+                connector = get_connector_for_proxy(proxy)
             else:
                 connector = TCPConnector(
                     limit=0,
@@ -105,42 +115,50 @@ class VixSrcExtractor:
         return self.session
 
     async def _make_robust_request(
-        self, url: str, headers: dict = None, retries: int = 3, initial_delay: int = 2
+        self, url: str, headers: dict = None, retries: int = 2, initial_delay: int = 1
     ):
-        """Effettua richieste HTTP robuste con retry automatico."""
+        """Effettua richieste HTTP robuste usando smart_request per gestire Cloudflare."""
         final_headers = headers or {}
 
         for attempt in range(retries):
             try:
-                session = await self._get_session()
                 logger.info("Attempt %s/%s for URL: %s", attempt + 1, retries, url)
+                
+                # Usiamo smart_request che gestisce già il bypass Cloudflare
+                html = await smart_request("request.get", url, headers=final_headers, proxies=self.proxies)
+                
+                if not html:
+                    raise ExtractorError(f"SmartRequest returned empty response for {url}")
 
-                async with session.get(url, headers=final_headers) as response:
-                    response.raise_for_status()
-                    content = await response.text()
+                class MockResponse:
+                    def __init__(self, text_content, status, response_url):
+                        self._text = text_content
+                        self.status = status
+                        self.headers = {} # Mocked
+                        self.url = response_url
+                        self.status_code = status
+                        self.text = text_content
 
-                    class MockResponse:
-                        def __init__(self, text_content, status, headers_dict, response_url):
-                            self._text = text_content
-                            self.status = status
-                            self.headers = headers_dict
-                            self.url = response_url
-                            self.status_code = status
-                            self.text = text_content
+                    async def text_async(self):
+                        return self._text
 
-                        async def text_async(self):
-                            return self._text
+                    def raise_for_status(self):
+                        if self.status >= 400:
+                            raise aiohttp.ClientResponseError(
+                                request_info=None,
+                                history=None,
+                                status=self.status,
+                            )
 
-                        def raise_for_status(self):
-                            if self.status >= 400:
-                                raise aiohttp.ClientResponseError(
-                                    request_info=None,
-                                    history=None,
-                                    status=self.status,
-                                )
+                logger.info("Request successful for %s (via SmartRequest)", url)
+                return MockResponse(html, 200, url)
 
-                    logger.info("Request successful for %s at attempt %s", url, attempt + 1)
-                    return MockResponse(content, response.status, response.headers, response.url)
+            except Exception as e:
+                logger.warning("SmartRequest attempt %s failed for %s: %s", attempt + 1, url, str(e))
+                if attempt < retries - 1:
+                    await asyncio.sleep(initial_delay)
+                else:
+                    raise ExtractorError(f"All SmartRequest attempts failed for {url}: {str(e)}")
 
             except (
                 aiohttp.ClientConnectionError,
@@ -168,6 +186,14 @@ class VixSrcExtractor:
                     await asyncio.sleep(delay)
                 else:
                     raise ExtractorError(f"All {retries} attempts failed for {url}: {str(e)}")
+
+            except aiohttp.ClientResponseError as e:
+                if e.status == 404:
+                    raise ExtractorError(f"VixSrc content not found (404): {url}")
+                
+                if attempt == retries - 1:
+                    raise ExtractorError(f"Final HTTP error {e.status} for {url}: {str(e)}")
+                await asyncio.sleep(initial_delay)
 
             except Exception as e:
                 logger.error("Non-network error attempt %s for %s: %s", attempt + 1, url, str(e))

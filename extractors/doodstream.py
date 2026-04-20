@@ -67,12 +67,20 @@ class DoodStreamExtractor:
 
     async def _request_byparr(self, url: str) -> dict:
         """Performs a request via Byparr (v1 API style for challenge bypass)."""
+        if not settings.byparr_url:
+            raise ExtractorError("Byparr URL not configured")
         endpoint = f"{settings.byparr_url.rstrip('/')}/v1"
         payload = {
             "cmd": "request.get",
             "url": url,
             "maxTimeout": 60000,
         }
+        
+        # Determina dinamicamente il proxy per questo specifico URL
+        proxy = get_proxy_for_url(url, TRANSPORT_ROUTES, self.proxies)
+        if proxy:
+            payload["proxy"] = {"url": proxy}
+            logger.debug(f"DoodStream: Passing proxy to Byparr: {proxy}")
 
         async with aiohttp.ClientSession() as session:
             try:

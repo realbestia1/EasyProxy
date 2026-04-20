@@ -15,10 +15,10 @@ jobs:
         include:
           - dockerfile: Dockerfile.full
             tag_name: full
-            alias_latest: true
-          - dockerfile: Dockerfile.light
-            tag_name: light
             alias_latest: false
+          - dockerfile: Dockerfile
+            tag_name: light
+            alias_latest: true
 
     permissions:
       contents: read

@@ -190,6 +190,7 @@ def create_app():
     
     async def on_startup(app):
         asyncio.create_task(ffmpeg_manager.cleanup_loop())
+        asyncio.create_task(proxy.start_tasks())
         if DVR_ENABLED:
             asyncio.create_task(recording_manager.cleanup_loop())
     app.on_startup.append(on_startup)
