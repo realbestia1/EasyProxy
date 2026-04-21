@@ -2804,13 +2804,21 @@ class HLSProxy:
                     if header in resp.headers:
                         response_headers[header] = resp.headers[header]
 
-                # ✅ FIX: Forza Content-Type per segmenti .ts se il server non lo invia correttamente
+                # ✅ FIX: Forza Content-Type coerente se il server non lo invia correttamente
                 if (
                     stream_url.endswith(".ts") or request.path.endswith(".ts")
                 ) and "video/mp2t" not in response_headers.get(
                     "content-type", ""
                 ).lower():
                     set_response_header(response_headers, "Content-Type", "video/MP2T")
+                elif (
+                    stream_url.endswith(".vtt")
+                    or stream_url.endswith(".webvtt")
+                    or request.path.endswith(".vtt")
+                ) and "text/vtt" not in response_headers.get(
+                    "content-type", ""
+                ).lower():
+                    set_response_header(response_headers, "Content-Type", "text/vtt; charset=utf-8")
                 if segment_was_stripped:
                     set_response_header(
                         response_headers, "Content-Length", str(len(content_bytes))
@@ -2834,8 +2842,10 @@ class HLSProxy:
                     "Range, Content-Type",
                 )
 
-                # Override content-length with actual bytes read
-                response_headers["Content-Length"] = str(len(content_bytes))
+                # Override content-length with actual bytes read, evitando duplicati case-insensitive
+                set_response_header(
+                    response_headers, "Content-Length", str(len(content_bytes))
+                )
                 
                 return web.Response(
                     body=content_bytes,

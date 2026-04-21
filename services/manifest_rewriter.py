@@ -582,10 +582,12 @@ class ManifestRewriter:
                             f"{proxy_base}/proxy/hls/manifest.m3u8?d={encoded_url}{header_params}"
                         )
                 else:
-                    # Se l'URL originale ha estensione mp4/m4s, usa .mp4, altrimenti default a .ts
+                    # Mantieni un endpoint coerente con il tipo reale del segmento
                     path = urllib.parse.urlparse(absolute_url).path
                     ext = ".ts"
-                    if (
+                    if path.endswith(".vtt") or path.endswith(".webvtt"):
+                        ext = ".vtt"
+                    elif (
                         path.endswith(".m4s")
                         or path.endswith(".mp4")
                         or path.endswith(".m4v")
