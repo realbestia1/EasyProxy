@@ -1,20 +1,17 @@
 name: Sync della repo sullo Space HF
-
 env:
-  HF_USERNAME: Forchettone
-  HF_SPACE: Forchettone
-
+ HF_USERNAME: Forchettone
+ HF_SPACE: Forchettone
 on:
-  schedule:
-    - cron: "0 3 * * *"
-  workflow_dispatch:
-
+ schedule:
+ - cron: "0 3 * * *"
+ workflow_dispatch:
 jobs:
-  sync:
-    runs-on: ubuntu-latest
-    steps:
-      - name: Request Factory Rebuild
-        run: |
-          curl -X POST \
-          -H "Authorization: Bearer ${{ secrets.HF_TOKEN }}" \
-          "https://huggingface.co/api/spaces/$HF_USERNAME/$HF_SPACE/restart?factory=true"
+ sync:
+ runs-on: ubuntu-latest
+ steps:
+ - name: Request Factory Rebuild
+ run: |
+ curl -X POST \
+ -H "Authorization: Bearer ${{ secrets.HF_TOKEN }}" \
+ "https://huggingface.co/api/spaces/HF_USERNAME/HF_SPACE/restart?factory=true”
