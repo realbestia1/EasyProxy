@@ -4,86 +4,142 @@ import asyncio
 from typing import Optional, Dict, Any
 from config import FLARESOLVERR_URL, FLARESOLVERR_TIMEOUT, get_proxy_for_url, TRANSPORT_ROUTES, GLOBAL_PROXIES, get_connector_for_proxy
 from aiohttp_socks import ProxyConnector
+import yarl
 
 logger = logging.getLogger(__name__)
 
-# Pattern comuni per identificare protezioni Cloudflare o simili
-CF_MARKERS = [
-    "cf-challenge",
-    "ray id",
-    "id=\"cf-wrapper\"",
-    "__cf_chl_opt",
-    "checking your browser",
-    "just a moment...",
-    "enable javascript and cookies to continue"
-]
+try:
+    from curl_cffi.requests import AsyncSession as CurlAsyncSession
+    HAS_CURL_CFFI = True
+except ImportError:
+    HAS_CURL_CFFI = False
 
-async def smart_request(cmd: str, url: str, headers: Optional[Dict] = None, post_data: Optional[str] = None, proxies: Optional[list] = None) -> str:
+async def smart_request(cmd: str, url: str, headers: Optional[Dict] = None, post_data: Optional[str] = None, proxies: Optional[list] = None) -> Any:
     """
-    Effettua una richiesta intelligente: prova la via diretta e se fallisce (Cloudflare) usa FlareSolverr.
+    Effettua una richiesta intelligente: prova la via diretta, poi curl_cffi, e se fallisce usa FlareSolverr.
     """
     current_proxies = proxies or GLOBAL_PROXIES
     proxy = get_proxy_for_url(url, TRANSPORT_ROUTES, current_proxies)
     
     headers = headers or {}
     if "User-Agent" not in headers and "user-agent" not in headers:
-        headers["User-Agent"] = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130.0.0.0 Safari/537.36"
+        headers["User-Agent"] = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"
+    
+    # ✅ FIX: Pulisci il Referer per domini critici se necessario
+    for ref_key in ["Referer", "referer"]:
+        if ref_key in headers and "cccdn.net" in url:
+            headers[ref_key] = "https://cinemacity.cc/"
 
-    html = ""
-    direct_success = False
+    # Pattern comuni per identificare protezioni Cloudflare o simili
+    CF_MARKERS = [
+        "cf-challenge",
+        "ray id",
+        "id=\"cf-wrapper\"",
+        "__cf_chl_opt",
+        "checking your browser",
+        "just a moment...",
+        "enable javascript and cookies to continue"
+    ]
 
-    # 1. Tentativo Diretto (con proxy se necessario)
+    # 1. Tentativo Diretto (aiohttp)
     try:
         connector = get_connector_for_proxy(proxy)
-        
-        async with aiohttp.ClientSession(connector=connector) as session:
+        async with aiohttp.ClientSession(
+            connector=connector,
+            cookie_jar=aiohttp.CookieJar(unsafe=True),
+        ) as session:
             method = session.get if cmd.lower() == "request.get" else session.post
-            async with method(url, headers=headers, data=post_data, timeout=aiohttp.ClientTimeout(total=30)) as resp:
+            async with method(url, headers=headers, data=post_data, timeout=aiohttp.ClientTimeout(total=20)) as resp:
                 if resp.status == 200:
-                    html = await resp.text()
-                    # Verifica se è una pagina di blocco
-                    if not any(marker in html.lower() for marker in CF_MARKERS):
-                        direct_success = True
+                    content = await resp.text()
+                    if not any(marker in content.lower() for marker in CF_MARKERS):
+                        # Se è JSON, lo mettiamo comunque in 'html' come stringa o lo lasciamo gestire all'estrattore
+                        # Per compatibilità, restituiamo sempre il dizionario
+                        response_url = yarl.URL(str(resp.url))
+                        jar_cookies = session.cookie_jar.filter_cookies(response_url)
+                        cookies = {name: morsel.value for name, morsel in jar_cookies.items()}
+                        for name, morsel in resp.cookies.items():
+                            cookies[name] = morsel.value
+                        return {"html": content, "cookies": cookies}
                 elif resp.status in (403, 503):
-                    logger.warning(f"SmartRequest: HTTP {resp.status} rilevato per {url}, possibile protezione Cloudflare.")
-                else:
-                    html = await resp.text() # Prendi il contenuto per debug
+                    logger.warning(f"SmartRequest (aiohttp): HTTP {resp.status} per {url}, provo curl_cffi...")
     except Exception as e:
-        logger.debug(f"SmartRequest: Tentativo diretto fallito per {url}: {e}")
+        logger.debug(f"SmartRequest (aiohttp) fallito: {e}")
 
-    # 2. Fallback su FlareSolverr
-    if not direct_success:
-        if not FLARESOLVERR_URL:
-            logger.error("SmartRequest: FlareSolverr non configurato e tentativo diretto fallito.")
-            return html
+    # 2. Tentativo con curl_cffi (Browser Impersonation)
+    if HAS_CURL_CFFI:
+        try:
+            logger.info(f"SmartRequest (curl_cffi): Impersonazione browser per {url}")
+            async with CurlAsyncSession(impersonate="chrome124") as s:
+                curl_proxies = {"http": proxy, "https": proxy} if proxy else None
+                
+                # ✅ FIX: Rimuovi User-Agent per evitare discrepanze col fingerprint TLS
+                curl_headers = dict(headers)
+                if "User-Agent" in curl_headers: del curl_headers["User-Agent"]
+                if "user-agent" in curl_headers: del curl_headers["user-agent"]
+                
+                c_method = s.get if cmd.lower() == "request.get" else s.post
+                c_resp = await c_method(url, headers=curl_headers, data=post_data, proxies=curl_proxies, timeout=30)
+                
+                if c_resp.status_code == 200:
+                    # Restituiamo sempre lo stesso formato dizionario
+                    return {"html": c_resp.text, "cookies": c_resp.cookies.get_dict()}
+                else:
+                    logger.warning(f"SmartRequest (curl_cffi): Status {c_resp.status_code} per {url}")
+        except Exception as e:
+            logger.error(f"SmartRequest (curl_cffi) fallito: {e}")
 
-        logger.info(f"SmartRequest: Uso FlareSolverr per {url}")
-        endpoint = f"{FLARESOLVERR_URL.rstrip('/')}/v1"
-        payload = {
-            "cmd": cmd,
-            "url": url,
-            "maxTimeout": (FLARESOLVERR_TIMEOUT + 60) * 1000,
-        }
-        if post_data: payload["postData"] = post_data
-        if proxy:
-            payload["proxy"] = {"url": proxy}
+    # 3. Fallback su FlareSolverr
+    if not FLARESOLVERR_URL:
+        logger.error("SmartRequest: FlareSolverr non configurato e tentativi precedenti falliti.")
+        return {"html": "", "cookies": {}}
 
-        async with aiohttp.ClientSession() as fs_session:
-            try:
-                async with fs_session.post(
-                    endpoint,
-                    json=payload,
-                    timeout=aiohttp.ClientTimeout(total=FLARESOLVERR_TIMEOUT + 95),
-                ) as resp:
-                    if resp.status == 200:
-                        data = await resp.json()
-                        if data.get("status") == "ok":
-                            return data.get("solution", {}).get("response", "")
-                        else:
-                            logger.error(f"SmartRequest: FlareSolverr errore: {data.get('message')}")
+    logger.info(f"SmartRequest: Uso FlareSolverr per {url}")
+    endpoint = f"{FLARESOLVERR_URL.rstrip('/')}/v1"
+    
+    # ✅ FIX: Estrai i cookie dagli header per passarli a FlareSolverr
+    fs_cookies = []
+    cookie_header = headers.get("Cookie") or headers.get("cookie")
+    if cookie_header:
+        for cookie_item in cookie_header.split(";"):
+            if "=" in cookie_item:
+                k, v = cookie_item.strip().split("=", 1)
+                fs_cookies.append({"name": k, "value": v})
+
+    payload = {
+        "cmd": cmd,
+        "url": url,
+        "maxTimeout": (FLARESOLVERR_TIMEOUT + 60) * 1000,
+    }
+    if fs_cookies: payload["cookies"] = fs_cookies
+    if post_data: payload["postData"] = post_data
+    if proxy:
+        payload["proxy"] = {"url": proxy}
+
+    async with aiohttp.ClientSession() as fs_session:
+        try:
+            async with fs_session.post(
+                endpoint,
+                json=payload,
+                timeout=aiohttp.ClientTimeout(total=FLARESOLVERR_TIMEOUT + 95),
+            ) as resp:
+                if resp.status == 200:
+                    data = await resp.json()
+                    if data.get("status") == "ok":
+                        solution = data.get("solution", {})
+                        cookies_list = solution.get("cookies", [])
+                        
+                        # ✅ DEBUG: Vediamo cosa risponde esattamente FlareSolverr
+                        logger.debug(f"🚀 FlareSolverr solution cookies: {len(cookies_list)}")
+                        
+                        cookies_dict = {c["name"]: c["value"] for c in cookies_list}
+                        return {
+                            "html": solution.get("response", ""),
+                            "cookies": cookies_dict
+                        }
                     else:
-                        logger.error(f"SmartRequest: FlareSolverr HTTP {resp.status}")
-            except Exception as e:
-                logger.error(f"SmartRequest: FlareSolverr fallito: {e}")
+                        logger.warning(f"SmartRequest: FlareSolverr ha risposto con errore: {data.get('message')}")
+        except Exception as e:
+            logger.error(f"SmartRequest: FlareSolverr fallito: {e}")
 
-    return html
+    return {"html": "", "cookies": {}}

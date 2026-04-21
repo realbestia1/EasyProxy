@@ -125,22 +125,27 @@ class VixSrcExtractor:
                 logger.info("Attempt %s/%s for URL: %s", attempt + 1, retries, url)
                 
                 # Usiamo smart_request che gestisce già il bypass Cloudflare
-                html = await smart_request("request.get", url, headers=final_headers, proxies=self.proxies)
+                result = await smart_request("request.get", url, headers=final_headers, proxies=self.proxies)
                 
-                if not html:
+                # Se smart_request restituisce un dizionario, estraiamo l'html
+                html = result.get("html", "") if isinstance(result, dict) else result
+                
+                if html is None or html == "":
                     raise ExtractorError(f"SmartRequest returned empty response for {url}")
 
                 class MockResponse:
                     def __init__(self, text_content, status, response_url):
-                        self._text = text_content
+                        self._content = text_content
                         self.status = status
                         self.headers = {} # Mocked
                         self.url = response_url
                         self.status_code = status
-                        self.text = text_content
+                        # ✅ Assicurati che .text sia sempre una stringa per i regex
+                        self.text = text_content if isinstance(text_content, str) else json.dumps(text_content)
 
-                    async def text_async(self):
-                        return self._text
+                    @property
+                    def json_content(self):
+                        return self._content if isinstance(self._content, dict) else None
 
                     def raise_for_status(self):
                         if self.status >= 400:
@@ -256,17 +261,23 @@ class VixSrcExtractor:
             headers={
                 "accept": "application/json, text/plain, */*",
                 "referer": url,
+                "x-requested-with": "XMLHttpRequest",
                 **self._default_headers(),
             },
         )
 
         try:
-            payload = json.loads(response.text)
-        except json.JSONDecodeError as exc:
+            # ✅ Usa il contenuto pre-parsato se disponibile, altrimenti parsa la stringa
+            text_content = getattr(response, 'text', '')
+            payload = getattr(response, 'json_content', None) or json.loads(text_content)
+        except (json.JSONDecodeError, TypeError, AttributeError) as exc:
+            preview = text_content[:200] if 'text_content' in locals() else "N/A"
+            logger.error(f"❌ VixSrc API JSON Error. Response starts with: {preview}")
             raise ExtractorError(f"Invalid API response from {api_url}: {exc}")
 
         embed_path = payload.get("src")
         if not embed_path:
+            logger.error(f"❌ VixSrc API Error: 'src' missing. Response payload: {payload}")
             raise ExtractorError(f"Missing embed src in API response from {api_url}")
 
         return urljoin(site_url, embed_path)
