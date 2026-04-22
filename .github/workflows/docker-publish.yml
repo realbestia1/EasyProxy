@@ -5,7 +5,7 @@ on:
 
 env:
   REGISTRY: ghcr.io
-  IMAGE_NAME: BallGamingITA/easyproxy
+  IMAGE_NAME: ballgamingita/easyproxy
 
 jobs:
   build-and-push:
