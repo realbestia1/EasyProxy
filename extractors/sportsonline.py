@@ -190,11 +190,23 @@ class SportsonlineExtractor:
             try:
                 logger.debug(f"Attempt {attempt + 1}/{retries} for URL: {url}")
                 
-                # Usiamo smart_request che gestisce già il bypass Cloudflare
-                html = await smart_request("request.get", url, headers=final_headers, proxies=self.proxies)
+                # ✅ FIX: smart_request ritorna {"html": "...", "cookies": {...}}, non una stringa diretta
+                result = await smart_request("request.get", url, headers=final_headers, proxies=self.proxies)
+                
+                if not result:
+                    raise ExtractorError(f"SmartRequest returned empty response for {url}")
+                
+                html = result.get("html", "")
+                cookies = result.get("cookies", {})
                 
                 if not html:
-                    raise ExtractorError(f"SmartRequest returned empty response for {url}")
+                    raise ExtractorError(f"SmartRequest returned empty HTML for {url}")
+                
+                # Propaga i cookie negli header per le richieste successive (utile post-Cloudflare)
+                if cookies:
+                    cookie_str = "; ".join(f"{k}={v}" for k, v in cookies.items())
+                    final_headers = dict(final_headers)
+                    final_headers["Cookie"] = cookie_str
                 
                 # Restituiamo il contenuto e l'URL finale (mocked)
                 return html, url
