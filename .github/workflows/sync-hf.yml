@@ -17,4 +17,4 @@ jobs:
         run: |
           curl -X POST \
           -H "Authorization: Bearer ${{ secrets.HF_TOKEN }}" \
-          "https://huggingface.co/api/spaces/${{ env.Forchettone }}/${{ env.Forchettone }}/restart?factory=true"
+          "https://huggingface.co/api/spaces/${{ env.HF_USERNAME }}/${{ env.HF_SPACE }}/restart?factory=true"
