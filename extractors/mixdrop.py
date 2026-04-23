@@ -9,8 +9,9 @@ import aiohttp
 from aiohttp import ClientSession, ClientTimeout, TCPConnector
 from aiohttp_socks import ProxyConnector
 
-from config import FLARESOLVERR_URL, FLARESOLVERR_TIMEOUT, get_proxy_for_url, TRANSPORT_ROUTES, GLOBAL_PROXIES, get_connector_for_proxy
+from config import FLARESOLVERR_URL, FLARESOLVERR_TIMEOUT, get_proxy_for_url, TRANSPORT_ROUTES, GLOBAL_PROXIES, get_connector_for_proxy, get_solver_proxy_url
 from utils.packed import eval_solver
+from bs4 import BeautifulSoup
 
 logger = logging.getLogger(__name__)
 
@@ -47,14 +48,16 @@ class MixdropExtractor:
             "cmd": cmd,
             "maxTimeout": (FLARESOLVERR_TIMEOUT + 60) * 1000,
         }
+        fs_headers = {}
         if url: 
             payload["url"] = url
             # Determina dinamicamente il proxy per questo specifico URL
             proxy = get_proxy_for_url(url, TRANSPORT_ROUTES, self.proxies)
             if proxy:
-                # FlareSolverr richiede il proxy nel formato {"url": "..."}
                 payload["proxy"] = {"url": proxy}
-                logger.debug(f"Mixdrop: Passing proxy to FlareSolverr: {proxy}")
+                solver_proxy = get_solver_proxy_url(proxy)
+                fs_headers["X-Proxy-Server"] = solver_proxy
+                logger.debug(f"Mixdrop: Passing explicit proxy to solver: {solver_proxy}")
 
         if post_data: payload["postData"] = post_data
         if session_id: payload["session"] = session_id
@@ -64,6 +67,7 @@ class MixdropExtractor:
                 async with fs_session.post(
                     endpoint,
                     json=payload,
+                    headers=fs_headers,
                     timeout=aiohttp.ClientTimeout(total=FLARESOLVERR_TIMEOUT + 95),
                 ) as resp:
                     if resp.status != 200:
@@ -79,17 +83,16 @@ class MixdropExtractor:
 
     async def extract(self, url: str, **kwargs) -> dict:
         """Extract Mixdrop URL."""
-        # 1. Safego
-        if "safego.cc" in url:
-            url = await self._solve_safego(url)
+        # 1. Handle redirectors (safego.cc, clicka.cc, etc.)
+        if any(domain in url.lower() for domain in ["safego.cc", "clicka.cc", "clicka"]):
+            url = await self._solve_redirector(url)
 
         # 2. Normalize
         if "/f/" in url: url = url.replace("/f/", "/e/")
         if "/emb/" in url: url = url.replace("/emb/", "/e/")
         
-        known_mirrors = ["mixdrop.co", "mixdrop.to", "mixdrop.ch", "mixdrop.ag", 
-                         "mixdrop.gl", "mixdrop.club", "m1xdrop.net", "mixdrop.top", "mixdrop.nz",
-                         "mixdrop.vc", "mixdrop.sx", "mixdrop.bz", "mdy48tn97.com"]
+        known_mirrors = ["mixdrop.to", "m1xdrop.net", "mixdrop.bz", "mixdrop.si", 
+                         "mixdrop.ag", "mixdrop.top", "mixdrop.sx", "mdy48tn97.com"]
         
         mirror_found = False
         for mirror in known_mirrors:
@@ -135,8 +138,8 @@ class MixdropExtractor:
         except Exception as e:
             raise ExtractorError(f"Mixdrop extraction failed: {str(e)}") from e
 
-    async def _solve_safego(self, url: str) -> str:
-        """Solves safego.cc captcha using FS sessions."""
+    async def _solve_redirector(self, url: str) -> str:
+        """Solves safego.cc or clicka.cc redirectors using FS sessions."""
         session_id = None
         current_url = url
         try:
@@ -155,7 +158,6 @@ class MixdropExtractor:
             text = solution.get("response", "")
             current_url = solution.get("url", url)
 
-            from bs4 import BeautifulSoup
             soup = BeautifulSoup(text, "lxml")
             
             img_tag = soup.find("img", src=re.compile(r'data:image/png;base64,'))

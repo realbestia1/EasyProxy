@@ -2,7 +2,7 @@ import aiohttp
 import logging
 import asyncio
 from typing import Optional, Dict, Any
-from config import FLARESOLVERR_URL, FLARESOLVERR_TIMEOUT, get_proxy_for_url, TRANSPORT_ROUTES, GLOBAL_PROXIES, get_connector_for_proxy
+from config import FLARESOLVERR_URL, FLARESOLVERR_TIMEOUT, get_proxy_for_url, TRANSPORT_ROUTES, GLOBAL_PROXIES, get_connector_for_proxy, get_solver_proxy_url
 from aiohttp_socks import ProxyConnector
 import yarl
 
@@ -115,12 +115,16 @@ async def smart_request(cmd: str, url: str, headers: Optional[Dict] = None, post
     if post_data: payload["postData"] = post_data
     if proxy:
         payload["proxy"] = {"url": proxy}
+        headers_for_fs = {"X-Proxy-Server": get_solver_proxy_url(proxy)}
+    else:
+        headers_for_fs = {}
 
     async with aiohttp.ClientSession() as fs_session:
         try:
             async with fs_session.post(
                 endpoint,
                 json=payload,
+                headers=headers_for_fs,
                 timeout=aiohttp.ClientTimeout(total=FLARESOLVERR_TIMEOUT + 95),
             ) as resp:
                 if resp.status == 200:

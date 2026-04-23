@@ -7,7 +7,7 @@ from urllib.parse import urlparse, urljoin
 import aiohttp
 from curl_cffi.requests import AsyncSession
 
-from config import BYPARR_URL, get_proxy_for_url, TRANSPORT_ROUTES, GLOBAL_PROXIES
+from config import BYPARR_URL, get_proxy_for_url, TRANSPORT_ROUTES, GLOBAL_PROXIES, get_solver_proxy_url
 from utils.cookie_cache import CookieCache
 
 logger = logging.getLogger(__name__)
@@ -41,6 +41,28 @@ class DoodStreamExtractor:
     def _get_proxy(self, url: str) -> str | None:
         return get_proxy_for_url(url, TRANSPORT_ROUTES, GLOBAL_PROXIES)
 
+    async def _fetch_embed_html(
+        self, embed_url: str, cookies: dict | None = None, ua: str | None = None
+    ) -> tuple[str, str]:
+        proxy = self._get_proxy(embed_url)
+        current_ua = ua or _DOOD_UA
+        async with AsyncSession() as s:
+            r = await s.get(
+                embed_url,
+                impersonate="chrome",
+                headers={
+                    "Referer": f"https://{urlparse(embed_url).netloc}/",
+                    "User-Agent": current_ua,
+                },
+                cookies=cookies or {},
+                timeout=30,
+                allow_redirects=True,
+                **({"proxy": proxy} if proxy else {}),
+            )
+        html = r.text
+        base_url = f"https://{urlparse(str(r.url)).netloc}"
+        return html, base_url
+
     async def extract(self, url: str, **kwargs):
         parsed = urlparse(url)
         video_id = parsed.path.rstrip("/").split("/")[-1]
@@ -60,8 +82,8 @@ class DoodStreamExtractor:
             try:
                 return await self._extract_via_byparr(url, video_id)
             except ExtractorError as e:
-                logger.error(f"DoodStream: Byparr extraction failed: {e}")
-                raise
+                logger.warning(f"DoodStream: Byparr extraction failed: {e}")
+                logger.info("DoodStream: Falling back to curl_cffi extraction after Byparr failure")
 
         return await self._extract_via_curl_cffi(url, video_id)
 
@@ -78,15 +100,19 @@ class DoodStreamExtractor:
         
         # Determina dinamicamente il proxy per questo specifico URL
         proxy = get_proxy_for_url(url, TRANSPORT_ROUTES, self.proxies)
+        headers = {}
         if proxy:
             payload["proxy"] = {"url": proxy}
-            logger.debug(f"DoodStream: Passing proxy to Byparr: {proxy}")
+            solver_proxy = get_solver_proxy_url(proxy)
+            headers["X-Proxy-Server"] = solver_proxy
+            logger.debug(f"DoodStream: Passing explicit proxy to Byparr: {solver_proxy}")
 
         async with aiohttp.ClientSession() as session:
             try:
                 async with session.post(
                     endpoint,
                     json=payload,
+                    headers=headers,
                     timeout=aiohttp.ClientTimeout(total=75),
                 ) as resp:
                     if resp.status != 200:
@@ -109,36 +135,35 @@ class DoodStreamExtractor:
         html = solution.get("response", "")
         ua = solution.get("userAgent", _DOOD_UA)
         raw_cookies = solution.get("cookies", [])
-
+        cookies = {}
         if raw_cookies:
             cookies = {c["name"]: c["value"] for c in raw_cookies}
             self.cache.set(urlparse(url).netloc, cookies, ua)
 
         if "pass_md5" not in html:
-            logger.debug("DoodStream: pass_md5 not found, waiting 2s for Byparr resolution...")
-            await asyncio.sleep(2)
-            solution = await self._request_byparr(embed_url)
-            html = solution.get("response", "")
-            if "pass_md5" not in html:
-                 raise ExtractorError("DoodStream: Byparr failed to solve the challenge correctly")
+            if any(x in html.lower() for x in ["video not found", "video non trovato", "removed", "eliminato", "not found"]):
+                raise ExtractorError("DoodStream: Video not found (deleted or invalid URL)")
 
-        return await self._parse_embed_html(html, base_url, ua, use_byparr=True)
+            if cookies:
+                logger.info("DoodStream: Byparr returned cookies but no pass_md5, retrying embed fetch with solved session")
+                retried_html, retried_base_url = await self._fetch_embed_html(
+                    final_url, cookies=cookies, ua=ua
+                )
+                if "pass_md5" in retried_html:
+                    return await self._parse_embed_html(
+                        retried_html, retried_base_url, ua, use_byparr=True, cookies=cookies
+                    )
+                html = retried_html
+                base_url = retried_base_url
+
+            logger.warning(f"DoodStream: Byparr returned HTML without pass_md5. Snippet: {html[:500]}...")
+            raise ExtractorError("DoodStream: Byparr failed to solve the challenge correctly (pass_md5 not found)")
+
+        return await self._parse_embed_html(html, base_url, ua, use_byparr=True, cookies=cookies)
 
     async def _extract_via_curl_cffi(self, url: str, video_id: str, cookies: dict = None, ua: str = None) -> dict:
-        proxy = self._get_proxy(url)
+        html, base_url = await self._fetch_embed_html(url, cookies=cookies, ua=ua)
         current_ua = ua or _DOOD_UA
-        async with AsyncSession() as s:
-            r = await s.get(
-                url,
-                impersonate="chrome",
-                headers={"Referer": f"https://{urlparse(url).netloc}/", "User-Agent": current_ua},
-                cookies=cookies or {},
-                timeout=30,
-                allow_redirects=True,
-                **({"proxy": proxy} if proxy else {}),
-            )
-        html = r.text
-        base_url = f"https://{urlparse(str(r.url)).netloc}"
 
         if "pass_md5" not in html:
             if "turnstile" in html.lower() or "captcha_l" in html:
@@ -146,9 +171,9 @@ class DoodStreamExtractor:
                     return await self._extract_via_byparr(url, video_id)
             raise ExtractorError(f"DoodStream: pass_md5 not found")
 
-        return await self._parse_embed_html(html, base_url, current_ua)
+        return await self._parse_embed_html(html, base_url, current_ua, cookies=cookies)
 
-    async def _parse_embed_html(self, html: str, base_url: str, override_ua: str = None, use_byparr: bool = False) -> dict:
+    async def _parse_embed_html(self, html: str, base_url: str, override_ua: str = None, use_byparr: bool = False, cookies: dict = None) -> dict:
         pass_match = re.search(r"(/pass_md5/[^'\"<>\s]+)", html)
         if not pass_match:
             raise ExtractorError("DoodStream: pass_md5 path not found")
@@ -158,27 +183,14 @@ class DoodStreamExtractor:
         
         headers = {
             "User-Agent": ua,
-            "Referer": "https://doodstream.com/",
+            "Referer": f"{base_url}/",
             "Accept": "*/*",
             "Connection": "keep-alive",
         }
 
         base_stream = None
-        if settings.byparr_url:
-            logger.debug(f"DoodStream: Fetching pass_md5 via Byparr")
-            try:
-                # Use Byparr's specialized /proxy for text/body extraction
-                async with aiohttp.ClientSession() as session:
-                    async with session.get(
-                        f"{settings.byparr_url}/proxy",
-                        params={"url": pass_url, "ua": ua, "ref": "https://doodstream.com/"},
-                        timeout=aiohttp.ClientTimeout(total=30)
-                    ) as resp:
-                        if resp.status == 200:
-                            base_stream = await resp.text()
-                            base_stream = base_stream.strip()
-            except Exception as e:
-                logger.warning(f"DoodStream: Byparr /proxy call failed: {e}")
+        # Note: Byparr /proxy endpoint was removed as it's not implemented in this version.
+        # We fall back to direct request which should work if IP consistency is maintained via same proxy.
 
         if not base_stream:
             # Last resort fallback to direct request (might fail due to IP consistency)
@@ -188,6 +200,7 @@ class DoodStreamExtractor:
                     pass_url,
                     impersonate="chrome",
                     headers=headers,
+                    cookies=cookies or {},
                     timeout=20,
                     **({"proxy": proxy} if proxy else {}),
                 )
