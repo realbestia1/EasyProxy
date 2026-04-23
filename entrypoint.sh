@@ -94,4 +94,4 @@ cd /app/byparr_src && eval $PROXY_VARS PORT=8192 python3 main.py &
 echo "🎬 Starting EasyProxy..."
 cd /app
 WORKERS_COUNT=${WORKERS:-$(nproc 2>/dev/null || echo 1)}
-xvfb-run -a --server-args='-screen 0 1366x768x24' gunicorn --bind 0.0.0.0:${PORT:-7860} --workers $WORKERS_COUNT --worker-class aiohttp.worker.GunicornWebWorker --timeout 120 --graceful-timeout 120 app:app
+gunicorn --bind 0.0.0.0:${PORT:-7860} --workers $WORKERS_COUNT --worker-class aiohttp.worker.GunicornWebWorker --timeout 120 --graceful-timeout 120 app:app

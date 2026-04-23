@@ -31,6 +31,11 @@ IF NOT EXIST "flaresolverr\" (
     pushd flaresolverr
     python -m pip install -r requirements.txt --quiet
     popd
+) ELSE (
+    :: Ensure FlareSolverr is NOT headless on Windows to avoid blocks
+    pushd flaresolverr
+    python -c "import sys; p='src/utils.py'; c=open(p, 'r', encoding='utf-8').read(); n=c.replace('; options.add_argument(\'--disable-dev-shm-usage\'); options.add_argument(\'--disable-gpu\'); options.add_argument(\'--headless=new\')', '') if '--headless=new' in c else c; open(p, 'w', encoding='utf-8', newline='\n').write(n)"
+    popd
 )
 
 :: --- 4. Byparr Setup + Patch ---

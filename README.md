@@ -60,7 +60,21 @@ The easiest way to get the **Full** experience (Proxy + Solvers) on Windows:
    ```bash
    python app.py
    ```
-*Note: For "Full" mode on Linux, you must start FlareSolverr and Byparr manually or use the [Docker](#-docker) version.*
+#### 📱 Termux (Android)
+The **Full** stack (Proxy + Solvers) is fully supported on Android via Termux + Ubuntu proot.
+
+1.  **Install Termux** from [F-Droid](https://f-droid.org/en/packages/com.termux/) (do NOT use Play Store version).
+2.  **Run the One-Shot Setup**:
+    ```bash
+    curl -sL "https://raw.githubusercontent.com/realbestia1/EasyProxy/main/termux_setup.sh?$(date +%s)" | bash
+    ```
+3.  **Prevent Termux from Sleeping**:
+    - **Wake Lock**: Swipe down your notification bar and click **"Acquire wake-lock"** on the Termux notification.
+    - **Battery Optimization**: Go to your Phone Settings -> Apps -> Termux -> Battery -> Set to **"Unrestricted"**.
+4.  **Commands**:
+    - `easyproxy`: Start the full stack.
+    - `easyproxy-update`: Update code and dependencies.
+    - `easyproxy-stop`: Stop all services.
 
 *Access the dashboard at `http://localhost:7860`*
 

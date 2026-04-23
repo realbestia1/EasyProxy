@@ -11,7 +11,6 @@ ENV FLARESOLVERR_URL=http://localhost:8191
 ENV BYPARR_URL=http://localhost:8192
 ENV BYPARR_PORT=8192
 
-# 2. System Dependencies (FFmpeg, Chromium, Xvfb, Cloudflare WARP)
 RUN apt-get update && apt-get install -y --no-install-recommends \
     curl \
     git \
@@ -23,8 +22,6 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     cloudflare-warp \
     netcat-openbsd \
     ffmpeg \
-    xvfb \
-    xauth \
     chromium \
     libnss3 \
     libatk1.0-0 \
@@ -58,6 +55,8 @@ ENV CHROME_DRIVER_PATH=/usr/bin/chromedriver
 RUN git clone https://github.com/FlareSolverr/FlareSolverr.git /app/flaresolverr \
     && cd /app/flaresolverr \
     && sed -i 's/driver_executable_path=driver_exe_path/driver_executable_path="\/usr\/bin\/chromedriver"/' src/utils.py \
+    && sed -i "s|options.add_argument('--no-sandbox')|options.add_argument('--no-sandbox'); options.add_argument('--disable-dev-shm-usage'); options.add_argument('--disable-gpu'); options.add_argument('--headless=new')|" src/utils.py \
+    && sed -i "s|^\([[:space:]]*\)start_xvfb_display()|\1pass|g" src/utils.py \
     && pip install --no-cache-dir -r requirements.txt
 
 # 4. Byparr Setup (Patched to bypass artificial Python 3.14 requirement)

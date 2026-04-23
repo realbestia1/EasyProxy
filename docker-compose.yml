@@ -3,7 +3,6 @@ services:
     image: ghcr.io/realbestia1/easyproxy:full
     container_name: easyproxy
     restart: unless-stopped
-    shm_size: "2gb"
     cap_add:
       - NET_ADMIN
     devices:
