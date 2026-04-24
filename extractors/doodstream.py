@@ -6,6 +6,7 @@ from urllib.parse import urlparse, urljoin
 
 import aiohttp
 from curl_cffi.requests import AsyncSession
+from camoufox.async_api import AsyncCamoufox
 
 from config import BYPARR_URL, get_proxy_for_url, TRANSPORT_ROUTES, GLOBAL_PROXIES, get_solver_proxy_url
 from utils.cookie_cache import CookieCache
@@ -26,8 +27,8 @@ _DOOD_UA = (
 
 class DoodStreamExtractor:
     """
-    DoodStream / PlayMogo extractor using Byparr for Cloudflare bypass and IP-consistent extraction.
-    FlareSolverr is NOT used for this provider as per user request.
+    DoodStream / PlayMogo extractor using Network Sniffing (Camoufox) 
+    to capture dynamic pass_md5 links directly from traffic.
     """
 
     def __init__(self, request_headers: dict = None, proxies: list = None):
@@ -41,180 +42,109 @@ class DoodStreamExtractor:
     def _get_proxy(self, url: str) -> str | None:
         return get_proxy_for_url(url, TRANSPORT_ROUTES, GLOBAL_PROXIES)
 
-    async def _fetch_embed_html(
-        self, embed_url: str, cookies: dict | None = None, ua: str | None = None
-    ) -> tuple[str, str]:
-        proxy = self._get_proxy(embed_url)
-        current_ua = ua or _DOOD_UA
-        async with AsyncSession() as s:
-            r = await s.get(
-                embed_url,
-                impersonate="chrome",
-                headers={
-                    "Referer": f"https://{urlparse(embed_url).netloc}/",
-                    "User-Agent": current_ua,
-                },
-                cookies=cookies or {},
-                timeout=30,
-                allow_redirects=True,
-                **({"proxy": proxy} if proxy else {}),
-            )
-        html = r.text
-        base_url = f"https://{urlparse(str(r.url)).netloc}"
-        return html, base_url
-
     async def extract(self, url: str, **kwargs):
+        """
+        Main extraction entry point. 
+        Uses Camoufox to sniff the network traffic for pass_md5.
+        """
         parsed = urlparse(url)
         video_id = parsed.path.rstrip("/").split("/")[-1]
         if not video_id:
             raise ExtractorError("Invalid DoodStream URL: no video ID found")
 
-        domain = parsed.netloc
-        cached = self.cache.get(domain)
-        if cached:
-            logger.debug(f"DoodStream: Using cached cookies for {domain}")
-            try:
-                return await self._extract_via_curl_cffi(url, video_id, cookies=cached["cookies"], ua=cached["userAgent"])
-            except Exception as e:
-                logger.warning(f"DoodStream: Cached cookies failed for {domain}: {e}")
-
-        if settings.byparr_url:
-            try:
-                return await self._extract_via_byparr(url, video_id)
-            except ExtractorError as e:
-                logger.warning(f"DoodStream: Byparr extraction failed: {e}")
-                logger.info("DoodStream: Falling back to curl_cffi extraction after Byparr failure")
-
-        return await self._extract_via_curl_cffi(url, video_id)
-
-    async def _request_byparr(self, url: str) -> dict:
-        """Performs a request via Byparr (v1 API style for challenge bypass)."""
-        if not settings.byparr_url:
-            raise ExtractorError("Byparr URL not configured")
-        endpoint = f"{settings.byparr_url.rstrip('/')}/v1"
-        payload = {
-            "cmd": "request.get",
-            "url": url,
-            "maxTimeout": 60000,
-        }
+        embed_url = url if "/e/" in url else f"https://{parsed.netloc}/e/{video_id}"
+        proxy = self._get_proxy(embed_url)
         
-        # Determina dinamicamente il proxy per questo specifico URL
-        proxy = get_proxy_for_url(url, TRANSPORT_ROUTES, self.proxies)
-        headers = {}
-        if proxy:
-            payload["proxy"] = {"url": proxy}
-            solver_proxy = get_solver_proxy_url(proxy)
-            headers["X-Proxy-Server"] = solver_proxy
-            logger.debug(f"DoodStream: Passing explicit proxy to Byparr: {solver_proxy}")
-
-        async with aiohttp.ClientSession() as session:
-            try:
-                async with session.post(
-                    endpoint,
-                    json=payload,
-                    headers=headers,
-                    timeout=aiohttp.ClientTimeout(total=75),
-                ) as resp:
-                    if resp.status != 200:
-                        raise ExtractorError(f"Byparr HTTP {resp.status}")
-                    data = await resp.json()
-            except Exception as e:
-                raise ExtractorError(f"Byparr connection failed: {e}")
-
-        if data.get("status") != "ok":
-            raise ExtractorError(f"Byparr: {data.get('message', 'unknown error')}")
+        logger.info(f"🚀 DoodStream: Starting Network Sniffing for {embed_url}")
         
-        return data.get("solution", {})
-
-    async def _extract_via_byparr(self, url: str, video_id: str) -> dict:
-        embed_url = url if "/e/" in url else f"https://{urlparse(url).netloc}/e/{video_id}"
-        solution = await self._request_byparr(embed_url)
+        captured_data = {"md5_url": None, "base_stream": None, "html": None}
         
-        final_url = solution.get("url", embed_url)
-        base_url = f"https://{urlparse(final_url).netloc}"
-        html = solution.get("response", "")
-        ua = solution.get("userAgent", _DOOD_UA)
-        raw_cookies = solution.get("cookies", [])
-        cookies = {}
-        if raw_cookies:
-            cookies = {c["name"]: c["value"] for c in raw_cookies}
-            self.cache.set(urlparse(url).netloc, cookies, ua)
-
-        if "pass_md5" not in html:
-            if any(x in html.lower() for x in ["video not found", "video non trovato", "removed", "eliminato", "not found"]):
-                raise ExtractorError("DoodStream: Video not found (deleted or invalid URL)")
-
-            if cookies:
-                logger.info("DoodStream: Byparr returned cookies but no pass_md5, retrying embed fetch with solved session")
-                retried_html, retried_base_url = await self._fetch_embed_html(
-                    final_url, cookies=cookies, ua=ua
-                )
-                if "pass_md5" in retried_html:
-                    return await self._parse_embed_html(
-                        retried_html, retried_base_url, ua, use_byparr=True, cookies=cookies
-                    )
-                html = retried_html
-                base_url = retried_base_url
-
-            logger.warning(f"DoodStream: Byparr returned HTML without pass_md5. Snippet: {html[:500]}...")
-            raise ExtractorError("DoodStream: Byparr failed to solve the challenge correctly (pass_md5 not found)")
-
-        return await self._parse_embed_html(html, base_url, ua, use_byparr=True, cookies=cookies)
-
-    async def _extract_via_curl_cffi(self, url: str, video_id: str, cookies: dict = None, ua: str = None) -> dict:
-        html, base_url = await self._fetch_embed_html(url, cookies=cookies, ua=ua)
-        current_ua = ua or _DOOD_UA
-
-        if "pass_md5" not in html:
-            if "turnstile" in html.lower() or "captcha_l" in html:
-                if settings.byparr_url:
-                    return await self._extract_via_byparr(url, video_id)
-            raise ExtractorError(f"DoodStream: pass_md5 not found")
-
-        return await self._parse_embed_html(html, base_url, current_ua, cookies=cookies)
-
-    async def _parse_embed_html(self, html: str, base_url: str, override_ua: str = None, use_byparr: bool = False, cookies: dict = None) -> dict:
-        pass_match = re.search(r"(/pass_md5/[^'\"<>\s]+)", html)
-        if not pass_match:
-            raise ExtractorError("DoodStream: pass_md5 path not found")
-
-        pass_url = urljoin(base_url, pass_match.group(1))
-        ua = override_ua or _DOOD_UA
-        
-        headers = {
-            "User-Agent": ua,
-            "Referer": f"{base_url}/",
-            "Accept": "*/*",
-            "Connection": "keep-alive",
-        }
-
-        base_stream = None
-        # Note: Byparr /proxy endpoint was removed as it's not implemented in this version.
-        # We fall back to direct request which should work if IP consistency is maintained via same proxy.
-
-        if not base_stream:
-            # Last resort fallback to direct request (might fail due to IP consistency)
-            proxy = self._get_proxy(pass_url)
-            async with AsyncSession() as s:
-                r = await s.get(
-                    pass_url,
-                    impersonate="chrome",
-                    headers=headers,
-                    cookies=cookies or {},
-                    timeout=20,
-                    **({"proxy": proxy} if proxy else {}),
-                )
-            base_stream = r.text.strip()
+        async with AsyncCamoufox(
+            headless=True,
+            geoip=True,
+            proxy={"server": proxy} if proxy else None,
+        ) as browser:
+            page = await browser.new_page()
             
-        if not base_stream or "RELOAD" in base_stream:
-            raise ExtractorError("DoodStream: pass_md5 endpoint returned no stream URL.")
+            # 🔥 Event listener for network traffic (exactly like DrissionPage logic)
+            async def on_response(response):
+                if "pass_md5" in response.url:
+                    try:
+                        captured_data["md5_url"] = response.url
+                        captured_data["base_stream"] = (await response.text()).strip()
+                        logger.info(f"🔥 Captured MD5 Request: {response.url}")
+                    except Exception:
+                        pass
 
+            page.on("response", on_response)
+            
+            try:
+                # Navigate and wait for the page to be ready
+                await page.goto(embed_url, wait_until="networkidle", timeout=45000)
+                
+                # Check for Cloudflare Turnstile titles and wait if detected
+                title = await page.title()
+                if any(t in title for t in ["Just a moment...", "Ci siamo quasi...", "Verifica del browser"]):
+                    logger.info("🛡️ Cloudflare detected in browser, waiting for solve...")
+                    await page.wait_for_timeout(10000) # Wait for auto-solve
+                
+                # Wait up to 30 seconds for the pass_md5 request to appear
+                start_wait = time.time()
+                while not captured_data["base_stream"] and (time.time() - start_wait < 30):
+                    # Store content as we go to avoid NoneType later
+                    try:
+                        captured_data["html"] = await page.content()
+                    except:
+                        pass
+                    
+                    if captured_data["base_stream"]:
+                        break
+                        
+                    # Try to trigger play if possible (sometimes needed)
+                    try:
+                         await page.click("div.vjs-big-play-button", timeout=1000)
+                    except:
+                         pass
+                    await asyncio.sleep(1)
+                    
+            except Exception as e:
+                # If we have the data, ignore the error (e.g. timeout)
+                if captured_data["base_stream"]:
+                    logger.debug(f"Ignoring browser error as data was already captured: {e}")
+                else:
+                    logger.error(f"Browser extraction error: {e}")
+            finally:
+                if not captured_data["html"]:
+                    try:
+                        captured_data["html"] = await page.content()
+                    except:
+                        captured_data["html"] = ""
+                await page.close()
+
+        if not captured_data["base_stream"]:
+            raise ExtractorError("DoodStream: Network sniffing failed to capture pass_md5")
+
+        return self._finalize_extraction(
+            captured_data["base_stream"], 
+            captured_data["html"], 
+            embed_url, 
+            _DOOD_UA
+        )
+
+    def _finalize_extraction(self, base_stream: str, html: str, base_url: str, ua: str) -> dict:
+        """Constructs the final URL from captured data."""
+        if "RELOAD" in base_stream or len(base_stream) < 5:
+            raise ExtractorError(f"DoodStream: Captured pass_md5 is invalid ({base_stream[:20]})")
+
+        # Find token and expiry in the captured HTML
         token_match = re.search(r"token=([^&\s'\"]+)", html)
         if not token_match:
             token_match = re.search(r"['\"]?token['\"]?\s*[:=]\s*['\"]([^'\"]+)['\"]", html)
-            
         if not token_match:
-            raise ExtractorError("DoodStream: token not found")
+            token_match = re.search(r"window\.[a-z0-9_]+\s*=\s*['\"]([^'\"]{20,})['\"]", html)
+
+        if not token_match:
+             raise ExtractorError("DoodStream: token not found in HTML")
             
         token = token_match.group(1)
         expiry_match = re.search(r"expiry[:=]\s*['\"]?(\d+)['\"]?", html)
@@ -225,9 +155,11 @@ class DoodStreamExtractor:
         rand_str = ''.join(random.choice(string.ascii_letters + string.digits) for _ in range(10))
         final_url = f"{base_stream}{rand_str}?token={token}&expiry={expiry}"
 
+        logger.info(f"✅ DoodStream successful sniffed extraction: {final_url[:60]}...")
+
         return {
             "destination_url": final_url,
-            "request_headers": headers,
+            "request_headers": {"User-Agent": ua, "Referer": f"{base_url}/", "Accept": "*/*"},
             "mediaflow_endpoint": self.mediaflow_endpoint,
         }
 

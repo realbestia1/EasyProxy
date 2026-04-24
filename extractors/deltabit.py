@@ -8,7 +8,7 @@ from urllib.parse import urlparse, urljoin, urlencode
 import aiohttp
 from bs4 import BeautifulSoup, SoupStrainer
 
-from config import FLARESOLVERR_URL, FLARESOLVERR_TIMEOUT, get_proxy_for_url, TRANSPORT_ROUTES, get_solver_proxy_url
+from config import FLARESOLVERR_URL, FLARESOLVERR_TIMEOUT, get_proxy_for_url, TRANSPORT_ROUTES, get_solver_proxy_url, GLOBAL_PROXIES
 from utils.cookie_cache import CookieCache
 
 logger = logging.getLogger(__name__)
@@ -28,18 +28,25 @@ class DeltabitExtractor:
     Supports safego.cc/clicka.cc redirection and unifies FlareSolverr sessions for speed.
     """
 
-    def __init__(self, request_headers: dict = None, proxies: list = None):
+    def __init__(self, request_headers: dict = None, proxies: list = None, bypass_warp: bool = False):
         self.request_headers = request_headers or {}
         self.base_headers = self.request_headers.copy()
-        self.base_headers.setdefault("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/136.0.0.0 Safari/537.36")
-        self.proxies = proxies or []
-        self.mediaflow_endpoint = "proxy_stream_endpoint"
+        if "User-Agent" not in self.base_headers and "user-agent" not in self.base_headers:
+             self.base_headers["User-Agent"] = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+        
+        self.proxies = proxies or GLOBAL_PROXIES
         self.cache = CookieCache("deltabit")
+        self.mediaflow_endpoint = "proxy_stream_endpoint"
+        self.bypass_warp_active = bypass_warp
+        logger.debug(f"Deltabit: Initialized with bypass_warp={self.bypass_warp_active}")
 
-    async def _request_flaresolverr(self, cmd: str, url: str = None, post_data: str = None, session_id: str = None) -> dict:
+    async def _request_flaresolverr(self, cmd: str, url: str = None, post_data: str = None, session_id: str = None, force_bypass_warp: bool = None) -> dict:
         """Performs a request via FlareSolverr."""
         if not settings.flaresolverr_url:
             raise ExtractorError("FlareSolverr URL not configured")
+
+        # Determine which bypass state to use
+        current_bypass = force_bypass_warp if force_bypass_warp is not None else self.bypass_warp_active
 
         endpoint = f"{settings.flaresolverr_url.rstrip('/')}/v1"
         payload = {
@@ -50,12 +57,12 @@ class DeltabitExtractor:
         if url: 
             payload["url"] = url
             # Determina dinamicamente il proxy per questo specifico URL
-            proxy = get_proxy_for_url(url, TRANSPORT_ROUTES, self.proxies)
+            proxy = get_proxy_for_url(url, TRANSPORT_ROUTES, self.proxies, bypass_warp=current_bypass)
             if proxy:
                 payload["proxy"] = {"url": proxy}
                 solver_proxy = get_solver_proxy_url(proxy)
                 fs_headers["X-Proxy-Server"] = solver_proxy
-                logger.debug(f"Deltabit: Passing explicit proxy to solver: {solver_proxy}")
+                logger.debug(f"Deltabit: Passing explicit proxy to solver: {solver_proxy} (bypass_warp={current_bypass})")
 
         if post_data: payload["postData"] = post_data
         if session_id: payload["session"] = session_id
@@ -82,24 +89,35 @@ class DeltabitExtractor:
 
     async def extract(self, url: str, **kwargs) -> dict:
         """Extract Deltabit URL using a unified FlareSolverr session if needed."""
+        # Respect bypass_warp or warp from kwargs if provided
+        target_warp = kwargs.get("bypass_warp") or kwargs.get("warp")
+        if target_warp is not None:
+            if isinstance(target_warp, str):
+                self.bypass_warp_active = target_warp.lower() in ("true", "1", "on", "yes", "off")
+                # Special case for "off" string
+                if target_warp.lower() == "off":
+                    self.bypass_warp_active = True
+                elif target_warp.lower() in ("on", "true", "1"):
+                    self.bypass_warp_active = False
+            else:
+                self.bypass_warp_active = bool(target_warp)
+            logger.debug(f"Deltabit: bypass_warp_active updated from kwargs to {self.bypass_warp_active}")
         
         # 1. Handle redirectors (safego.cc, clicka.cc, etc.)
         if any(d in url.lower() for d in ["safego.cc", "clicka.cc", "clicka"]):
             url = await self._solve_redirector(url)
-
+        
         # 2. Normalize URL to embed format
-        if "/e/" not in url:
-             url = url.replace("deltabit.co/", "deltabit.co/e/")
-             url = url.replace("deltabit.sx/", "deltabit.sx/e/")
-             url = url.replace("deltabit.bz/", "deltabit.bz/e/")
+        if "deltabit.co" in url.lower():
+            url = url.replace("deltabit.co/ ", "deltabit.co/")
+        
+        logger.debug(f"Deltabit: Starting unified FlareSolverr bypass for {url}")
         
         parsed_url = urlparse(url)
         domain = parsed_url.netloc
         
         session_id = None
         try:
-            logger.debug(f"Deltabit: Starting unified FlareSolverr bypass for {url}")
-            
             # Start session for better performance (persistence of cookies/browser state)
             sess_res = await self._request_flaresolverr("sessions.create")
             session_id = sess_res.get("session")
@@ -109,10 +127,10 @@ class DeltabitExtractor:
             solution = res.get("solution", {})
             html = solution.get("response", "")
             current_url = solution.get("url", url)
-            ua = solution.get("userAgent", self.base_headers["User-Agent"])
+            ua = solution.get("userAgent", self.base_headers.get("User-Agent", ""))
             raw_cookies = solution.get("cookies", [])
 
-            # Update cache (for future requests)
+            # Update cache
             if raw_cookies:
                 cookies = {c["name"]: c["value"] for c in raw_cookies}
                 self.cache.set(domain, cookies, ua)
@@ -127,7 +145,7 @@ class DeltabitExtractor:
                     data[name] = value 
             
             if not data.get("op"):
-                # Check for direct link in response
+                # Check for direct link
                 link_match = re.search(r'sources:\s*\["([^"]+)"', html)
                 if not link_match:
                     link_match = re.search(r'["\'](https?://.*?\.(?:m3u8|mp4)[^"\']*)["\']', html)
@@ -141,13 +159,10 @@ class DeltabitExtractor:
             data['imhuman'] = ""
             data['referer'] = current_url
             
-            # Use a slightly shorter wait time if we are in a session (server might be more lenient)
-            # but usually these hosts are strict. Reduction to 3.5s for a slight win.
             wait_time = 3.5
             logger.debug(f"Deltabit: Waiting {wait_time}s for server validation...")
             await asyncio.sleep(wait_time)
             
-            # Submitting validation form via SAME FlareSolverr session
             post_data = urlencode(data)
             post_res = await self._request_flaresolverr("request.post", current_url, post_data, session_id=session_id)
             post_html = post_res.get("solution", {}).get("response", "")
@@ -175,77 +190,115 @@ class DeltabitExtractor:
                     pass
 
     async def _solve_redirector(self, url: str) -> str:
-        """Solves safego.cc or clicka.cc redirectors and returns the destination URL using FS sessions."""
+        """Solves safego.cc or clicka.cc redirectors."""
         logger.debug(f"Deltabit: Solving redirector via FlareSolverr session: {url}")
         
         session_id = None
         try:
             import ddddocr
+            ocr = ddddocr.DdddOcr(show_ad=False)
         except ImportError:
-            ddddocr = None
+            ocr = None
 
         try:
             sess_res = await self._request_flaresolverr("sessions.create")
             session_id = sess_res.get("session")
 
-            res = await self._request_flaresolverr("request.get", url, session_id=session_id)
-            solution = res.get("solution", {})
-            text = solution.get("response", "")
-            current_url = solution.get("url", url)
-
-            soup = BeautifulSoup(text, "lxml")
-            
-            img_tag = soup.find("img", src=re.compile(r'data:image/png;base64,'))
-            if img_tag and ddddocr:
-                img_data_b64 = img_tag["src"].split(",")[1]
-                img_data = base64.b64decode(img_data_b64)
+            current_url = url
+            for step in range(5):
+                if not any(d in current_url.lower() for d in ["safego.cc", "clicka.cc", "clicka"]):
+                    break
                 
-                ocr = ddddocr.DdddOcr(show_ad=False)
-                res_captcha = ocr.classification(img_data)
-                logger.debug(f"Deltabit: Solved redirector captcha: {res_captcha}")
-                
-                post_data = urlencode({"captch5": res_captcha, "submit": "Continue"})
-                
-                post_res = await self._request_flaresolverr("request.post", current_url, post_data, session_id=session_id)
-                text = post_res.get("solution", {}).get("response", "")
+                logger.debug(f"Deltabit: Redirector step {step+1} at {current_url}")
+                res = await self._request_flaresolverr("request.get", current_url, session_id=session_id)
+                solution = res.get("solution", {})
+                current_url = solution.get("url", current_url)
+                text = solution.get("response", "")
                 soup = BeautifulSoup(text, "lxml")
-            
-            for attempt in range(4):
-                proceed_link = None
-                for a_tag in soup.find_all("a", href=True):
-                    txt = a_tag.get_text().lower()
-                    if "proceed to video" in txt or "continue" in txt:
-                        proceed_link = a_tag
+                
+                for captcha_attempt in range(5):
+                    img_tag = soup.find("img", src=re.compile(r'data:image/png;base64,'))
+                    if not img_tag or not ocr:
                         break
-                    for btn in a_tag.find_all("button"):
-                        if "proceed" in btn.get_text().lower():
-                             proceed_link = a_tag
-                             break
-                    if proceed_link: break
-                
-                if not proceed_link:
-                    proceed_link = soup.find("a", href=re.compile(r'deltabit|mixdrop|clicka', re.I))
-                
-                if proceed_link:
-                    new_url = proceed_link["href"]
-                    if new_url.startswith("/"):
-                        new_url = urljoin(current_url, new_url)
-                    logger.debug(f"Deltabit: Resolved redirector -> {new_url}")
-                    return new_url
-                
-                meta_refresh = soup.find("meta", attrs={"http-equiv": re.compile(r'refresh', re.I)})
-                if meta_refresh and "url=" in meta_refresh.get("content", "").lower():
-                    refresh_url = re.search(r'url=(.*)', meta_refresh["content"], re.I).group(1).strip()
-                    if refresh_url:
-                        logger.debug(f"Deltabit: Found meta-refresh redirect: {refresh_url}")
-                        return urljoin(current_url, refresh_url)
-
-                if attempt < 3:
-                    await asyncio.sleep(4)
+                    
+                    logger.debug(f"Deltabit: Captcha detected, attempt {captcha_attempt+1}")
+                    img_data_b64 = img_tag["src"].split(",")[1]
+                    img_data = base64.b64decode(img_data_b64)
+                    
+                    res_captcha = ocr.classification(img_data)
+                    res_captcha = res_captcha.replace('o', '0').replace('O', '0').replace('l', '1').replace('I', '1')
+                    res_captcha = re.sub(r'[^0-9]', '', res_captcha)
+                    
+                    logger.debug(f"Deltabit: OCR Result (sanitized): {res_captcha}")
+                    
+                    post_data = urlencode({"captch5": res_captcha, "submit": "Continue"})
+                    post_res = await self._request_flaresolverr("request.post", current_url, post_data, session_id=session_id)
+                    post_solution = post_res.get("solution", {})
+                    text = post_solution.get("response", "")
+                    current_url = post_solution.get("url", current_url)
+                    
+                    if "Incorrect" not in text:
+                        logger.debug("Deltabit: Captcha passed!")
+                        soup = BeautifulSoup(text, "lxml")
+                        break
+                    
+                    logger.debug("Deltabit: Captcha incorrect, retrying...")
+                    await asyncio.sleep(2)
                     res = await self._request_flaresolverr("request.get", current_url, session_id=session_id)
                     text = res.get("solution", {}).get("response", "")
                     soup = BeautifulSoup(text, "lxml")
-            
+
+                next_url = None
+                for attempt in range(3):
+                    for a_tag in soup.find_all("a", href=True):
+                        txt = a_tag.get_text().lower()
+                        href = a_tag["href"]
+                        if any(x in txt for x in ["proceed to video", "continue", "guarda il video"]):
+                            next_url = href
+                            break
+                        for btn in a_tag.find_all("button"):
+                            if "proceed" in btn.get_text().lower():
+                                 next_url = href
+                                 break
+                        if next_url: break
+                    
+                    if not next_url:
+                        for a_tag in soup.find_all("a", href=re.compile(r'deltabit\.(co|sx|bz)/[a-zA-Z0-9]+', re.I)):
+                            href = a_tag["href"]
+                            path_part = href.split("/")[-1].split(".")[0]
+                            if not any(x in href.lower() for x in ["/login", "/registration", "/faq", "/tos", "/contact", "/category", "make_money"]):
+                                if len(path_part) >= 10: 
+                                    next_url = href
+                                    break
+
+                    if next_url:
+                        if next_url.startswith("/"):
+                            next_url = urljoin(current_url, next_url)
+                        
+                        path_part = next_url.split("/")[-1].split(".")[0]
+                        if "deltabit" in next_url.lower() and len(path_part) >= 10:
+                            current_url = next_url
+                            return current_url
+                        current_url = next_url
+                        break
+                    
+                    meta_refresh = soup.find("meta", attrs={"http-equiv": re.compile(r'refresh', re.I)})
+                    if meta_refresh and "url=" in meta_refresh.get("content", "").lower():
+                        refresh_url = re.search(r'url=(.*)', meta_refresh["content"], re.I).group(1).strip()
+                        if refresh_url:
+                            current_url = urljoin(current_url, refresh_url)
+                            next_url = current_url
+                            break
+
+                    if attempt < 2:
+                        await asyncio.sleep(4)
+                        res = await self._request_flaresolverr("request.get", current_url, session_id=session_id)
+                        text = res.get("solution", {}).get("response", "")
+                        soup = BeautifulSoup(text, "lxml")
+
+                if not next_url:
+                    break
+
             return current_url
 
         except Exception as e:
@@ -259,15 +312,23 @@ class DeltabitExtractor:
                     pass
         
     def _build_result(self, video_url: str, referer: str, user_agent: str) -> dict:
-        headers = self.base_headers.copy()
+        # CLEAN HEADERS: Remove any Cloudflare-related headers to avoid IP mismatch
+        headers = {}
+        for key, value in self.base_headers.items():
+            if not any(cf in key.lower() for cf in ["cf-", "x-forwarded", "true-client", "x-real-ip"]):
+                headers[key] = value
+
         headers["Referer"] = referer
         headers["User-Agent"] = user_agent
         headers["Origin"] = f"https://{urlparse(referer).netloc}"
+        
+        logger.debug(f"Deltabit: Final result bypass_warp={self.bypass_warp_active}")
         
         return {
             "destination_url": video_url,
             "request_headers": headers,
             "mediaflow_endpoint": self.mediaflow_endpoint,
+            "bypass_warp": self.bypass_warp_active
         }
 
     async def close(self):

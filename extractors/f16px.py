@@ -67,7 +67,7 @@ class F16PxExtractor:
             raise ExtractorError("F16PX: Invalid embed URL")
 
         media_id = match.group(1)
-        api_url = f"https://{host}/api/videos/{media_id}/embed/playback"
+        api_url = f"https://{host}/api/videos/{media_id}/playback"
 
         session = await self._get_session()
         

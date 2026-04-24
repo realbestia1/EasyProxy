@@ -250,6 +250,7 @@ class VavooExtractor:
             "request_headers": stream_headers,
             "mediaflow_endpoint": self.mediaflow_endpoint,
             "disable_ssl": True,
+            "bypass_warp": True,
         }
 
     async def close(self):

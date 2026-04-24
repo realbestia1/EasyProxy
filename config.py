@@ -3,7 +3,12 @@ import logging
 import random
 import socket
 import time
+import contextvars
 from dotenv import load_dotenv
+
+# ContextVar for thread-safe/async-safe warp bypass state
+BYPASS_WARP_CONTEXT = contextvars.ContextVar("bypass_warp", default=False)
+SELECTED_PROXY_CONTEXT = contextvars.ContextVar("selected_proxy", default=None)
 
 load_dotenv()
 
@@ -117,28 +122,54 @@ def is_proxy_alive(proxy_url: str) -> bool:
         return False
 
 
-def get_proxy_for_url(url: str, transport_routes: list, global_proxies: list) -> str:
+def get_proxy_for_url(url: str, transport_routes: list, global_proxies: list, bypass_warp: bool = None) -> str:
     """Trova il proxy appropriato per un URL basato su TRANSPORT_ROUTES e impostazioni WARP."""
+    if bypass_warp is None:
+        bypass_warp = BYPASS_WARP_CONTEXT.get()
     if not url:
+        if bypass_warp:
+            return None
         proxy = random.choice(global_proxies) if global_proxies else None
         return proxy if is_proxy_alive(proxy) else None
 
-    normalized_url = url.lower()
-
-    if any(domain in normalized_url for domain in WARP_EXCLUDE_DOMAINS):
+    # `bypass_warp` means "force real IP / direct connection" for the whole flow.
+    # Do this before TRANSPORT_ROUTES so host-specific routes cannot silently
+    # reintroduce WARP or another proxy when the caller explicitly asked to bypass.
+    if bypass_warp:
         return None
+
+    normalized_url = url.lower()
 
     if transport_routes:
         for route in transport_routes:
             url_pattern = route["url"]
             if url_pattern in url:
-                proxy_value = route["proxy"]
-                return proxy_value if proxy_value else None
+                proxy_value = route.get("proxy")
+                if not proxy_value:
+                    return None
+                return proxy_value if is_proxy_alive(proxy_value) else None
 
-    if ENABLE_WARP:
+    # Check if WARP should be used
+    is_excluded = any(domain in normalized_url for domain in WARP_EXCLUDE_DOMAINS)
+    
+    if ENABLE_WARP and not bypass_warp and not is_excluded:
+        return WARP_PROXY_URL if is_proxy_alive(WARP_PROXY_URL) else None
+
+    # Fallback to Global Proxies
+    # Se bypass_warp è True, preferiamo la connessione DIRETTA (Real IP) per coerenza
+    # invece di pescare un proxy a caso dalla lista globale, che causerebbe rotazione IP.
+    if bypass_warp:
         return None
 
+    # Use sticky proxy if already selected for this request context
+    proxy = SELECTED_PROXY_CONTEXT.get()
+    if proxy:
+        return proxy if is_proxy_alive(proxy) else None
+
     proxy = random.choice(global_proxies) if global_proxies else None
+    if proxy:
+        SELECTED_PROXY_CONTEXT.set(proxy)
+        
     return proxy if is_proxy_alive(proxy) else None
 
 
@@ -198,7 +229,7 @@ def get_ssl_setting_for_url(url: str, transport_routes: list) -> bool:
 
 
 ENABLE_WARP = os.environ.get("ENABLE_WARP", "false").lower() == "true"
-WARP_PROXY_URL = os.environ.get("WARP_PROXY_URL", "").strip() or None
+WARP_PROXY_URL = os.environ.get("WARP_PROXY_URL", "").strip() or "socks5h://127.0.0.1:1080"
 
 _default_warp_exclude_domains = [
     "cinemacity.cc",
@@ -233,6 +264,10 @@ _default_warp_exclude_domains = [
     "put.io",
     "*.put.io",
     "api.put.io",
+    "dlstreams.com",
+    "*.dlstreams.com",
+    "dlhd.dad",
+    "*.dlhd.dad",
 ]
 WARP_EXCLUDE_DOMAINS = [
     domain.strip().lower()
@@ -258,7 +293,7 @@ MAX_RECORDING_DURATION = int(os.environ.get("MAX_RECORDING_DURATION", 28800))
 RECORDINGS_RETENTION_DAYS = int(os.environ.get("RECORDINGS_RETENTION_DAYS", 7))
 
 # --- Version/Mode Configuration ---
-APP_VERSION = "2.5.82"
+APP_VERSION = "2.5.85"
 
 _has_solvers = os.path.exists("flaresolverr") and (
     os.path.exists("byparr") or os.path.exists("byparr_src")
