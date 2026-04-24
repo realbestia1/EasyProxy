@@ -14,8 +14,11 @@ jobs:
     strategy:
       matrix:
         include:
-          - dockerfile: Dockerfile.full
+          - dockerfile: Dockerfile-hf
             tag_name: full
+            alias_latest: false
+          - dockerfile: Dockerfile.full
+            tag_name: full2
             alias_latest: false
           - dockerfile: Dockerfile
             tag_name: light
