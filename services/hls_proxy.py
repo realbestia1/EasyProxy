@@ -590,8 +590,7 @@ class HLSProxy:
         # Patterns for domains that usually block Cloudflare/WARP
         # Cinemacity, VixSrc, etc.
         bypass_patterns = [
-            "cccdn.net", "cinemacity.cc", "strem.fun", "torrentio.strem.fun",
-            "vavoo.to", "vavoo.tv", "lokke.app"
+            "cccdn.net", "cinemacity.cc", "strem.fun", "torrentio.strem.fun"
         ]
         
         try:
@@ -623,7 +622,7 @@ class HLSProxy:
         except Exception as e:
             logging.error(f"❌ Error in dynamic WARP bypass: {e}")
 
-    async def _get_proxy_session(self, url: str, bypass_warp: bool = False):
+    async def _get_proxy_session(self, url: str, bypass_warp: bool = False, forced_proxy: str | None = None):
         """Get a session with proxy support for the given URL.
 
         Sessions are cached and reused for the same proxy to improve performance.
@@ -635,7 +634,7 @@ class HLSProxy:
         # Trigger dynamic bypass check before getting proxy settings
         self._check_dynamic_warp_bypass(url, force=bypass_warp)
         
-        proxy = get_proxy_for_url(url, TRANSPORT_ROUTES, GLOBAL_PROXIES, bypass_warp=bypass_warp)
+        proxy = forced_proxy or get_proxy_for_url(url, TRANSPORT_ROUTES, GLOBAL_PROXIES, bypass_warp=bypass_warp)
 
         prefer_default_family = "ai.the-sunmoon.site/key/" in url
 
@@ -756,7 +755,13 @@ class HLSProxy:
                 key = f"{host}_direct" if bypass_warp else host
                 
                 # ✅ FIX: Calcola il proxy corretto in base a bypass_warp invece di usare GLOBAL_PROXIES indiscriminatamente
-                proxy = get_proxy_for_url(host, TRANSPORT_ROUTES, GLOBAL_PROXIES, bypass_warp=bypass_warp)
+                proxy_lookup_target = url if host in ["doodstream", "dood", "d000d"] else host
+                proxy = get_proxy_for_url(
+                    proxy_lookup_target,
+                    TRANSPORT_ROUTES,
+                    GLOBAL_PROXIES,
+                    bypass_warp=bypass_warp,
+                )
                 proxy_list = [proxy] if proxy else []
 
                 if host == "vavoo":
@@ -1104,7 +1109,7 @@ class HLSProxy:
             ):
                 key = "doodstream_direct" if bypass_warp else "doodstream"
                 proxy = get_proxy_for_url(
-                    "doodstream", TRANSPORT_ROUTES, GLOBAL_PROXIES, bypass_warp=bypass_warp
+                    url, TRANSPORT_ROUTES, GLOBAL_PROXIES, bypass_warp=bypass_warp
                 )
                 proxy_list = [proxy] if proxy else []
                 if key not in self.extractors:
@@ -1310,9 +1315,7 @@ class HLSProxy:
             return web.Response(status=401, text="Unauthorized: Invalid API Password")
 
         target_url = request.query.get("url") or request.query.get("d")
-        bypass_warp = (request.query.get("warp", "").lower() == "off") or (
-            target_url and ("vavoo.to" in target_url or "vavoo.tv" in target_url)
-        )
+        bypass_warp = (request.query.get("warp", "").lower() == "off")
         token = BYPASS_WARP_CONTEXT.set(bypass_warp)
         proxy_token = SELECTED_PROXY_CONTEXT.set(None)
         
@@ -1452,6 +1455,7 @@ class HLSProxy:
                     "cinemacity.cc" in (original_channel_url or "").lower()
                     or request.query.get("host", "").lower() in {"city", "cinemacity"}
                 )
+                disable_ssl = request.query.get("disable_ssl") == "1" or force_disable_ssl
                 rewritten_manifest = await ManifestRewriter.rewrite_manifest_urls(
                     manifest_content=captured_manifest,
                     base_url=stream_url,
@@ -1463,6 +1467,7 @@ class HLSProxy:
                     no_bypass=no_bypass,
                     shorten_url_func=self.shorten_hls_url if use_short_hls_urls else None,
                     bypass_warp=bypass_warp,
+                    disable_ssl=disable_ssl,
                 )
                 return web.Response(
                     text=rewritten_manifest,
@@ -1932,6 +1937,7 @@ class HLSProxy:
             stream_headers = result.get("request_headers", {})
             mediaflow_endpoint = result.get("mediaflow_endpoint", "hls_proxy")
             force_disable_ssl = result.get("disable_ssl", False)
+            selected_proxy = result.get("selected_proxy")
             bypass_warp = result.get("bypass_warp", bypass_warp)
             
             # Log dello stato dell'estrattore
@@ -1981,6 +1987,8 @@ class HLSProxy:
 
             if bypass_warp:
                 header_params += "&warp=off"
+            if selected_proxy:
+                header_params += f"&proxy={urllib.parse.quote(selected_proxy)}"
 
             # 1. URL COMPLETO (Solo per il redirect)
             full_proxy_url = f"{proxy_base}{endpoint}?d={encoded_url}{header_params}"
@@ -2308,7 +2316,8 @@ class HLSProxy:
                     f"🔐 Auth key headers: Authorization={'***' if headers.get('Authorization') else 'missing'}, X-Channel-Key={headers.get('X-Channel-Key', 'missing')}, X-User-Agent={headers.get('X-User-Agent', 'missing')}"
                 )
 
-            async with session.get(key_url, headers=headers) as resp:
+            disable_ssl = get_ssl_setting_for_url(key_url, TRANSPORT_ROUTES)
+            async with session.get(key_url, headers=headers, ssl=not disable_ssl) as resp:
                 if resp.status == 200 or resp.status == 206:
                     key_data = await resp.read()
                     logger.debug(
@@ -2433,9 +2442,10 @@ class HLSProxy:
             session, _ = await self._get_proxy_session(
                 segment_url, bypass_warp=bypass_warp
             )
+            disable_ssl = get_ssl_setting_for_url(segment_url, TRANSPORT_ROUTES)
             # ✅ Use yarl.URL with encoded=True to prevent double-encoding of commas
             final_segment_url = yarl.URL(segment_url, encoded=True)
-            async with session.get(final_segment_url, headers=headers) as resp:
+            async with session.get(final_segment_url, headers=headers, ssl=not disable_ssl) as resp:
                 response_headers = {}
 
                 for header in [
@@ -2502,6 +2512,7 @@ class HLSProxy:
         """Effettua il proxy dello stream con gestione manifest e AES-128"""
         if bypass_warp is None:
             bypass_warp = request.query.get("warp", "").lower() == "off"
+        forced_proxy = request.query.get("proxy") or None
         try:
             # Ping DLStreams extractor to keep browser alive during playback
             # Use robust markers: Daddy's domains, 'premium' pattern, 'mono.css', or Referer/Origin headers
@@ -2616,7 +2627,11 @@ class HLSProxy:
                     f"[Proxy Stream] Using direct session (forced) for: {stream_url}"
                 )
             else:
-                session, session_proxy = await self._get_proxy_session(stream_url, bypass_warp=bypass_warp)
+                session, session_proxy = await self._get_proxy_session(
+                    stream_url,
+                    bypass_warp=bypass_warp,
+                    forced_proxy=forced_proxy,
+                )
                 
                 # ✅ FIX LOG: Determine correct routing for display
                 if session_proxy:
@@ -2866,6 +2881,7 @@ class HLSProxy:
                         or "cccdn.net" in str(resp.url).lower()
                     )
                     
+                    disable_ssl = request.query.get("disable_ssl") == "1" or get_ssl_setting_for_url(str(resp.url), TRANSPORT_ROUTES)
                     rewritten = await ManifestRewriter.rewrite_manifest_urls(
                         manifest_content=manifest_content,
                         base_url=str(resp.url),
@@ -2876,7 +2892,8 @@ class HLSProxy:
                         get_extractor_func=self.get_extractor,
                         no_bypass=request.query.get("no_bypass") == "1",
                         shorten_url_func=self.shorten_hls_url if use_short_hls_urls else None,
-                        bypass_warp=bypass_warp
+                        bypass_warp=bypass_warp,
+                        disable_ssl=disable_ssl,
                     )
                     return web.Response(text=rewritten, headers={
                         "Content-Type": "application/vnd.apple.mpegurl",

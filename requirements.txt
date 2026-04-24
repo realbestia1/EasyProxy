@@ -12,3 +12,4 @@ playwright
 ddddocr
 Pillow
 curl_cffi
+cloudscraper

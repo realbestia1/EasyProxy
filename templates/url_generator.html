@@ -131,6 +131,14 @@
                         </label>
                         <p class="mt-1 ml-1 text-[10px] text-slate-500 dark:text-slate-400 italic">Bypasses the Cloudflare WARP SOCKS5 proxy for this specific request.</p>
                     </div>
+                    <div class="flex-1 min-w-[200px]">
+                        <label
+                            class="flex items-center gap-3 rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-700/30 px-4 py-3 text-sm text-slate-700 dark:text-slate-200 cursor-pointer hover:bg-slate-100 dark:hover:bg-slate-700/50 transition">
+                            <input id="proxyDisableSSL" type="checkbox" class="h-4 w-4 accent-sky-600">
+                            <span>Add <code>disable_ssl=1</code></span>
+                        </label>
+                        <p class="mt-1 ml-1 text-[10px] text-slate-500 dark:text-slate-400 italic">Bypasses SSL certificate verification for this specific request.</p>
+                    </div>
                 </div>
                 <div class="flex gap-3">
                     <button id="generateProxy"
@@ -226,6 +234,14 @@
                             <span>Add <code>warp=off</code></span>
                         </label>
                         <p class="mt-1 ml-1 text-[10px] text-slate-500 dark:text-slate-400 italic">Bypasses the Cloudflare WARP SOCKS5 proxy for this specific request.</p>
+                    </div>
+                    <div class="flex-1 min-w-[200px]">
+                        <label
+                            class="flex items-center gap-3 rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-700/30 px-4 py-3 text-sm text-slate-700 dark:text-slate-200 cursor-pointer hover:bg-slate-100 dark:hover:bg-slate-700/50 transition">
+                            <input id="extractorDisableSSL" type="checkbox" class="h-4 w-4 accent-sky-600">
+                            <span>Add <code>disable_ssl=1</code></span>
+                        </label>
+                        <p class="mt-1 ml-1 text-[10px] text-slate-500 dark:text-slate-400 italic">Bypasses SSL certificate verification for this specific request.</p>
                     </div>
                 </div>
                 <div class="flex gap-3">
@@ -329,6 +345,7 @@
             const apiPassword = document.getElementById('apiPassword').value.trim();
             const redirectStream = document.getElementById('proxyRedirectStream').checked;
             const bypassWarp = document.getElementById('proxyBypassWarp').checked;
+            const disableSSL = document.getElementById('proxyDisableSSL').checked;
             const result = document.getElementById('proxyResult');
 
             if (!destinationUrl) {
@@ -342,7 +359,8 @@
                         destination_url: destinationUrl,
                         endpoint: endpoint,
                         request_headers: {},
-                        warp: bypassWarp ? "off" : "on"
+                        warp: bypassWarp ? "off" : "on",
+                        disable_ssl: disableSSL ? "1" : "0"
                     }
                 ]
             };
@@ -367,11 +385,12 @@
 
                 const data = JSON.parse(text);
                 let urls = data.urls || [];
-                if (redirectStream || bypassWarp) {
+                if (redirectStream || bypassWarp || disableSSL) {
                     urls = urls.map(u => {
                         const urlObj = new URL(u);
                         if (redirectStream) urlObj.searchParams.set('redirect_stream', 'true');
                         if (bypassWarp) urlObj.searchParams.set('warp', 'off');
+                        if (disableSSL) urlObj.searchParams.set('disable_ssl', '1');
                         return urlObj.toString();
                     });
                 }
@@ -388,6 +407,7 @@
             const apiPassword = document.getElementById('apiPassword').value.trim();
             const redirectStream = document.getElementById('extractorRedirectStream').checked;
             const bypassWarp = document.getElementById('extractorBypassWarp').checked;
+            const disableSSL = document.getElementById('extractorDisableSSL').checked;
             const result = document.getElementById('extractorResult');
 
             if (!host || !url) {
@@ -403,6 +423,9 @@
             }
             if (bypassWarp) {
                 params.set('warp', 'off');
+            }
+            if (disableSSL) {
+                params.set('disable_ssl', '1');
             }
             if (apiPassword) {
                 params.set('api_password', apiPassword);

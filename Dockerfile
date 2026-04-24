@@ -14,10 +14,11 @@ ENV PLAYWRIGHT_BROWSERS_PATH=/ms-playwright
 ENV PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD=0
 ENV PYTHONUNBUFFERED=1
 
-# Installa FFmpeg e Chromium di sistema (importante per molti extractor).
+# Installa FFmpeg, Chromium e Node.js (necessario per cloudscraper).
 RUN apt-get update && apt-get install -y --no-install-recommends \
     ffmpeg \
     chromium \
+    nodejs \
     libnss3 \
     libatk1.0-0 \
     libatk-bridge2.0-0 \

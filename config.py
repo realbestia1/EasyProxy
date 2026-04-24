@@ -264,10 +264,6 @@ _default_warp_exclude_domains = [
     "put.io",
     "*.put.io",
     "api.put.io",
-    "dlstreams.com",
-    "*.dlstreams.com",
-    "dlhd.dad",
-    "*.dlhd.dad",
 ]
 WARP_EXCLUDE_DOMAINS = [
     domain.strip().lower()
@@ -293,7 +289,7 @@ MAX_RECORDING_DURATION = int(os.environ.get("MAX_RECORDING_DURATION", 28800))
 RECORDINGS_RETENTION_DAYS = int(os.environ.get("RECORDINGS_RETENTION_DAYS", 7))
 
 # --- Version/Mode Configuration ---
-APP_VERSION = "2.5.85"
+APP_VERSION = "2.5.87"
 
 _has_solvers = os.path.exists("flaresolverr") and (
     os.path.exists("byparr") or os.path.exists("byparr_src")

@@ -1,166 +1,332 @@
 import asyncio
 import logging
+import os
+import random
 import re
+import string
+import threading
 import time
-from urllib.parse import urlparse, urljoin
+from urllib.parse import urljoin, urlparse
 
 import aiohttp
-from curl_cffi.requests import AsyncSession
-from camoufox.async_api import AsyncCamoufox
-
-from config import BYPARR_URL, get_proxy_for_url, TRANSPORT_ROUTES, GLOBAL_PROXIES, get_solver_proxy_url
+import cloudscraper
+from config import BYPARR_URL, GLOBAL_PROXIES, TRANSPORT_ROUTES, get_proxy_for_url
 from utils.cookie_cache import CookieCache
 
 logger = logging.getLogger(__name__)
 
+
 class ExtractorError(Exception):
     pass
+
 
 class Settings:
     byparr_url = BYPARR_URL
 
+
 settings = Settings()
 
 _DOOD_UA = (
-    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36"
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+    "(KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36"
 )
+_FREE_SOCKS5_URL = os.environ.get(
+    "DOOD_FREE_PROXY_URL",
+    "https://raw.githubusercontent.com/proxifly/free-proxy-list/refs/heads/main/proxies/all/data.txt",
+)
+_FREE_PROXY_ENABLED = os.environ.get("DOOD_ENABLE_FREE_PROXY_POOL", "true").lower() == "true"
+_FREE_PROXY_CACHE_TTL = int(os.environ.get("DOOD_FREE_PROXY_CACHE_TTL", "1800"))
+_FREE_PROXY_MAX_FETCH = int(os.environ.get("DOOD_FREE_PROXY_MAX_FETCH", "80"))
+_FREE_PROXY_MAX_GOOD = int(os.environ.get("DOOD_FREE_PROXY_MAX_GOOD", "8"))
+
 
 class DoodStreamExtractor:
     """
-    DoodStream / PlayMogo extractor using Network Sniffing (Camoufox) 
-    to capture dynamic pass_md5 links directly from traffic.
+    DoodStream / PlayMogo extractor using cloudscraper first, with optional
+    auto-refreshed free-proxy fallback only for this extractor.
     """
+
+    _free_proxy_lock = threading.Lock()
+    _free_proxy_cache = {"expires_at": 0.0, "proxies": []}
+    _free_proxy_cursor = 0
 
     def __init__(self, request_headers: dict = None, proxies: list = None):
         self.request_headers = request_headers or {}
         self.base_headers = self.request_headers.copy()
         self.base_headers["User-Agent"] = _DOOD_UA
         self.proxies = proxies or []
+        self.last_used_proxy = None
         self.mediaflow_endpoint = "proxy_stream_endpoint"
         self.cache = CookieCache("dood")
 
     def _get_proxy(self, url: str) -> str | None:
         return get_proxy_for_url(url, TRANSPORT_ROUTES, GLOBAL_PROXIES)
 
+    def _normalize_proxy_url(self, proxy_value: str) -> str:
+        proxy_value = proxy_value.strip()
+        if proxy_value.startswith("socks5://"):
+            return proxy_value.replace("socks5://", "socks5h://", 1)
+        if "://" not in proxy_value:
+            return f"socks5h://{proxy_value}"
+        return proxy_value
+
+    def _build_scraper_proxies(self, url: str, proxy_url: str | None = None) -> dict | None:
+        if not proxy_url and self.proxies:
+            proxy_url = self.proxies[0]
+        if not proxy_url:
+            proxy_url = self._get_proxy(url)
+        if not proxy_url:
+            return None
+        proxy_url = self._normalize_proxy_url(proxy_url)
+        self.last_used_proxy = proxy_url
+        return {"http": proxy_url, "https": proxy_url}
+
+    def _extract_pass_path(self, html: str) -> str | None:
+        patterns = [
+            r"['\"](/pass_md5/[^'\"]+)['\"]",
+            r"\.get\(\s*['\"](/pass_md5/[^'\"]+)['\"]",
+            r"(/pass_md5/[A-Za-z0-9\-._]+/[A-Za-z0-9]+)",
+        ]
+        for pattern in patterns:
+            match = re.search(pattern, html, re.I)
+            if match:
+                return match.group(1)
+        return None
+
+    def _extract_token(self, html: str, pass_path: str | None = None) -> str | None:
+        if pass_path:
+            tail = pass_path.rstrip("/").split("/")[-1]
+            if re.fullmatch(r"[A-Za-z0-9]{8,}", tail):
+                return tail
+
+        patterns = [
+            r"makePlay\(\)\s*\{.*?\?token=([A-Za-z0-9]+)&expiry=",
+            r"\?token=([A-Za-z0-9]+)&expiry=",
+            r"token=([A-Za-z0-9]+)",
+            r"['\"]?token['\"]?\s*[:=]\s*['\"]([A-Za-z0-9]+)['\"]",
+            r"window\.[a-z0-9_]+\s*=\s*['\"]([A-Za-z0-9]{20,})['\"]",
+        ]
+        for pattern in patterns:
+            match = re.search(pattern, html, re.I | re.S)
+            if match:
+                return match.group(1)
+        return None
+
+    def _extract_expiry(self, html: str) -> str:
+        expiry_match = re.search(r"expiry[:=]\s*['\"]?(\d{10,})['\"]?", html, re.I)
+        if expiry_match:
+            return expiry_match.group(1)
+        if re.search(r"expiry=.*Date\.now\(\)", html, re.I | re.S):
+            return str(int(time.time() * 1000))
+        return str(int(time.time()))
+
+    def _is_valid_dood_page(self, html: str) -> bool:
+        return bool(html and "pass_md5" in html and "makePlay(" in html and "token=" in html)
+
+    def _log_parse_debug(self, html: str) -> None:
+        markers = {
+            "pass_md5": "pass_md5" in html,
+            "makePlay": "makePlay(" in html,
+            "token=": "token=" in html,
+            "Date.now": "Date.now()" in html,
+            "cf-browser-verification": "cf-browser-verification" in html,
+            "Just a moment...": "Just a moment..." in html,
+        }
+        logger.debug(f"DoodStream HTML length: {len(html)} | markers: {markers}")
+
+        for marker in ("pass_md5", "makePlay(", "token="):
+            idx = html.find(marker)
+            if idx != -1:
+                start = max(0, idx - 180)
+                end = min(len(html), idx + 320)
+                snippet = re.sub(r"\s+", " ", html[start:end]).strip()
+                logger.debug(f"DoodStream marker snippet [{marker}]: {snippet}")
+                return
+
+        compact_html = re.sub(r"\s+", " ", html[:1200]).strip()
+        logger.debug(f"DoodStream compact HTML snippet (first 1200 chars): {compact_html}")
+
+    def _fetch_free_proxy_candidates(self) -> list[str]:
+        scraper = cloudscraper.create_scraper(delay=2)
+        resp = scraper.get(
+            _FREE_SOCKS5_URL,
+            headers={"User-Agent": _DOOD_UA},
+            timeout=20,
+        )
+        resp.raise_for_status()
+
+        proxies = []
+        for line in resp.text.splitlines():
+            line = line.strip()
+            if not line:
+                continue
+            proxies.append(self._normalize_proxy_url(line))
+            if len(proxies) >= _FREE_PROXY_MAX_FETCH:
+                break
+        return proxies
+
+    def _probe_free_proxy(self, proxy_url: str, embed_url: str) -> bool:
+        try:
+            scraper = cloudscraper.create_scraper(delay=2)
+            resp = scraper.get(
+                embed_url,
+                headers={"User-Agent": _DOOD_UA},
+                timeout=12,
+                proxies={"http": proxy_url, "https": proxy_url},
+            )
+            return resp.status_code == 200 and self._is_valid_dood_page(resp.text)
+        except Exception:
+            return False
+
+    def _get_auto_proxy_pool(self, embed_url: str) -> list[str]:
+        if not _FREE_PROXY_ENABLED:
+            return []
+
+        now = time.time()
+        cached = self.__class__._free_proxy_cache
+        if cached["proxies"] and cached["expires_at"] > now:
+            return list(cached["proxies"])
+
+        with self.__class__._free_proxy_lock:
+            cached = self.__class__._free_proxy_cache
+            if cached["proxies"] and cached["expires_at"] > time.time():
+                return list(cached["proxies"])
+
+            logger.info("DoodStream: refreshing free proxy pool for cloudscraper")
+            try:
+                candidates = self._fetch_free_proxy_candidates()
+            except Exception as exc:
+                logger.warning(f"DoodStream: free proxy list fetch failed: {exc}")
+                return list(cached["proxies"])
+
+            good = []
+            for proxy_url in candidates:
+                if self._probe_free_proxy(proxy_url, embed_url):
+                    good.append(proxy_url)
+                    logger.info(f"DoodStream: free proxy validated {proxy_url}")
+                if len(good) >= _FREE_PROXY_MAX_GOOD:
+                    break
+
+            self.__class__._free_proxy_cache = {
+                "expires_at": time.time() + _FREE_PROXY_CACHE_TTL,
+                "proxies": good,
+            }
+            return list(good)
+
+    def _get_next_auto_proxy_sequence(self, embed_url: str) -> list[str]:
+        proxies = self._get_auto_proxy_pool(embed_url)
+        if not proxies:
+            return []
+
+        with self.__class__._free_proxy_lock:
+            cursor = self.__class__._free_proxy_cursor % len(proxies)
+            self.__class__._free_proxy_cursor = (cursor + 1) % len(proxies)
+
+        return proxies[cursor:] + proxies[:cursor]
+
+    async def _do_extract_with_proxy(self, embed_url: str, scraper_proxies: dict | None) -> dict | None:
+        scraper = cloudscraper.create_scraper(delay=5)
+        if scraper_proxies:
+            self.last_used_proxy = scraper_proxies["https"]
+            logger.info(f"DoodStream: cloudscraper using proxy {scraper_proxies['https']}")
+        else:
+            self.last_used_proxy = None
+            logger.info("DoodStream: cloudscraper using direct connection")
+
+        response = await asyncio.to_thread(
+            scraper.get,
+            embed_url,
+            headers={"User-Agent": _DOOD_UA},
+            timeout=30,
+            proxies=scraper_proxies,
+        )
+        if response.status_code != 200:
+            raise ExtractorError(f"DoodStream: cloudscraper failed to fetch embed page (status {response.status_code})")
+
+        html = response.text
+        title_match = re.search(r"<title>(.*?)</title>", html, re.I)
+        if title_match:
+            logger.info(f"DoodStream Page Title: {title_match.group(1)}")
+
+        if "Just a moment..." in html or "DDoS protection" in html or "cf-browser-verification" in html:
+            logger.warning("DoodStream: cloudscraper returned 200 but Cloudflare challenge is present.")
+
+        pass_path = self._extract_pass_path(html)
+        token = self._extract_token(html, pass_path)
+        if not (pass_path and token):
+            self._log_parse_debug(html)
+            return None
+
+        pass_url = urljoin(embed_url, pass_path)
+        logger.info(f"Cloudscraper found pass_md5 path: {pass_path}")
+
+        pass_response = await asyncio.to_thread(
+            scraper.get,
+            pass_url,
+            headers={"Referer": embed_url, "User-Agent": _DOOD_UA},
+            timeout=30,
+            proxies=scraper_proxies,
+        )
+        if pass_response.status_code != 200 or len(pass_response.text) <= 10:
+            logger.warning(
+                f"DoodStream: pass_md5 request failed with status {pass_response.status_code} "
+                f"and content: {pass_response.text[:100]}"
+            )
+            return None
+
+        logger.info("DoodStream: cloudscraper extraction successful!")
+        return self._finalize_extraction(pass_response.text.strip(), html, embed_url, _DOOD_UA)
+
     async def extract(self, url: str, **kwargs):
-        """
-        Main extraction entry point. 
-        Uses Camoufox to sniff the network traffic for pass_md5.
-        """
         parsed = urlparse(url)
         video_id = parsed.path.rstrip("/").split("/")[-1]
         if not video_id:
             raise ExtractorError("Invalid DoodStream URL: no video ID found")
 
         embed_url = url if "/e/" in url else f"https://{parsed.netloc}/e/{video_id}"
-        proxy = self._get_proxy(embed_url)
-        
-        logger.info(f"🚀 DoodStream: Starting Network Sniffing for {embed_url}")
-        
-        captured_data = {"md5_url": None, "base_stream": None, "html": None}
-        
-        async with AsyncCamoufox(
-            headless=True,
-            geoip=True,
-            proxy={"server": proxy} if proxy else None,
-        ) as browser:
-            page = await browser.new_page()
-            
-            # 🔥 Event listener for network traffic (exactly like DrissionPage logic)
-            async def on_response(response):
-                if "pass_md5" in response.url:
-                    try:
-                        captured_data["md5_url"] = response.url
-                        captured_data["base_stream"] = (await response.text()).strip()
-                        logger.info(f"🔥 Captured MD5 Request: {response.url}")
-                    except Exception:
-                        pass
 
-            page.on("response", on_response)
-            
-            try:
-                # Navigate and wait for the page to be ready
-                await page.goto(embed_url, wait_until="networkidle", timeout=45000)
-                
-                # Check for Cloudflare Turnstile titles and wait if detected
-                title = await page.title()
-                if any(t in title for t in ["Just a moment...", "Ci siamo quasi...", "Verifica del browser"]):
-                    logger.info("🛡️ Cloudflare detected in browser, waiting for solve...")
-                    await page.wait_for_timeout(10000) # Wait for auto-solve
-                
-                # Wait up to 30 seconds for the pass_md5 request to appear
-                start_wait = time.time()
-                while not captured_data["base_stream"] and (time.time() - start_wait < 30):
-                    # Store content as we go to avoid NoneType later
-                    try:
-                        captured_data["html"] = await page.content()
-                    except:
-                        pass
-                    
-                    if captured_data["base_stream"]:
-                        break
-                        
-                    # Try to trigger play if possible (sometimes needed)
-                    try:
-                         await page.click("div.vjs-big-play-button", timeout=1000)
-                    except:
-                         pass
-                    await asyncio.sleep(1)
-                    
-            except Exception as e:
-                # If we have the data, ignore the error (e.g. timeout)
-                if captured_data["base_stream"]:
-                    logger.debug(f"Ignoring browser error as data was already captured: {e}")
-                else:
-                    logger.error(f"Browser extraction error: {e}")
-            finally:
-                if not captured_data["html"]:
-                    try:
-                        captured_data["html"] = await page.content()
-                    except:
-                        captured_data["html"] = ""
-                await page.close()
+        try:
+            logger.info(f"DoodStream: Trying cloudscraper extraction for {embed_url}")
 
-        if not captured_data["base_stream"]:
-            raise ExtractorError("DoodStream: Network sniffing failed to capture pass_md5")
+            result = await self._do_extract_with_proxy(
+                embed_url,
+                self._build_scraper_proxies(embed_url),
+            )
+            if result:
+                return result
 
-        return self._finalize_extraction(
-            captured_data["base_stream"], 
-            captured_data["html"], 
-            embed_url, 
-            _DOOD_UA
-        )
+            for proxy_url in self._get_next_auto_proxy_sequence(embed_url):
+                logger.info(f"DoodStream: retrying with auto proxy {proxy_url}")
+                result = await self._do_extract_with_proxy(
+                    embed_url,
+                    {"http": proxy_url, "https": proxy_url},
+                )
+                if result:
+                    return result
+
+            raise ExtractorError("DoodStream: tokens not found after primary and auto-proxy attempts")
+        except Exception as e:
+            logger.error(f"DoodStream: cloudscraper error: {e}")
+            raise ExtractorError(f"DoodStream: cloudscraper extraction failed: {e}")
 
     def _finalize_extraction(self, base_stream: str, html: str, base_url: str, ua: str) -> dict:
-        """Constructs the final URL from captured data."""
         if "RELOAD" in base_stream or len(base_stream) < 5:
             raise ExtractorError(f"DoodStream: Captured pass_md5 is invalid ({base_stream[:20]})")
 
-        # Find token and expiry in the captured HTML
-        token_match = re.search(r"token=([^&\s'\"]+)", html)
-        if not token_match:
-            token_match = re.search(r"['\"]?token['\"]?\s*[:=]\s*['\"]([^'\"]+)['\"]", html)
-        if not token_match:
-            token_match = re.search(r"window\.[a-z0-9_]+\s*=\s*['\"]([^'\"]{20,})['\"]", html)
+        token = self._extract_token(html)
+        if not token:
+            raise ExtractorError("DoodStream: token not found in HTML")
 
-        if not token_match:
-             raise ExtractorError("DoodStream: token not found in HTML")
-            
-        token = token_match.group(1)
-        expiry_match = re.search(r"expiry[:=]\s*['\"]?(\d+)['\"]?", html)
-        expiry = expiry_match.group(1) if expiry_match else str(int(time.time()))
-        
-        import random
-        import string
-        rand_str = ''.join(random.choice(string.ascii_letters + string.digits) for _ in range(10))
+        expiry = self._extract_expiry(html)
+        rand_str = "".join(random.choice(string.ascii_letters + string.digits) for _ in range(10))
         final_url = f"{base_stream}{rand_str}?token={token}&expiry={expiry}"
 
-        logger.info(f"✅ DoodStream successful sniffed extraction: {final_url[:60]}...")
-
+        logger.info(f"DoodStream successful sniffed extraction: {final_url[:60]}...")
         return {
             "destination_url": final_url,
             "request_headers": {"User-Agent": ua, "Referer": f"{base_url}/", "Accept": "*/*"},
             "mediaflow_endpoint": self.mediaflow_endpoint,
+            "selected_proxy": self.last_used_proxy,
         }
 
     async def close(self):

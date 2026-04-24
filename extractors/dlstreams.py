@@ -41,8 +41,8 @@ class DLStreamsExtractor:
         self.session = None
         self.mediaflow_endpoint = "hls_manifest_proxy"
         self.proxies = proxies or []
-        # DLStreams should always use direct routing / real IP.
-        self.bypass_warp_active = True
+        # DLStreams no longer forces direct routing by default.
+        self.bypass_warp_active = bypass_warp
         self._browser_key_cache: dict[str, bytes] = {}
         # We no longer cache the manifest text to ensure live streams are fresh.
         # self._browser_manifest_cache: dict[str, str] = {}
@@ -564,10 +564,7 @@ class DLStreamsExtractor:
 
     async def _extract_impl(self, url: str, channel_id: str, **kwargs) -> Dict[str, Any]:
         try:
-            # Respect bypass_warp or warp from kwargs if provided
-            # Force direct routing for DLStreams regardless of query params or caller defaults.
-            self.bypass_warp_active = True
-            logger.debug("DLStreams: forcing bypass_warp_active=True (always direct / real IP)")
+            # Using bypass_warp_active set during initialization
 
             channel_key = f"premium{channel_id}"
             session = await self._get_session()

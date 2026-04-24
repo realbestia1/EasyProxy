@@ -1,7 +1,8 @@
 #!/bin/bash
 export PYTHONPATH=/app
 
-WARP_EXCLUDED_HOSTS="${WARP_EXCLUDED_HOSTS:-cinemacity.cc,*.cinemacity.cc,cccdn.net,*.cccdn.net,strem.fun,*.strem.fun,torrentio.strem.fun,real-debrid.com,*.real-debrid.com,realdebrid.com,*.realdebrid.com,api.real-debrid.com,premiumize.me,*.premiumize.me,www.premiumize.me,alldebrid.com,*.alldebrid.com,api.alldebrid.com,debrid-link.com,*.debrid-link.com,debridlink.com,*.debridlink.com,api.debrid-link.com,torbox.app,*.torbox.app,api.torbox.app,offcloud.com,*.offcloud.com,api.offcloud.com,put.io,*.put.io,api.put.io,dlstreams.com,*.dlstreams.com,dlhd.dad,*.dlhd.dad}"
+WARP_EXCLUDED_HOSTS="${WARP_EXCLUDED_HOSTS:-cinemacity.cc,*.cinemacity.cc,cccdn.net,*.cccdn.net,strem.fun,*.strem.fun,torrentio.strem.fun,real-debrid.com,*.real-debrid.com,realdebrid.com,*.realdebrid.com,api.real-debrid.com,premiumize.me,*.premiumize.me,www.premiumize.me,alldebrid.com,*.alldebrid.com,api.alldebrid.com,debrid-link.com,*.debrid-link.com,debridlink.com,*.debridlink.com,api.debrid-link.com,torbox.app,*.torbox.app,api.torbox.app,offcloud.com,*.offcloud.com,api.offcloud.com,put.io,*.put.io,api.put.io}"
+WARP_LICENSE_KEY="${WARP_LICENSE_KEY:-}"
 
 # --- Cloudflare WARP Setup ---
 if [ "$ENABLE_WARP" = "true" ]; then
