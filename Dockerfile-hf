@@ -1,5 +1,5 @@
 # Monolithic Dockerfile for HuggingFace Spaces / VPS (Multi-Arch)
-# Includes FlareSolverr v3 (Python) and Byparr (Patched for compatibility)
+# Includes FlareSolverr v3 (Python)
 
 FROM python:3.12-slim-bookworm
 
@@ -7,8 +7,6 @@ FROM python:3.12-slim-bookworm
 WORKDIR /app
 ENV PYTHONUNBUFFERED=1
 ENV FLARESOLVERR_URL=http://localhost:8191
-ENV BYPARR_URL=http://localhost:8192
-ENV BYPARR_PORT=8192
 ENV PORT=7860
 
 # 2. System Dependencies
@@ -54,14 +52,7 @@ RUN git clone https://github.com/FlareSolverr/FlareSolverr.git /app/flaresolverr
     && sed -i "s|^\([[:space:]]*\)start_xvfb_display()|\1pass|g" src/utils.py \
     && pip install --no-cache-dir -r requirements.txt
 
-# 4. Byparr Setup (Patched to bypass the artificial Python 3.14 requirement)
-RUN git clone https://github.com/ThePhaseless/Byparr.git /app/byparr_src \
-    && cd /app/byparr_src \
-    && sed -i 's/requires-python = .*/requires-python = ">=3.11"/' pyproject.toml \
-    && pip install --no-cache-dir .
-RUN python -m camoufox fetch
-
-# 5. EasyProxy Setup
+# 4. EasyProxy Setup
 WORKDIR /app
 # Usiamo init e fetch invece di clone perché la cartella contiene già i solver
 RUN git init . \
@@ -77,5 +68,5 @@ RUN chmod +x entrypoint.sh
 
 # 6. Execution
 EXPOSE 7860
-# Usiamo l'entrypoint script per avviare FlareSolverr, Byparr e EasyProxy insieme
+# Usiamo l'entrypoint script per avviare FlareSolverr e EasyProxy insieme
 ENTRYPOINT ["/bin/bash", "/app/entrypoint.sh"]

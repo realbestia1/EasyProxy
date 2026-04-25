@@ -1,5 +1,5 @@
 # Monolithic Dockerfile for EasyProxy (Full Version)
-# Optimized: Now uses FlareSolverr v3 (Python) and Byparr (Patched)
+# Optimized: Uses FlareSolverr v3 (Python)
 # Compatible with AMD64 and ARM64 (Oracle VPS)
 
 FROM python:3.12-slim-bookworm
@@ -8,8 +8,6 @@ FROM python:3.12-slim-bookworm
 WORKDIR /app
 ENV PYTHONUNBUFFERED=1
 ENV FLARESOLVERR_URL=http://localhost:8191
-ENV BYPARR_URL=http://localhost:8192
-ENV BYPARR_PORT=8192
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
     curl \
@@ -60,14 +58,7 @@ RUN git clone https://github.com/FlareSolverr/FlareSolverr.git /app/flaresolverr
     && sed -i "s|^\([[:space:]]*\)start_xvfb_display()|\1pass|g" src/utils.py \
     && pip install --no-cache-dir -r requirements.txt
 
-# 4. Byparr Setup (Patched to bypass artificial Python 3.14 requirement)
-RUN git clone https://github.com/ThePhaseless/Byparr.git /app/byparr_src \
-    && cd /app/byparr_src \
-    && sed -i 's/requires-python = .*/requires-python = ">=3.11"/' pyproject.toml \
-    && pip install --no-cache-dir .
-RUN python -m camoufox fetch
-
-# 5. EasyProxy Dependencies
+# 4. EasyProxy Dependencies
 WORKDIR /app
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
@@ -80,8 +71,8 @@ RUN chmod +x entrypoint.sh
 
 # 7. Metadata & Ports
 LABEL org.opencontainers.image.title="EasyProxy Monolith"
-LABEL org.opencontainers.image.description="All-in-one HLS Proxy with integrated FlareSolverr v3 and Byparr"
-EXPOSE 7860 8191 8192
+LABEL org.opencontainers.image.description="All-in-one HLS Proxy with integrated FlareSolverr v3"
+EXPOSE 7860 8191
 
 # 8. Execution
 ENTRYPOINT ["/bin/bash", "/app/entrypoint.sh"]

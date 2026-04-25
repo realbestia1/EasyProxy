@@ -108,7 +108,7 @@ proot-distro login "$DISTRO_NAME" -- bash -c '
     python3 -m playwright install chromium || true
     python3 -m playwright install-deps 2>/dev/null || true
 
-    echo "[INFO] Setting up FlareSolverr and Byparr..."
+    echo "[INFO] Setting up FlareSolverr..."
     if [ ! -d "$EP_DIR/flaresolverr/.git" ]; then
         rm -rf "$EP_DIR/flaresolverr" 2>/dev/null || true
         git clone https://github.com/FlareSolverr/FlareSolverr.git "$EP_DIR/flaresolverr"
@@ -119,15 +119,6 @@ proot-distro login "$DISTRO_NAME" -- bash -c '
     sed -i "s|^\([[:space:]]*\)start_xvfb_display()|\1pass|g" src/utils.py 2>/dev/null || true
     sed -i "s|driver_executable_path=driver_exe_path|driver_executable_path=\"/usr/bin/chromedriver\"|" src/utils.py 2>/dev/null || true
     python3 -m pip install --no-cache-dir --ignore-installed -r requirements.txt --break-system-packages || true
-
-    if [ ! -d "$EP_DIR/byparr_src/.git" ]; then
-        rm -rf "$EP_DIR/byparr_src" 2>/dev/null || true
-        git clone https://github.com/ThePhaseless/Byparr.git "$EP_DIR/byparr_src"
-    fi
-    cd "$EP_DIR/byparr_src"
-    sed -i "s/requires-python = .*/requires-python = \">= 3.11\"/" pyproject.toml 2>/dev/null || true
-    python3 -m pip install --no-cache-dir --ignore-installed . --break-system-packages || true
-    python3 -m camoufox fetch || true
 
     echo "[INFO] Installing critical dependencies..."
     python3 -m pip install --no-cache-dir --ignore-installed uvicorn prometheus-client certifi --break-system-packages || true
@@ -159,7 +150,7 @@ touch "$LOG_FILE"
 exec >>"$LOG_FILE" 2>&1
 
 cleanup() {
-    kill "${FLARE_PID:-}" "${BYPARR_PID:-}" 2>/dev/null || true
+    kill "${FLARE_PID:-}" 2>/dev/null || true
 }
 
 trap cleanup EXIT
@@ -178,8 +169,6 @@ fi
 export CHROME_EXE_PATH="${CHROME_BIN:-}"
 export CHROME_DRIVER_PATH="/usr/bin/chromedriver"
 export FLARESOLVERR_URL=http://localhost:8191
-export BYPARR_URL=http://localhost:8192
-
 if [ ! -d /root/EasyProxy ]; then
     echo "[FATAL] /root/EasyProxy not found inside Ubuntu."
     exit 1
@@ -193,7 +182,7 @@ fi
 
 PORT=${PORT:-7860}
 
-pkill -9 -f "python3.*(app|flaresolverr|byparr|main.py|easyproxy_start)" 2>/dev/null || true
+pkill -9 -f "python3.*(app|flaresolverr|easyproxy_start)" 2>/dev/null || true
 pkill -9 -f "node.*flaresolverr" 2>/dev/null || true
 
 echo ""
@@ -209,11 +198,7 @@ echo "Starting FlareSolverr (Headless)..."
 cd /root/EasyProxy/flaresolverr && PORT=8191 python3 src/flaresolverr.py &
 FLARE_PID=$!
 
-echo "Starting Byparr..."
-cd /root/EasyProxy/byparr_src && PORT=8192 python3 main.py &
-BYPARR_PID=$!
-
-sleep 4
+sleep 2
 
 echo "Starting EasyProxy on port $PORT..."
 cd /root/EasyProxy
@@ -277,7 +262,7 @@ chmod +x "$PREFIX/bin/easyproxy-update"
 cat > "$PREFIX/bin/easyproxy-stop" << 'STOP_EOF'
 #!/data/data/com.termux/files/usr/bin/bash
 echo "Stopping EasyProxy and all solvers..."
-proot-distro login ubuntu -- bash -c 'pkill -9 -f "python3.*(app|flaresolverr|byparr|main.py|easyproxy_start)"; pkill -9 -f "gunicorn"; pkill -9 Xvfb' 2>/dev/null
+proot-distro login ubuntu -- bash -c 'pkill -9 -f "python3.*(app|flaresolverr|easyproxy_start)"; pkill -9 -f "gunicorn"; pkill -9 Xvfb' 2>/dev/null
 screen -X -S easyproxy quit 2>/dev/null || true
 pkill -9 -f "proot-distro.*ubuntu" 2>/dev/null || true
 echo "Stopped."

@@ -289,11 +289,9 @@ MAX_RECORDING_DURATION = int(os.environ.get("MAX_RECORDING_DURATION", 28800))
 RECORDINGS_RETENTION_DAYS = int(os.environ.get("RECORDINGS_RETENTION_DAYS", 7))
 
 # --- Version/Mode Configuration ---
-APP_VERSION = "2.5.87"
+APP_VERSION = "2.6.0"
 
-_has_solvers = os.path.exists("flaresolverr") and (
-    os.path.exists("byparr") or os.path.exists("byparr_src")
-)
+_has_solvers = os.path.exists("flaresolverr")
 VERSION_MODE = "Full" if _has_solvers else "Light"
 
 if DVR_ENABLED and not os.path.exists(RECORDINGS_DIR):
@@ -315,10 +313,9 @@ if MPD_MODE in ("none", "disabled"):
 if "MPD_MODE" in os.environ:
     logging.info(f"MPD Mode: {MPD_MODE} (Remuxing: {'ON' if ENABLE_REMUXING else 'OFF'})")
 
-# --- FlareSolverr / Byparr Configuration ---
+# --- FlareSolverr Configuration ---
 FLARESOLVERR_URL = os.environ.get("FLARESOLVERR_URL", "http://localhost:8191").rstrip("/")
 FLARESOLVERR_TIMEOUT = int(os.environ.get("FLARESOLVERR_TIMEOUT", 30))
-BYPARR_URL = os.environ.get("BYPARR_URL", "http://localhost:8080").rstrip("/")
 
 
 def check_password(request):

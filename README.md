@@ -17,14 +17,14 @@ A powerful, lightweight proxy server designed to handle HLS, M3U8, and DASH (MPD
 - **📼 Integrated DVR**: Record live streams while watching or schedule background recordings.
 - **🛠️ Playlist Builder**: Web interface to combine, manage, and proxy entire M3U playlists.
 - **☁️ Cloud Ready**: Optimized for HuggingFace, Render, Koyeb, and other free-tier platforms.
-- **🛡️ Cloudflare Bypass**: Integrated with FlareSolverr and Byparr for bot protection bypass.
+- **🛡️ Cloudflare Bypass**: Integrated with FlareSolverr for bot protection bypass.
 
 ---
 
 ## 🚀 Quick Start
 
 ### 🐳 Docker (Recommended)
-The **Full** version includes the proxy plus FlareSolverr and Byparr for maximum compatibility.
+The **Full** version includes the proxy plus FlareSolverr for maximum compatibility.
 
 ```bash
 # Light Version (Proxy Only - Default)
@@ -48,7 +48,7 @@ docker run -d --name EasyProxy --cap-add=NET_ADMIN --device /dev/net/tun -e ENAB
 The easiest way to get the **Full** experience (Proxy + Solvers) on Windows:
 1. Clone the repository and enter the folder.
 2. Run **`start_full.bat`**.
-*This script automatically handles FlareSolverr, Byparr, patches, and dependencies.*
+*This script automatically handles FlareSolverr, patches, and dependencies.*
 
 #### 🐧 Linux / macOS Setup
 1. **Install dependencies**:
@@ -102,14 +102,13 @@ Configure the server via a `.env` file. See `.env.example` for all options.
 | `API_PASSWORD` | Optional password for API endpoints | `ep` |
 | `FLARESOLVERR_URL` | URL for FlareSolverr (Not needed in Full version) | `http://localhost:8191` |
 | `FLARESOLVERR_TIMEOUT` | Timeout for FlareSolverr requests (seconds) | `30` |
-| `BYPARR_URL` | URL for Byparr (Not needed in Full version) | `http://localhost:8192` |
 | `DVR_ENABLED` | Enable recording features | `false` |
 | `ENABLE_WARP` | Enable integrated Cloudflare WARP (Full version only) | `false` |
 | `WARP_EXCLUDED_HOSTS` | Comma-separated hosts that must bypass the WARP VPN tunnel and use the server real IP | built-in defaults |
 | `WARP_LICENSE_KEY` | Optional WARP+ license key | - |
 
 ### 🛡️ Cloudflare WARP Integration
-The **Full** version includes an integrated Cloudflare WARP client to bypass IP-based blocks. When enabled, all outgoing traffic (including FlareSolverr and Byparr) is automatically routed through the Cloudflare network.
+The **Full** version includes an integrated Cloudflare WARP client to bypass IP-based blocks. When enabled, outgoing traffic used by FlareSolverr and EasyProxy can be routed through the Cloudflare network.
 
 **Requirements:**
 To function correctly, the container needs elevated network permissions:

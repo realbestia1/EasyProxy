@@ -4,14 +4,13 @@ import os
 import random
 import re
 import string
-import threading
 import time
 from urllib.parse import urljoin, urlparse
 
-import aiohttp
 import cloudscraper
-from config import BYPARR_URL, GLOBAL_PROXIES, TRANSPORT_ROUTES, get_proxy_for_url
+from config import GLOBAL_PROXIES, TRANSPORT_ROUTES, get_proxy_for_url
 from utils.cookie_cache import CookieCache
+from utils.proxy_manager import FreeProxyManager
 
 logger = logging.getLogger(__name__)
 
@@ -20,35 +19,20 @@ class ExtractorError(Exception):
     pass
 
 
-class Settings:
-    byparr_url = BYPARR_URL
-
-
-settings = Settings()
-
 _DOOD_UA = (
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
     "(KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36"
 )
-_FREE_SOCKS5_URL = os.environ.get(
-    "DOOD_FREE_PROXY_URL",
-    "https://raw.githubusercontent.com/proxifly/free-proxy-list/refs/heads/main/proxies/all/data.txt",
-)
-_FREE_PROXY_ENABLED = os.environ.get("DOOD_ENABLE_FREE_PROXY_POOL", "true").lower() == "true"
-_FREE_PROXY_CACHE_TTL = int(os.environ.get("DOOD_FREE_PROXY_CACHE_TTL", "1800"))
-_FREE_PROXY_MAX_FETCH = int(os.environ.get("DOOD_FREE_PROXY_MAX_FETCH", "80"))
-_FREE_PROXY_MAX_GOOD = int(os.environ.get("DOOD_FREE_PROXY_MAX_GOOD", "8"))
+
+_FREE_PROXY_MAX_FETCH = int(os.environ.get("DOOD_FREE_PROXY_MAX_FETCH", "0")) # 0 = unlimited in Manager
+_FREE_PROXY_MAX_GOOD = int(os.environ.get("DOOD_FREE_PROXY_MAX_GOOD", "0"))   # 0 = unlimited in Manager
 
 
 class DoodStreamExtractor:
     """
     DoodStream / PlayMogo extractor using cloudscraper first, with optional
-    auto-refreshed free-proxy fallback only for this extractor.
+    auto-refreshed free-proxy fallback using FreeProxyManager.
     """
-
-    _free_proxy_lock = threading.Lock()
-    _free_proxy_cache = {"expires_at": 0.0, "proxies": []}
-    _free_proxy_cursor = 0
 
     def __init__(self, request_headers: dict = None, proxies: list = None):
         self.request_headers = request_headers or {}
@@ -58,6 +42,19 @@ class DoodStreamExtractor:
         self.last_used_proxy = None
         self.mediaflow_endpoint = "proxy_stream_endpoint"
         self.cache = CookieCache("dood")
+        self.proxy_manager = FreeProxyManager.get_instance(
+            "dood",
+            [
+                os.environ.get(
+                    "DOOD_FREE_PROXY_URL",
+                    "https://raw.githubusercontent.com/proxifly/free-proxy-list/refs/heads/main/proxies/all/data.txt",
+                ),
+                "https://api.proxyscrape.com/v4/free-proxy-list/get?request=display_proxies&proxy_format=protocolipport&format=text"
+            ],
+            cache_ttl=int(os.environ.get("DOOD_FREE_PROXY_CACHE_TTL", "7200")),
+            max_fetch=_FREE_PROXY_MAX_FETCH,
+            max_good=_FREE_PROXY_MAX_GOOD,
+        )
 
     def _get_proxy(self, url: str) -> str | None:
         return get_proxy_for_url(url, TRANSPORT_ROUTES, GLOBAL_PROXIES)
@@ -146,83 +143,24 @@ class DoodStreamExtractor:
         compact_html = re.sub(r"\s+", " ", html[:1200]).strip()
         logger.debug(f"DoodStream compact HTML snippet (first 1200 chars): {compact_html}")
 
-    def _fetch_free_proxy_candidates(self) -> list[str]:
-        scraper = cloudscraper.create_scraper(delay=2)
-        resp = scraper.get(
-            _FREE_SOCKS5_URL,
-            headers={"User-Agent": _DOOD_UA},
-            timeout=20,
-        )
-        resp.raise_for_status()
-
-        proxies = []
-        for line in resp.text.splitlines():
-            line = line.strip()
-            if not line:
-                continue
-            proxies.append(self._normalize_proxy_url(line))
-            if len(proxies) >= _FREE_PROXY_MAX_FETCH:
-                break
-        return proxies
-
-    def _probe_free_proxy(self, proxy_url: str, embed_url: str) -> bool:
-        try:
-            scraper = cloudscraper.create_scraper(delay=2)
-            resp = scraper.get(
-                embed_url,
-                headers={"User-Agent": _DOOD_UA},
-                timeout=12,
-                proxies={"http": proxy_url, "https": proxy_url},
-            )
-            return resp.status_code == 200 and self._is_valid_dood_page(resp.text)
-        except Exception:
-            return False
-
-    def _get_auto_proxy_pool(self, embed_url: str) -> list[str]:
-        if not _FREE_PROXY_ENABLED:
+    async def _get_auto_proxy_pool(self, embed_url: str) -> list[str]:
+        if os.environ.get("DOOD_ENABLE_FREE_PROXY_POOL", "true").lower() != "true":
             return []
 
-        now = time.time()
-        cached = self.__class__._free_proxy_cache
-        if cached["proxies"] and cached["expires_at"] > now:
-            return list(cached["proxies"])
-
-        with self.__class__._free_proxy_lock:
-            cached = self.__class__._free_proxy_cache
-            if cached["proxies"] and cached["expires_at"] > time.time():
-                return list(cached["proxies"])
-
-            logger.info("DoodStream: refreshing free proxy pool for cloudscraper")
+        def probe_sync(proxy_url: str) -> bool:
             try:
-                candidates = self._fetch_free_proxy_candidates()
-            except Exception as exc:
-                logger.warning(f"DoodStream: free proxy list fetch failed: {exc}")
-                return list(cached["proxies"])
+                scraper = cloudscraper.create_scraper(delay=2)
+                resp = scraper.get(
+                    embed_url,
+                    headers={"User-Agent": _DOOD_UA},
+                    timeout=6,
+                    proxies={"http": proxy_url, "https": proxy_url},
+                )
+                return resp.status_code == 200 and self._is_valid_dood_page(resp.text)
+            except Exception:
+                return False
 
-            good = []
-            for proxy_url in candidates:
-                if self._probe_free_proxy(proxy_url, embed_url):
-                    good.append(proxy_url)
-                    logger.info(f"DoodStream: free proxy validated {proxy_url}")
-                if len(good) >= _FREE_PROXY_MAX_GOOD:
-                    break
-
-            self.__class__._free_proxy_cache = {
-                "expires_at": time.time() + _FREE_PROXY_CACHE_TTL,
-                "proxies": good,
-            }
-            return list(good)
-
-    def _get_next_auto_proxy_sequence(self, embed_url: str) -> list[str]:
-        proxies = self._get_auto_proxy_pool(embed_url)
-        if not proxies:
-            return []
-
-        with self.__class__._free_proxy_lock:
-            cursor = self.__class__._free_proxy_cursor % len(proxies)
-            self.__class__._free_proxy_cursor = (cursor + 1) % len(proxies)
-
-        return proxies[cursor:] + proxies[:cursor]
+        return await self.proxy_manager.get_next_sequence(probe_sync)
 
     async def _do_extract_with_proxy(self, embed_url: str, scraper_proxies: dict | None) -> dict | None:
         scraper = cloudscraper.create_scraper(delay=5)
@@ -295,14 +233,18 @@ class DoodStreamExtractor:
             if result:
                 return result
 
-            for proxy_url in self._get_next_auto_proxy_sequence(embed_url):
+            for proxy_url in await self._get_auto_proxy_pool(embed_url):
                 logger.info(f"DoodStream: retrying with auto proxy {proxy_url}")
-                result = await self._do_extract_with_proxy(
-                    embed_url,
-                    {"http": proxy_url, "https": proxy_url},
-                )
-                if result:
-                    return result
+                try:
+                    result = await self._do_extract_with_proxy(
+                        embed_url,
+                        {"http": proxy_url, "https": proxy_url},
+                    )
+                    if result:
+                        return result
+                except Exception as proxy_exc:
+                    logger.warning(f"DoodStream: auto proxy {proxy_url} failed: {proxy_exc}")
+                    self.proxy_manager.report_failure(proxy_url)
 
             raise ExtractorError("DoodStream: tokens not found after primary and auto-proxy attempts")
         except Exception as e:
