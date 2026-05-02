@@ -12,6 +12,7 @@ from utils import python_aesgcm
 
 
 class F16PxExtractor(BaseExtractor):
+    F16PX_USER_AGENT = "Mozilla/5.0 (X11; Linux x86_64; rv:138.0) Gecko/20100101 Firefox/138.0"
 
     def __init__(self, request_headers: dict, proxies: list = None):
         super().__init__(request_headers, proxies, extractor_name="f16px")
@@ -101,6 +102,7 @@ class F16PxExtractor(BaseExtractor):
         headers["referer"] = f"{origin}/"
         headers["origin"] = origin
         headers["content-type"] = "application/json"
+        headers["user-agent"] = self.F16PX_USER_AGENT
 
         # ✅ Try POST (modern API)
         try:
@@ -149,7 +151,7 @@ class F16PxExtractor(BaseExtractor):
             "origin": origin,
             "Accept-Language": "en-US,en;q=0.5",
             "Accept": "*/*",
-            "User-Agent": "Mozilla/5.0 (X11; Linux x86_64; rv:138.0) Gecko/20100101 Firefox/138.0",
+            "User-Agent": self.F16PX_USER_AGENT,
         }
 
         return {
