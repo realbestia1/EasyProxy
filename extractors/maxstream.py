@@ -852,6 +852,7 @@ class MaxstreamExtractor:
 
         for _ in range(max_hops):
             status, loc, final_url, body = await loop.run_in_executor(None, _hop, current)
+            logger.debug(f"_follow_uprots_chain hop: status={status} has_loc={bool(loc)} body_len={len(body)} url={current[:80]}")
             if not loc:
                 # No redirect header. Two possibilities:
                 #  a) we reached the destination URL → use res.url
@@ -859,17 +860,20 @@ class MaxstreamExtractor:
                 #     challenge body, no Location). curl_cffi can't pass
                 #     it because it doesn't execute JS. Fallback to
                 #     FlareSolverr for THIS hop only.
-                is_encoding_page = (
-                    "/uprots/" in current
-                    and "encoding-container" in body.lower()
-                )
-                if is_encoding_page:
+                # We trigger the fallback whenever we're STILL on /uprots/
+                # without a redirect — covers both encoding-container body
+                # AND empty/short bodies that mean the same thing.
+                if "/uprots/" in current or "/uprotem/" in current:
+                    logger.debug(f"_follow_uprots_chain stuck on /uprots/ (status={status}), trying FlareSolverr")
                     fs_resolved = await self._fs_resolve_uprots(current)
                     if fs_resolved and fs_resolved != current:
+                        logger.debug(f"_follow_uprots_chain FS resolved: {fs_resolved[:120]}")
                         current = fs_resolved
                         if "/uprots/" not in current and "/uprotem/" not in current:
                             break
                         continue
+                    else:
+                        logger.debug(f"_follow_uprots_chain FS returned None or same URL")
                 current = final_url or current
                 break
             from urllib.parse import urljoin
