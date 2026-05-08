@@ -796,6 +796,18 @@ class MaxstreamExtractor:
           - `maxsun{N}.online/watchfree/<a>/<b>/<c>` (legitimate player)
           - `maxstream.video/emvvv/<id>`             (legitimate embed)
 
+        Strategy v2 (Koyeb / data-center IP fix):
+          1. First try curl_cffi (chrome131 impersonation, no JS) — works
+             from residential IPs because maxstream serves a normal 302
+             when the IP looks legitimate.
+          2. If we end up on a `maxstream.video/uprots/<token>` GET that
+             returns 200 with no Location header (the "Encoding…" gear
+             page that maxstream WAF serves to data-center IPs), retry
+             that single hop via FlareSolverr — a real headless Chromium
+             that executes the JS challenge and follows redirects to the
+             player URL. We extract the final URL from FlareSolverr's
+             response.url.
+
         We then convert watchfree → emvvv (drop the geo-tier subdomain so
         the existing packer-extraction path can work).
 
@@ -832,15 +844,32 @@ class MaxstreamExtractor:
                 except Exception:
                     pass
                 loc = r.headers.get("location") or r.headers.get("Location")
-                return r.status_code, loc, r.url
+                body = r.text or ""
+                return r.status_code, loc, r.url, body
             except Exception as e:
                 logger.debug(f"_follow_uprots_chain hop error: {e}")
-                return 0, None, target
+                return 0, None, target, ""
 
         for _ in range(max_hops):
-            status, loc, final_url = await loop.run_in_executor(None, _hop, current)
+            status, loc, final_url, body = await loop.run_in_executor(None, _hop, current)
             if not loc:
-                # No redirect header → use whatever URL the request landed on
+                # No redirect header. Two possibilities:
+                #  a) we reached the destination URL → use res.url
+                #  b) maxstream served the "Encoding…" gear page (200 + JS
+                #     challenge body, no Location). curl_cffi can't pass
+                #     it because it doesn't execute JS. Fallback to
+                #     FlareSolverr for THIS hop only.
+                is_encoding_page = (
+                    "/uprots/" in current
+                    and "encoding-container" in body.lower()
+                )
+                if is_encoding_page:
+                    fs_resolved = await self._fs_resolve_uprots(current)
+                    if fs_resolved and fs_resolved != current:
+                        current = fs_resolved
+                        if "/uprots/" not in current and "/uprotem/" not in current:
+                            break
+                        continue
                 current = final_url or current
                 break
             from urllib.parse import urljoin
@@ -861,6 +890,55 @@ class MaxstreamExtractor:
                 pass
 
         return current
+
+    async def _fs_resolve_uprots(self, uprots_url: str) -> str | None:
+        """Resolve `maxstream.video/uprots/<token>` via FlareSolverr.
+
+        Used only as a fallback when curl_cffi gets the "Encoding…" gear
+        page (data-center IP, JS challenge required). FlareSolverr runs
+        a real Chromium that executes the WAF challenge, follows the
+        302 chain inside the headless browser, and lands on the player
+        URL (`maxsun{N}.online/watchfree/...` or `maxstream.video/emvvv`).
+
+        We forward the cookies we already have (uprot session + cf_clearance)
+        and rely on FlareSolverr's headers/timing to look like a real user.
+
+        Returns the final URL or None on failure.
+        """
+        try:
+            fs_headers = {}
+            if self.cookies:
+                fs_headers["Cookie"] = "; ".join(f"{k}={v}" for k, v in self.cookies.items())
+            result = await smart_request(
+                "request.get",
+                uprots_url,
+                headers=fs_headers,
+                proxies=self._get_proxies_for_url(uprots_url) or None,
+                wait=2000,
+            )
+            if not isinstance(result, dict):
+                return None
+            # Merge fresh cookies (cf_clearance, watchfree session, …)
+            new_cookies = result.get("cookies") or {}
+            if isinstance(new_cookies, dict):
+                self.cookies.update(new_cookies)
+            html = result.get("html") or ""
+            # Try to find a maxsun*.online/watchfree URL or emvvv URL in the
+            # HTML body — these mark the legit player page.
+            m = re.search(
+                r'https?://(?:[a-z0-9-]+\.)?(?:maxsun\d*\.online|maxstream\.video)/(?:watchfree/[^"\'\s<>]+|emvvv/[A-Za-z0-9]+)',
+                html,
+                re.IGNORECASE,
+            )
+            if m:
+                return m.group(0)
+            # Final fallback: response.url field (FlareSolverr exposes the
+            # last navigation URL). We don't see it in the dict above
+            # because smart_request strips it; rely on regex above.
+            return None
+        except Exception as e:
+            logger.debug(f"_fs_resolve_uprots failed: {e}")
+            return None
 
     def _parse_uprot_folder(self, text: str, season, episode) -> str | None:
         """
