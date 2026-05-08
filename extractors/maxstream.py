@@ -828,13 +828,22 @@ class MaxstreamExtractor:
         def _hop(target):
             try:
                 req_cookies = dict(self.cookies) if self.cookies else None
+                # Forward GLOBAL_PROXY (residential italian) on maxstream
+                # hops too — without this curl_cffi calls maxstream from
+                # the data-center egress IP and gets 403 even with chrome131
+                # impersonation. The 403 page is the same body length each
+                # time (~8KB) and is the smoking gun for IP geo-block.
+                proxies_for_url = self._get_proxies_for_url(target)
+                proxy = proxies_for_url[0] if proxies_for_url else None
+                proxies_arg = {"http": proxy, "https": proxy} if proxy else None
                 r = cffi_requests.request(
                     "GET",
                     target,
                     headers={**self.base_headers, "referer": "https://uprot.net/"},
                     cookies=req_cookies,
+                    proxies=proxies_arg,
                     impersonate="chrome131",
-                    timeout=15,
+                    timeout=20,
                     allow_redirects=False,
                 )
                 # Update persistent cookies from this hop
