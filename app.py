@@ -197,6 +197,14 @@ def create_app():
         asyncio.create_task(proxy.start_tasks())
         if DVR_ENABLED:
             asyncio.create_task(recording_manager.cleanup_loop())
+        # Optional uprot pre-warmer (ipotesi b della PR #66). Opt-in via
+        # UPROT_WARM_ENABLED=1 + UPROT_WARM_URLS env vars; no-op
+        # otherwise.
+        try:
+            from services import uprot_warmer
+            asyncio.create_task(uprot_warmer.run())
+        except Exception as e:
+            logger.warning(f"uprot_warmer bootstrap failed: {e}")
     app.on_startup.append(on_startup)
 
     async def on_shutdown(app):

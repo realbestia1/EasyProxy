@@ -949,10 +949,28 @@ class MaxstreamExtractor:
 
         For /msfld/ folder URLs, callers must pass season=N&episode=M as
         query parameters (forwarded by MFP routes as kwargs).
+
+        Pre-warm cache (services.uprot_url_cache): if a recent resolve
+        for this exact (uprot_url, season, episode) sits in the cache,
+        skip captcha + chain entirely and jump straight to extracting
+        the m3u8 from the cached maxstream URL. Filled by
+        services.uprot_warmer or as a side-effect of a previous live
+        resolve. ~22h TTL.
         """
         season = kwargs.get("season")
         episode = kwargs.get("episode")
-        maxstream_url = await self.get_uprot(url, season=season, episode=episode)
+
+        try:
+            from services import uprot_url_cache
+            cached = uprot_url_cache.get(url, season=season, episode=episode)
+        except Exception:
+            cached = None
+
+        if cached:
+            logger.debug(f"uprot cache HIT: {url[:80]} S{season}E{episode}")
+            maxstream_url = cached
+        else:
+            maxstream_url = await self.get_uprot(url, season=season, episode=episode)
         # If captcha solve returned a `maxstream.video/uprots/{token}` URL,
         # fetching it directly returns "Error 131 File id error" — the WAF
         # only honours the token via the redirect chain initiated from
@@ -971,7 +989,17 @@ class MaxstreamExtractor:
         }
         
         text = await self._smart_request(maxstream_url, headers=headers)
-        
+
+        # Persist the resolved (uprot_url, season, episode) → maxstream_url
+        # mapping for the next live request (and as a side-effect of the
+        # warmer's pre-warm pass). No-op if we got here from a cache HIT.
+        if not cached:
+            try:
+                from services import uprot_url_cache
+                uprot_url_cache.put(url, maxstream_url, season=season, episode=episode)
+            except Exception:
+                pass
+
         # Direct sources check
         direct_match = re.search(r'sources:\s*\[\{src:\s*"([^"]+)"', text)
         if direct_match:
