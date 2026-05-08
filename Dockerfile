@@ -42,6 +42,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     ca-certificates \
     fonts-liberation \
     chromium-driver \
+    tesseract-ocr \
     && rm -rf /var/lib/apt/lists/*
 
 # Optional userspace WARP tools. They allow WARP as a local SOCKS5 proxy
@@ -64,7 +65,7 @@ RUN set -eux; \
     chmod +x /usr/local/bin/wireproxy; \
     rm -f /tmp/wireproxy.tar.gz
 
-# 2. Environment Settings
+# 3. Environment Settings
 ENV PYTHONPATH=/app
 ENV CHROME_EXE_PATH=/usr/bin/chromium
 ENV CHROME_BIN=/usr/bin/chromium
@@ -86,12 +87,18 @@ RUN pip install --no-cache-dir -r requirements.txt
 # Copia esplicita
 COPY . .
 
-RUN chmod +x entrypoint.sh
+# 5. Playwright is configured to use system Chromium (CHROME_BIN)
+# No need to run 'playwright install chromium' which saves ~500MB
 
-# 5. Metadata & Ports
+# Force LF line endings on shell scripts. A Windows clone via Git can leave
+# CRLF in entrypoint.sh which makes bash fail at startup with
+# `$'\r': command not found` and `syntax error near unexpected token $'do\r''`.
+RUN sed -i 's/\r$//' entrypoint.sh && chmod +x entrypoint.sh
+
+# 7. Metadata & Ports
 LABEL org.opencontainers.image.title="EasyProxy Monolith"
 LABEL org.opencontainers.image.description="All-in-one HLS Proxy with integrated FlareSolverr v3"
 EXPOSE 7860 8191
 
-# 6. Execution
+# 8. Execution
 ENTRYPOINT ["/bin/bash", "/app/entrypoint.sh"]
