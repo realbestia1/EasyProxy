@@ -240,11 +240,12 @@ class MaxstreamExtractor:
         parsed_url = urlparse(url)
         domain = parsed_url.netloc
 
-        # Path 0: For uprot.net, try curl_cffi browser impersonation first.
-        # Bypasses uprot's TLS fingerprinting that aiohttp can't beat —
-        # without this every parallel aiohttp path returns a captcha page or
-        # 503 even from a clean residential IP.
-        if "uprot.net" in domain:
+        # Path 0: For uprot/maxstream/maxsun/host-cdn domains, try curl_cffi
+        # browser impersonation first (forwards GLOBAL_PROXY too, see
+        # _curl_cffi_uprot which uses _get_proxies_for_url internally).
+        # Bypasses uprot's TLS fingerprinting AND the maxstream WAF 503
+        # block on data-center IPs.
+        if any(d in domain for d in ("uprot.net", "maxstream.video", "maxsun", "host-cdn.net")):
             cffi_result = await self._curl_cffi_uprot(url, method, is_binary, **kwargs)
             if cffi_result is not None:
                 return cffi_result
