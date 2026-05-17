@@ -1,9 +1,9 @@
-import os
+import contextvars
 import logging
+import os
 import random
 import socket
 import time
-import contextvars
 from dotenv import load_dotenv
 
 # ContextVar for thread-safe/async-safe warp bypass state
@@ -87,7 +87,7 @@ def parse_transport_routes() -> list:
                 )
 
     except Exception as e:
-        logger.warning(f"Error parsing TRANSPORT_ROUTES: {e}")
+        logger.warning("Error parsing TRANSPORT_ROUTES: %s", e)
 
     return routes
 
@@ -126,7 +126,7 @@ def mark_proxy_dead(proxy_url: str):
     """Manually mark a proxy as dead in the cache (e.g. after a failed request)."""
     if not proxy_url or "127.0.0.1" not in proxy_url:
         return
-        
+
     _PROXY_STATUS_CACHE["alive"] = False
     _PROXY_STATUS_CACHE["last_check"] = time.time()
     logging.warning(f"Proxy {proxy_url} marked as dead after failure.")
@@ -161,7 +161,7 @@ def get_proxy_for_url(url: str, transport_routes: list, global_proxies: list, by
 
     # Check if WARP should be used
     is_excluded = any(domain in normalized_url for domain in WARP_EXCLUDE_DOMAINS)
-    
+
     if ENABLE_WARP and not bypass_warp and not is_excluded:
         return WARP_PROXY_URL if is_proxy_alive(WARP_PROXY_URL) else None
 
@@ -179,7 +179,7 @@ def get_proxy_for_url(url: str, transport_routes: list, global_proxies: list, by
     proxy = random.choice(global_proxies) if global_proxies else None
     if proxy:
         SELECTED_PROXY_CONTEXT.set(proxy)
-        
+
     return proxy if is_proxy_alive(proxy) else None
 
 
@@ -225,8 +225,8 @@ def get_ssl_setting_for_url(url: str, transport_routes: list) -> bool:
         )
 
     if any(
-        domain in normalized_url
-        for domain in ("vavoo.to", "vavoo.tv", "lokke.app", "mediahubmx")
+            domain in normalized_url
+            for domain in ("vavoo.to", "vavoo.tv", "lokke.app", "mediahubmx")
     ):
         return True
 
@@ -299,7 +299,7 @@ MAX_RECORDING_DURATION = int(os.environ.get("MAX_RECORDING_DURATION", 28800))
 RECORDINGS_RETENTION_DAYS = int(os.environ.get("RECORDINGS_RETENTION_DAYS", 7))
 
 # --- Version/Mode Configuration ---
-APP_VERSION = "2.6.200"
+APP_VERSION = "2.6.28"
 
 _has_solvers = os.path.exists("flaresolverr")
 VERSION_MODE = "Full" if _has_solvers else "Light"

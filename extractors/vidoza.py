@@ -1,6 +1,8 @@
 import re
 from urllib.parse import urlparse
+
 from extractors.base import BaseExtractor, ExtractorError
+
 
 class VidozaExtractor(BaseExtractor):
     """Vidoza URL extractor."""
@@ -15,7 +17,7 @@ class VidozaExtractor(BaseExtractor):
 
         # Accept vidoza + videzz
         if not parsed.hostname or not (
-            parsed.hostname.endswith("vidoza.net") or parsed.hostname.endswith("videzz.net")
+                parsed.hostname.endswith("vidoza.net") or parsed.hostname.endswith("videzz.net")
         ):
             raise ExtractorError("VIDOZA: Invalid domain")
 

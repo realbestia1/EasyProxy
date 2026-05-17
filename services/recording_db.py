@@ -1,9 +1,9 @@
-import sqlite3
-import os
 import logging
+import os
+import sqlite3
+from contextlib import contextmanager
 from datetime import datetime
 from typing import Optional, List, Dict, Any
-from contextlib import contextmanager
 
 logger = logging.getLogger(__name__)
 
@@ -68,7 +68,7 @@ class RecordingDB:
                 ON recordings(url) WHERE status IN ('starting', 'recording')
             """)
 
-            logger.debug(f"Recording database initialized at {self.db_path}")
+            logger.debug("Recording database initialized at %s", self.db_path)
 
     def create_starting_entry(self, recording_id: str, name: str, url: str) -> bool:
         """Create a 'starting' entry to claim the lock before extraction.
@@ -85,11 +85,11 @@ class RecordingDB:
                     INSERT INTO recordings (id, name, url, status, started_at)
                     VALUES (?, ?, ?, 'starting', ?)
                 """, (recording_id, name, url, started_at))
-            logger.debug(f"Created starting entry: {recording_id} for URL: {url[:80]}...")
+            logger.debug("Created starting entry: %s for URL: %s...", recording_id, url[:80])
             return True
         except sqlite3.IntegrityError as e:
             # Unique constraint violation - another recording for this URL exists
-            logger.debug(f"Duplicate recording attempt for URL: {url[:80]}... - {e}")
+            logger.debug("Duplicate recording attempt for URL: %s... - %s", url[:80], e)
             return False
 
     def update_to_recording(self, recording_id: str, file_path: str,
@@ -109,7 +109,7 @@ class RecordingDB:
         with self._get_connection() as conn:
             cursor = conn.cursor()
             cursor.execute("SELECT * FROM recordings WHERE id = ?",
-                          (recording_id,))
+                           (recording_id,))
             row = cursor.fetchone()
             if row:
                 return dict(row)
@@ -142,7 +142,7 @@ class RecordingDB:
         return self.get_all_recordings(status='recording')
 
     def update_recording_status(self, recording_id: str, status: str,
-                                 error_message: str = None) -> bool:
+                                error_message: str = None) -> bool:
         """Update recording status."""
         with self._get_connection() as conn:
             cursor = conn.cursor()
@@ -164,8 +164,8 @@ class RecordingDB:
             return cursor.rowcount > 0
 
     def update_recording_file_info(self, recording_id: str,
-                                    duration_seconds: int = None,
-                                    file_size_bytes: int = None) -> bool:
+                                   duration_seconds: int = None,
+                                   file_size_bytes: int = None) -> bool:
         """Update file information after recording completes."""
         with self._get_connection() as conn:
             cursor = conn.cursor()
@@ -181,10 +181,10 @@ class RecordingDB:
         with self._get_connection() as conn:
             cursor = conn.cursor()
             cursor.execute("DELETE FROM recordings WHERE id = ?",
-                          (recording_id,))
+                           (recording_id,))
             deleted = cursor.rowcount > 0
             if deleted:
-                logger.debug(f"Deleted recording entry: {recording_id}")
+                logger.debug("Deleted recording entry: %s", recording_id)
             return deleted
 
     def get_old_recordings(self, days: int) -> List[Dict[str, Any]]:

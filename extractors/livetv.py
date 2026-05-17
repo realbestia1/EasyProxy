@@ -1,14 +1,16 @@
 import re
-from urllib.parse import urljoin, urlparse, unquote
 from aiohttp import FormData
+from urllib.parse import urljoin, urlparse, unquote
+
 from extractors.base import BaseExtractor, ExtractorError
+
 
 class LiveTVExtractor(BaseExtractor):
     """LiveTV URL extractor for both M3U8 and MPD streams."""
 
     def __init__(self, request_headers: dict, proxies: list = None):
         super().__init__(request_headers, proxies, extractor_name="livetv")
-        
+
         # Patterns for stream URL extraction
         self.fallback_pattern = re.compile(
             r"source: [\'\"](.*?)[\'\"]\s*,\s*[\s\S]*?mimeType: [\'\"](application/x-mpegURL|application/vnd\.apple\.mpegURL|application/dash\+xml)[\'\"]",
@@ -24,7 +26,7 @@ class LiveTVExtractor(BaseExtractor):
         try:
             resp = await self._make_request(url)
             response_text = resp.text
-            
+
             self.base_headers["referer"] = urljoin(url, "/")
 
             # Extract player API details
@@ -102,7 +104,7 @@ class LiveTVExtractor(BaseExtractor):
     async def _process_player_option(self, api_base: str, method: str, post: str, nume: str, type_: str) -> dict:
         """Process player option to get stream URL."""
         session = await self._get_session(api_base)
-        
+
         if method == "wp_json":
             api_url = f"{api_base}{post}/{type_}/{nume}"
             resp = await self._make_request(api_url)
@@ -124,7 +126,7 @@ class LiveTVExtractor(BaseExtractor):
             resp_iframe = await self._make_request(iframe_url)
             iframe_text = resp_iframe.text
             iframe_headers = resp_iframe.headers
-            
+
             stream_data = await self._extract_stream_url(iframe_text, iframe_headers, iframe_url)
             return stream_data
 

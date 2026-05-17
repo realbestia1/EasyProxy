@@ -1,19 +1,22 @@
-import asyncio
 import aiohttp
+import asyncio
 import logging
 import random
 import re
 import socket
-from urllib.parse import urlparse
 from aiohttp import ClientSession, ClientTimeout, TCPConnector
 from aiohttp.resolver import DefaultResolver
-from config import FLARESOLVERR_TIMEOUT, FLARESOLVERR_URL, GLOBAL_PROXIES, TRANSPORT_ROUTES, get_proxy_for_url, get_connector_for_proxy, get_solver_proxy_url
+from urllib.parse import urlparse
 
+from config import FLARESOLVERR_TIMEOUT, FLARESOLVERR_URL, GLOBAL_PROXIES, TRANSPORT_ROUTES, get_proxy_for_url, \
+    get_connector_for_proxy, get_solver_proxy_url
 
 logger = logging.getLogger(__name__)
 
+
 class StaticResolver(DefaultResolver):
     """Custom resolver to force specific IPs for domains (bypass hijacking)."""
+
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
         self.mapping = {}
@@ -21,7 +24,7 @@ class StaticResolver(DefaultResolver):
     async def resolve(self, host, port=0, family=socket.AF_INET):
         if host in self.mapping:
             ip = self.mapping[host]
-            logger.debug(f"StaticResolver: forcing {host} -> {ip}")
+            logger.debug("StaticResolver: forcing %s -> %s", host, ip)
             # Format required by aiohttp: list of dicts
             return [{
                 'hostname': host,
@@ -33,8 +36,10 @@ class StaticResolver(DefaultResolver):
             }]
         return await super().resolve(host, port, family)
 
+
 class ExtractorError(Exception):
     pass
+
 
 class MaxstreamExtractor:
     """Maxstream URL extractor."""
@@ -58,9 +63,10 @@ class MaxstreamExtractor:
         self.session = None
         self.mediaflow_endpoint = "hls_proxy"
         self.proxies = proxies or []
-        self.cookies = {} # Persistent cookies for the session
+        self.cookies = {}  # Persistent cookies for the session
         self.selected_proxy = None
         self.resolver = StaticResolver()
+
     def _get_random_proxy(self):
         return random.choice(self.proxies) if self.proxies else None
 
@@ -82,19 +88,19 @@ class MaxstreamExtractor:
         """Get or create session, optionally with a specific proxy."""
         # Note: we use our custom resolver only for non-proxy requests
         # because proxies handle their own DNS resolution.
-        
+
         timeout = ClientTimeout(total=45, connect=15, sock_read=30)
         if proxy:
             connector = get_connector_for_proxy(proxy)
             return ClientSession(timeout=timeout, connector=connector, headers=self.base_headers)
-        
+
         if self.session is None or self.session.closed:
             connector = TCPConnector(
-                limit=0, 
-                limit_per_host=0, 
-                keepalive_timeout=60, 
-                enable_cleanup_closed=True, 
-                resolver=self.resolver # Use custom StaticResolver
+                limit=0,
+                limit_per_host=0,
+                keepalive_timeout=60,
+                enable_cleanup_closed=True,
+                resolver=self.resolver  # Use custom StaticResolver
             )
             self.session = ClientSession(timeout=timeout, connector=connector, headers=self.base_headers)
         return self.session
@@ -110,10 +116,10 @@ class MaxstreamExtractor:
                         data = await resp.json()
                         ips = [ans['data'] for ans in data.get('Answer', []) if ans.get('type') == 1]
                         if ips:
-                            logger.debug(f"DoH resolved {domain} to {ips}")
+                            logger.debug("DoH resolved %s to %s", domain, ips)
                             return ips
         except Exception as e:
-            logger.debug(f"DoH resolution failed for {domain}: {e}")
+            logger.debug("DoH resolution failed for %s: %s", domain, e)
         return []
 
     async def _fetch(self, url: str, method="GET", is_binary=False, **kwargs):
@@ -125,7 +131,7 @@ class MaxstreamExtractor:
                 decoded = base64.b64decode(data)
                 return decoded if is_binary else decoded.decode("utf-8", errors="ignore")
             except Exception as e:
-                logger.error(f"Failed to decode data URI: {e}")
+                logger.error("Failed to decode data URI: %s", e)
                 return b"" if is_binary else ""
 
         parsed_url = urlparse(url)
@@ -162,7 +168,7 @@ class MaxstreamExtractor:
                         return await response.read() if is_binary else await response.text()
             except Exception as e:
                 last_error = e
-                logger.debug(f"Path failed ({proxy or 'direct'}): {e}")
+                logger.debug("Path failed (%s): %s", proxy or 'direct', e)
 
         if not is_binary and "maxstream.video" in domain:
             cffi_result = await self._fetch_with_curl_cffi(
@@ -213,19 +219,22 @@ class MaxstreamExtractor:
                     cookies = dict(response.cookies) if response.cookies else {}
                 return response.status_code, response.text, cookies, proxy, profile
             except Exception as exc:
-                logger.debug(f"curl_cffi maxstream error for {url}: proxy={proxy or 'direct'} profile={profile}: {exc}")
+                logger.debug("curl_cffi maxstream error for %s: proxy=%s profile=%s: %s", url, proxy or 'direct',
+                             profile, exc)
                 return 0, None, {}, proxy, profile
 
         for proxy in proxies:
             for profile in ("chrome131", "chrome124", "edge101"):
-                status, text, cookies, used_proxy, used_profile = await loop.run_in_executor(None, do_request, proxy, profile)
+                status, text, cookies, used_proxy, used_profile = await loop.run_in_executor(None, do_request, proxy,
+                                                                                             profile)
                 if cookies:
                     self.cookies.update(cookies)
                 if status < 400 and text:
                     self.selected_proxy = used_proxy
-                    logger.debug(f"curl_cffi maxstream success via {used_proxy or 'direct'} profile={used_profile}")
+                    logger.debug("curl_cffi maxstream success via %s profile=%s", used_proxy or 'direct', used_profile)
                     return text
-                logger.debug(f"curl_cffi maxstream failed for {url}: status={status} proxy={used_proxy or 'direct'} profile={used_profile}")
+                logger.debug("curl_cffi maxstream failed for %s: status=%d proxy=%s profile=%s", url, status,
+                             used_proxy or 'direct', used_profile)
         return None
 
     async def _fetch_with_flaresolverr(self, url: str, method="GET", headers=None, post_data=None):
@@ -266,18 +275,18 @@ class MaxstreamExtractor:
         try:
             async with aiohttp.ClientSession() as session:
                 async with session.post(
-                    f"{FLARESOLVERR_URL.rstrip('/')}/v1",
-                    json=payload,
-                    headers=fs_headers,
-                    timeout=ClientTimeout(total=FLARESOLVERR_TIMEOUT + 95),
+                        f"{FLARESOLVERR_URL.rstrip('/')}/v1",
+                        json=payload,
+                        headers=fs_headers,
+                        timeout=ClientTimeout(total=FLARESOLVERR_TIMEOUT + 95),
                 ) as response:
                     data = await response.json()
         except Exception as exc:
-            logger.debug(f"FlareSolverr maxstream failed for {url}: {exc}")
+            logger.debug("FlareSolverr maxstream failed for %s: %s", url, exc)
             return None
 
         if data.get("status") != "ok":
-            logger.debug(f"FlareSolverr maxstream error for {url}: {data.get('message')}")
+            logger.debug("FlareSolverr maxstream error for %s: %s", url, data.get('message'))
             return None
 
         solution = data.get("solution", {})
@@ -285,7 +294,8 @@ class MaxstreamExtractor:
         if cookies:
             self.cookies.update(cookies)
         html = solution.get("response", "")
-        if html and not any(marker in html.lower() for marker in ("just a moment", "cf-challenge", "checking your browser")):
+        if html and not any(
+                marker in html.lower() for marker in ("just a moment", "cf-challenge", "checking your browser")):
             self.selected_proxy = proxy
             return html
         logger.debug("FlareSolverr maxstream returned Cloudflare challenge or empty response")
@@ -301,8 +311,8 @@ class MaxstreamExtractor:
         if "maxstream.video" not in input_domain:
             raise ExtractorError("Maxstream: redirector URLs are no longer supported")
         maxstream_url = url
-        logger.debug(f"Target URL: {maxstream_url}")
-        
+        logger.debug("Target URL: %s", maxstream_url)
+
         # Use strict headers to avoid Error 131
         headers = {
             **self.base_headers,
@@ -310,9 +320,9 @@ class MaxstreamExtractor:
             "origin": "https://maxstream.video",
             "accept-language": "en-US,en;q=0.5"
         }
-        
+
         text = await self._fetch(maxstream_url, headers=headers)
-        
+
         # Direct sources check
         direct_match = re.search(r'sources:\s*\[\{src:\s*"([^"]+)"', text)
         if direct_match:
@@ -326,8 +336,8 @@ class MaxstreamExtractor:
         # Fallback to packer logic
         match = re.search(r"\}\('(.+)',.+,'(.+)'\.split", text)
         if not match:
-             match = re.search(r"eval\(function\(p,a,c,k,e,d\).+?\}\('(.+?)',.+?,'(.+?)'\.split", text, re.S)
-        
+            match = re.search(r"eval\(function\(p,a,c,k,e,d\).+?\}\('(.+?)',.+?,'(.+?)'\.split", text, re.S)
+
         if not match:
             raise ExtractorError(f"Failed to extract from: {text[:200]}")
 
@@ -339,9 +349,9 @@ class MaxstreamExtractor:
         if not match:
             # Maybe it's a different packer signature?
             match = re.search(r"eval\(function\(p,a,c,k,e,d\).+?\}\('(.+?)',.+?,'(.+?)'\.split", text, re.S)
-            
+
         if not match:
-            logger.error(f"Failed to find packer script or direct source in: {text[:500]}...")
+            logger.error("Failed to find packer script or direct source in: %s...", text[:500])
             raise ExtractorError("Failed to extract URL components")
 
         s1 = match.group(2)
@@ -352,14 +362,14 @@ class MaxstreamExtractor:
             hls_index = terms.index("hls")
             sources_index = terms.index("sources")
         except ValueError as e:
-            logger.error(f"Required terms missing in packer: {e}")
+            logger.error("Required terms missing in packer: %s", e)
             raise ExtractorError(f"Missing components in packer: {e}")
 
-        result = terms[urlset_index + 1 : hls_index]
+        result = terms[urlset_index + 1: hls_index]
         reversed_elements = result[::-1]
-        first_part_terms = terms[hls_index + 1 : sources_index]
+        first_part_terms = terms[hls_index + 1: sources_index]
         reversed_first_part = first_part_terms[::-1]
-        
+
         first_url_part = ""
         for fp in reversed_first_part:
             if "0" in fp:
@@ -368,7 +378,7 @@ class MaxstreamExtractor:
                 first_url_part += fp + "-"
 
         base_url = f"https://{first_url_part.rstrip('-')}.host-cdn.net/hls/"
-        
+
         if len(reversed_elements) == 1:
             final_url = base_url + "," + reversed_elements[0] + ".urlset/master.m3u8"
         else:

@@ -1,5 +1,6 @@
+from extractors.base import BaseExtractor
 from utils.packed import eval_solver
-from extractors.base import BaseExtractor, ExtractorError
+
 
 class FastreamExtractor(BaseExtractor):
     """Fastream URL extractor."""
@@ -10,7 +11,7 @@ class FastreamExtractor(BaseExtractor):
     async def extract(self, url: str, **kwargs) -> dict:
         """Extract Fastream URL."""
         session = await self._get_session(url)
-        
+
         headers = {
             "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
             "Connection": "keep-alive",

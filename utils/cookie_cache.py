@@ -1,9 +1,10 @@
 import json
+import logging
 import os
 import time
-import logging
 
 logger = logging.getLogger(__name__)
+
 
 class CookieCache:
     def __init__(self, name: str):
@@ -25,9 +26,9 @@ class CookieCache:
                 if entry.get("expiry", 0) > time.time():
                     return entry
                 else:
-                    logger.debug(f"Cookie cache ({self.name}) expired for domain: {domain}")
+                    logger.debug("Cookie cache (%s) expired for domain: %s", self.name, domain)
         except Exception as e:
-            logger.error(f"Error reading cookie cache {self.filename}: {e}")
+            logger.error("Error reading cookie cache %s: %s", self.filename, e)
         return None
 
     def set(self, domain: str, cookies: dict, ua: str, expiry_delta: int = 7200):
@@ -41,16 +42,16 @@ class CookieCache:
                     cache = json.load(f)
             except:
                 pass
-        
+
         cache[domain] = {
             "cookies": cookies,
             "userAgent": ua,
             "expiry": time.time() + expiry_delta
         }
-        
+
         try:
             with open(self.filename, "w") as f:
                 json.dump(cache, f)
-            logger.debug(f"Updated cookie cache {self.filename} for domain: {domain}")
+            logger.debug("Updated cookie cache %s for domain: %s", self.filename, domain)
         except Exception as e:
-            logger.error(f"Error writing cookie cache {self.filename}: {e}")
+            logger.error("Error writing cookie cache %s: %s", self.filename, e)

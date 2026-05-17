@@ -17,15 +17,15 @@ except ImportError:
 class ManifestRewriter:
     @staticmethod
     def rewrite_mpd_native(
-        manifest_content: str,
-        mpd_url: str,
-        proxy_base: str,
-        stream_headers: dict,
-        clearkey_param: str = None,
-        api_password: str = None,
-        bypass_warp: bool = False,
-        disable_ssl: bool = False,
-        session_id: str = None
+            manifest_content: str,
+            mpd_url: str,
+            proxy_base: str,
+            stream_headers: dict,
+            clearkey_param: str = None,
+            api_password: str = None,
+            bypass_warp: bool = False,
+            disable_ssl: bool = False,
+            session_id: str = None
     ) -> str:
         """Riscrive il manifest MPD per DASH nativo (senza conversione HLS)."""
         try:
@@ -34,7 +34,7 @@ class ManifestRewriter:
             mpd = manifest_content
             mpd = re.sub(r'<ContentProtection[\s\S]*?</ContentProtection>', '', mpd, flags=re.IGNORECASE)
             mpd = re.sub(r'<ContentProtection[^>]*/>', '', mpd, flags=re.IGNORECASE)
-            
+
             # Rimuove cenc:pssh
             mpd = re.sub(r'<cenc:pssh>[\s\S]*?</cenc:pssh>', '', mpd, flags=re.IGNORECASE)
             mpd = re.sub(r'<cenc:pssh[^>]*/>', '', mpd, flags=re.IGNORECASE)
@@ -45,7 +45,7 @@ class ManifestRewriter:
             # 2. Inserimento BaseURL che punta al nostro proxy
             # Il path sarà /proxy/mpd/segment/{sessionId}/
             proxy_segment_base = f"{proxy_base}/proxy/mpd/segment/{session_id}/"
-            
+
             mpd_tag_match = re.search(r'(<MPD[^>]*>)', mpd, re.IGNORECASE)
             if mpd_tag_match:
                 insert_pos = mpd_tag_match.end()
@@ -53,19 +53,19 @@ class ManifestRewriter:
 
             return mpd
         except Exception as e:
-            logger.error(f"Error during native MPD rewrite: {e}")
+            logger.error("Error during native MPD rewrite: %s", e)
             return manifest_content
 
     @staticmethod
     def rewrite_mpd_manifest(
-        manifest_content: str,
-        base_url: str,
-        proxy_base: str,
-        stream_headers: dict,
-        clearkey_param: str = None,
-        api_password: str = None,
-        bypass_warp: bool = False,
-        disable_ssl: bool = False,
+            manifest_content: str,
+            base_url: str,
+            proxy_base: str,
+            stream_headers: dict,
+            clearkey_param: str = None,
+            api_password: str = None,
+            bypass_warp: bool = False,
+            disable_ssl: bool = False,
     ) -> str:
         """Riscrive i manifest MPD (DASH) per passare attraverso il proxy."""
         try:
@@ -97,7 +97,7 @@ class ManifestRewriter:
 
             if api_password:
                 header_params += f"&api_password={api_password}"
-            
+
             if bypass_warp:
                 header_params += "&warp=off"
 
@@ -183,8 +183,8 @@ class ManifestRewriter:
                         existing_cp = False
                         for cp in adaptation_set.findall("mpd:ContentProtection", ns):
                             if (
-                                cp.get("schemeIdUri")
-                                == "urn:uuid:e2719d58-a985-b3c9-781a-007147f192ec"
+                                    cp.get("schemeIdUri")
+                                    == "urn:uuid:e2719d58-a985-b3c9-781a-007147f192ec"
                             ):
                                 existing_cp = True
                                 break
@@ -196,7 +196,7 @@ class ManifestRewriter:
                             )
 
                 except Exception as e:
-                    logger.error(f"Error parsing clearkey parameter: {e}")
+                    logger.error("Error parsing clearkey parameter: %s", e)
 
             # --- GESTIONE PROXY LICENZE ESISTENTI ---
             for cp in root.findall(".//mpd:ContentProtection", ns):
@@ -231,23 +231,23 @@ class ManifestRewriter:
             return ET.tostring(root, encoding="unicode", method="xml")
 
         except Exception as e:
-            logger.error(f"Error during MPD manifest rewrite: {e}")
+            logger.error("Error during MPD manifest rewrite: %s", e)
             return manifest_content
 
     @staticmethod
     async def rewrite_manifest_urls(
-        manifest_content: str,
-        base_url: str,
-        proxy_base: str,
-        stream_headers: dict,
-        original_channel_url: str = "",
-        api_password: str = None,
-        get_extractor_func=None,
-        no_bypass: bool = False,
-        shorten_url_func=None,
-        bypass_warp: bool = False,
-        disable_ssl: bool = False,
-        selected_proxy: str = None,
+            manifest_content: str,
+            base_url: str,
+            proxy_base: str,
+            stream_headers: dict,
+            original_channel_url: str = "",
+            api_password: str = None,
+            get_extractor_func=None,
+            no_bypass: bool = False,
+            shorten_url_func=None,
+            bypass_warp: bool = False,
+            disable_ssl: bool = False,
+            selected_proxy: str = None,
     ) -> str:
         """Riscrive gli URL nei manifest HLS per passare attraverso il proxy."""
         lines = manifest_content.split("\n")
@@ -259,9 +259,9 @@ class ManifestRewriter:
         try:
             if get_extractor_func:
                 original_request_url = (
-                    stream_headers.get("referer")
-                    or stream_headers.get("Referer")
-                    or base_url
+                        stream_headers.get("referer")
+                        or stream_headers.get("Referer")
+                        or base_url
                 )
                 extractor = await get_extractor_func(original_request_url, {})
 
@@ -269,7 +269,7 @@ class ManifestRewriter:
                     is_vixsrc_stream = True
                     logger.debug("Detected VixSrc stream.")
         except Exception as e:
-            logger.error(f"Error in extractor detection: {e}")
+            logger.error("Error in extractor detection: %s", e)
 
         # no_bypass e mantenuto per compatibilita, ma il rewriter ora proxa sempre.
         _ = no_bypass
@@ -311,13 +311,13 @@ class ManifestRewriter:
 
             if api_password:
                 header_params += f"&api_password={api_password}"
-            
+
             if bypass_warp:
                 header_params += "&warp=off"
-            
+
             if disable_ssl:
                 header_params += "&disable_ssl=1"
-            
+
             if selected_proxy:
                 # Usiamo un formato pulito per evitare double-encoding
                 header_params += f"&proxy={urllib.parse.quote(selected_proxy, safe='')}"
@@ -331,7 +331,7 @@ class ManifestRewriter:
                 proxy_variant_url = (
                     f"{proxy_base}/proxy/hls/manifest.m3u8?d={encoded_variant_url}{header_params}"
                 )
-            
+
             if selected_proxy and "&proxy=" not in proxy_variant_url:
                 proxy_variant_url += f"&proxy={urllib.parse.quote(selected_proxy, safe='')}"
 
@@ -394,13 +394,13 @@ class ManifestRewriter:
 
         if api_password:
             header_params += f"&api_password={api_password}"
-        
+
         if bypass_warp:
             header_params += "&warp=off"
-        
+
         if disable_ssl:
             header_params += "&disable_ssl=1"
-        
+
         if selected_proxy:
             header_params += f"&proxy={urllib.parse.quote(selected_proxy, safe='')}"
 
@@ -509,7 +509,7 @@ class ManifestRewriter:
                     original_key_url = line[uri_start:uri_end]
                     absolute_key_url = urljoin(base_url, original_key_url)
                     encoded_key_url = urllib.parse.quote(absolute_key_url, safe="")
-                    
+
                     # Proxy KEY URL (come per #EXT-X-KEY)
                     proxy_key_url = (
                         f"{proxy_base}/key?key_url={encoded_key_url}"
@@ -574,9 +574,9 @@ class ManifestRewriter:
                     if path.endswith(".vtt") or path.endswith(".webvtt"):
                         ext = ".vtt"
                     elif (
-                        path.endswith(".m4s")
-                        or path.endswith(".mp4")
-                        or path.endswith(".m4v")
+                            path.endswith(".m4s")
+                            or path.endswith(".mp4")
+                            or path.endswith(".m4v")
                     ):
                         ext = ".mp4"
 

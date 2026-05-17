@@ -1,9 +1,9 @@
 import re
 from urllib.parse import urljoin, urlparse
+
 from extractors.base import BaseExtractor, ExtractorError
 from utils.packed import eval_solver
 
-from extractors.base import BaseExtractor, ExtractorError
 
 class StreamWishExtractor(BaseExtractor):
     """StreamWish URL extractor."""
@@ -25,7 +25,7 @@ class StreamWishExtractor(BaseExtractor):
             referer = f"{parsed.scheme}://{parsed.netloc}/"
 
         headers = {"Referer": referer}
-        
+
         resp = await self._make_request(url, headers=headers)
         text = resp.text
 

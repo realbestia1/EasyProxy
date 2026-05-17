@@ -1,5 +1,6 @@
+from extractors.base import BaseExtractor
 from utils.packed import eval_solver
-from extractors.base import BaseExtractor, ExtractorError
+
 
 class FileLionsExtractor(BaseExtractor):
     """FileLions URL extractor."""
@@ -10,7 +11,7 @@ class FileLionsExtractor(BaseExtractor):
     async def extract(self, url: str, **kwargs) -> dict:
         """Extract FileLions URL."""
         session = await self._get_session(url)
-        
+
         headers = {}
         # See https://github.com/Gujal00/ResolveURL/blob/master/script.module.resolveurl/lib/resolveurl/plugins/filelions.py
         patterns = [

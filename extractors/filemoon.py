@@ -1,13 +1,13 @@
 import logging
 import random
 import re
-from urllib.parse import urlparse, urljoin
 from aiohttp import ClientSession, ClientTimeout, TCPConnector
 from aiohttp_socks import ProxyConnector
-from config import get_proxy_for_url, TRANSPORT_ROUTES, get_connector_for_proxy
-from utils.packed import eval_solver
+from urllib.parse import urlparse, urljoin
 
 from extractors.base import BaseExtractor, ExtractorError
+from utils.packed import eval_solver
+
 
 class FileMoonExtractor(BaseExtractor):
     """FileMoon URL extractor."""
@@ -38,7 +38,7 @@ class FileMoonExtractor(BaseExtractor):
 
         headers = {"Referer": url}
         patterns = [r'file:"(.*?)"']
-        
+
         session = await self._get_session(iframe_url)
         final_url = await eval_solver(session, iframe_url, headers, patterns)
 
@@ -47,7 +47,7 @@ class FileMoonExtractor(BaseExtractor):
             await self._make_request(final_url, headers=headers)
         except ExtractorError as e:
             if "404" in str(e):
-                 raise ExtractorError("Stream not found (404)")
+                raise ExtractorError("Stream not found (404)")
             raise
 
         self.base_headers["referer"] = url

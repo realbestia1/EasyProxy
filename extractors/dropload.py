@@ -1,7 +1,9 @@
 import re
 from urllib.parse import urljoin, urlparse
-from utils.packed import eval_solver
+
 from extractors.base import BaseExtractor, ExtractorError
+from utils.packed import eval_solver
+
 
 class DroploadExtractor(BaseExtractor):
     """Dropload URL extractor."""

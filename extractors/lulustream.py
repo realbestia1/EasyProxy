@@ -1,5 +1,7 @@
 import re
+
 from extractors.base import BaseExtractor, ExtractorError
+
 
 class LuluStreamExtractor(BaseExtractor):
     """LuluStream URL extractor."""
@@ -17,7 +19,7 @@ class LuluStreamExtractor(BaseExtractor):
         match = re.search(pattern, text, re.DOTALL)
         if not match:
             raise ExtractorError("Failed to extract source URL")
-        
+
         final_url = match.group(1)
 
         self.base_headers["referer"] = url

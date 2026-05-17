@@ -1,30 +1,29 @@
+import aiohttp
 import asyncio
-import uuid
 import logging
 import os
 import re
 import time
+import uuid
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from enum import Enum
 from typing import Dict, List, Optional, Any, Tuple
 from urllib.parse import urlencode
 
-import aiohttp
-
-from services.recording_db import RecordingDB
 from config import PORT, API_PASSWORD
+from services.recording_db import RecordingDB
 
 logger = logging.getLogger(__name__)
 
 
 class StreamType(Enum):
     """Stream type classification for recording."""
-    MPD = "mpd"           # DASH/MPD streams (converted to HLS by proxy)
-    VAVOO = "vavoo"       # Vavoo.to HLS streams
-    FREESHOT = "freeshot" # Freeshot/popcdn HLS streams
+    MPD = "mpd"  # DASH/MPD streams (converted to HLS by proxy)
+    VAVOO = "vavoo"  # Vavoo.to HLS streams
+    FREESHOT = "freeshot"  # Freeshot/popcdn HLS streams
     SPORTSONLINE = "sportsonline"  # SportsOnline HLS streams
-    GENERIC = "generic"   # Unknown/generic HLS streams
+    GENERIC = "generic"  # Unknown/generic HLS streams
 
 
 @dataclass
@@ -81,9 +80,9 @@ class RecordingManager:
     # =========================================================================
 
     async def _prepare_stream_config(
-        self,
-        url: str,
-        clearkey: Optional[str] = None
+            self,
+            url: str,
+            clearkey: Optional[str] = None
     ) -> StreamConfig:
         """
         Prepare stream configuration based on stream type.
@@ -99,9 +98,9 @@ class RecordingManager:
             return self._prepare_hls_config(url, stream_type)
 
     async def _prepare_mpd_config(
-        self,
-        url: str,
-        clearkey: Optional[str] = None
+            self,
+            url: str,
+            clearkey: Optional[str] = None
     ) -> StreamConfig:
         """
         Prepare configuration for MPD/DASH streams.
@@ -122,7 +121,7 @@ class RecordingManager:
             logger.warning("⚠️ MPD Recording without ClearKey - content may be encrypted")
 
         master_url = f"http://127.0.0.1:{PORT}/proxy/mpd/manifest.m3u8?{urlencode(proxy_params)}"
-        logger.info(f"Recording MPD stream: {url[:80]}...")
+        logger.info("Recording MPD stream: %s...", url[:80])
 
         # Parse master playlist to extract separate audio track
         video_url, audio_url = await self._parse_master_playlist(master_url)
@@ -132,7 +131,7 @@ class RecordingManager:
             video_url = master_url
             audio_url = None
         else:
-            logger.debug(f"Parsed MPD master: video=present, audio={'present' if audio_url else 'embedded'}")
+            logger.debug("Parsed MPD master: video=present, audio=%s", 'present' if audio_url else 'embedded')
 
         return StreamConfig(
             video_url=video_url,
@@ -152,7 +151,7 @@ class RecordingManager:
         proxy_params = self._build_proxy_params(url)
         video_url = f"http://127.0.0.1:{PORT}/proxy/hls/manifest.m3u8?{urlencode(proxy_params)}"
 
-        logger.info(f"Recording HLS stream ({stream_type.value}): {url[:80]}...")
+        logger.info("Recording HLS stream (%s): %s...", stream_type.value, url[:80])
 
         return StreamConfig(
             video_url=video_url,
@@ -174,8 +173,8 @@ class RecordingManager:
     # =========================================================================
 
     async def _parse_master_playlist(
-        self,
-        master_url: str
+            self,
+            master_url: str
     ) -> Tuple[Optional[str], Optional[str]]:
         """
         Parse HLS master playlist to extract video and audio playlist URLs.
@@ -187,11 +186,11 @@ class RecordingManager:
         try:
             async with aiohttp.ClientSession() as session:
                 async with session.get(
-                    master_url,
-                    timeout=aiohttp.ClientTimeout(total=30)
+                        master_url,
+                        timeout=aiohttp.ClientTimeout(total=30)
                 ) as resp:
                     if resp.status != 200:
-                        logger.error(f"Failed to fetch master playlist: {resp.status}")
+                        logger.error("Failed to fetch master playlist: %d", resp.status)
                         return None, None
                     content = await resp.text()
 
@@ -217,7 +216,7 @@ class RecordingManager:
             return video_url, audio_url
 
         except Exception as e:
-            logger.error(f"Error parsing master playlist: {e}")
+            logger.error("Error parsing master playlist: %s", e)
             return None, None
 
     # =========================================================================
@@ -225,10 +224,10 @@ class RecordingManager:
     # =========================================================================
 
     def _build_ffmpeg_command(
-        self,
-        config: StreamConfig,
-        output_path: str,
-        duration: Optional[int] = None
+            self,
+            config: StreamConfig,
+            output_path: str,
+            duration: Optional[int] = None
     ) -> List[str]:
         """
         Build FFmpeg command for recording based on stream configuration.
@@ -307,11 +306,11 @@ class RecordingManager:
     # =========================================================================
 
     async def start_recording(
-        self,
-        url: str,
-        name: Optional[str] = None,
-        duration: Optional[int] = None,
-        clearkey: Optional[str] = None
+            self,
+            url: str,
+            name: Optional[str] = None,
+            duration: Optional[int] = None,
+            clearkey: Optional[str] = None
     ) -> Optional[Dict[str, Any]]:
         """
         Start recording a stream.
@@ -334,7 +333,7 @@ class RecordingManager:
 
         # Claim the recording (prevents duplicates)
         if not self.db.create_starting_entry(recording_id, name, url):
-            logger.info(f"Recording already exists for URL: {url[:80]}...")
+            logger.info("Recording already exists for URL: %s...", url[:80])
             return None
 
         filename = self._generate_filename(recording_id, name)
@@ -352,8 +351,8 @@ class RecordingManager:
         # Build FFmpeg command
         cmd = self._build_ffmpeg_command(config, file_path, duration)
 
-        logger.info(f"Starting recording {recording_id}: {name}")
-        logger.debug(f"FFmpeg command: {' '.join(cmd)}")
+        logger.info("Starting recording %s: %s", recording_id, name)
+        logger.debug("FFmpeg command: %s", ' '.join(cmd))
 
         try:
             process = await asyncio.create_subprocess_exec(
@@ -378,7 +377,7 @@ class RecordingManager:
             return self.db.get_recording(recording_id)
 
         except Exception as e:
-            logger.error(f"Failed to start recording {recording_id}: {e}")
+            logger.error("Failed to start recording %s: %s", recording_id, e)
             self.db.update_recording_status(recording_id, 'failed', str(e))
             return None
 
@@ -390,7 +389,7 @@ class RecordingManager:
         """
         recording = self.db.get_recording(recording_id)
         if not recording:
-            logger.warning(f"Recording {recording_id} not found in database")
+            logger.warning("Recording %s not found in database", recording_id)
             return False
 
         if recording_id in self.processes:
@@ -405,15 +404,15 @@ class RecordingManager:
                 try:
                     await asyncio.wait_for(process.wait(), timeout=10.0)
                 except asyncio.TimeoutError:
-                    logger.warning(f"Recording {recording_id} didn't stop gracefully, terminating")
+                    logger.warning("Recording %s didn't stop gracefully, terminating", recording_id)
                     process.terminate()
                     try:
                         await asyncio.wait_for(process.wait(), timeout=5.0)
                     except asyncio.TimeoutError:
-                        logger.warning(f"Recording {recording_id} didn't terminate, killing")
+                        logger.warning("Recording %s didn't terminate, killing", recording_id)
                         process.kill()
             except Exception as e:
-                logger.error(f"Error stopping process: {e}")
+                logger.error("Error stopping process: %s", e)
                 try:
                     process.terminate()
                 except Exception:
@@ -431,11 +430,11 @@ class RecordingManager:
                     await asyncio.sleep(2)
                     if self.db.is_pid_running(pid):
                         os.kill(pid, signal.SIGKILL)
-                    logger.debug(f"Stopped recording {recording_id} via PID {pid}")
+                    logger.debug("Stopped recording %s via PID %d", recording_id, pid)
                 except ProcessLookupError:
-                    logger.debug(f"Process {pid} already terminated")
+                    logger.debug("Process %d already terminated", pid)
                 except Exception as e:
-                    logger.error(f"Error killing process {pid}: {e}")
+                    logger.error("Error killing process %d: %s", pid, e)
 
         self.db.update_recording_status(recording_id, 'stopped')
 
@@ -447,13 +446,13 @@ class RecordingManager:
                 file_size = os.path.getsize(file_path)
                 self.db.update_recording_file_info(recording_id, rec_duration, file_size)
 
-        logger.info(f"Recording {recording_id} stopped")
+        logger.info("Recording %s stopped", recording_id)
         return True
 
     async def _monitor_recording(
-        self,
-        recording_id: str,
-        process: asyncio.subprocess.Process
+            self,
+            recording_id: str,
+            process: asyncio.subprocess.Process
     ):
         """Monitor a recording process and update status when complete."""
         try:
@@ -465,14 +464,14 @@ class RecordingManager:
             stderr_text = stderr.decode() if stderr else ""
 
             if stderr_text:
-                logger.debug(f"Recording {recording_id} FFmpeg output: {stderr_text[:1000]}")
+                logger.debug("Recording %s FFmpeg output: %s", recording_id, stderr_text[:1000])
 
             if process.returncode == 0:
-                logger.info(f"Recording {recording_id} completed successfully")
+                logger.info("Recording %s completed successfully", recording_id)
                 self.db.update_recording_status(recording_id, 'completed')
             else:
                 error_msg = stderr_text[:500] if stderr_text else "Unknown error"
-                logger.error(f"Recording {recording_id} failed with code {process.returncode}: {error_msg}")
+                logger.error("Recording %s failed with code %d: %s", recording_id, process.returncode, error_msg)
                 self.db.update_recording_status(recording_id, 'failed', error_msg)
 
             recording = self.db.get_recording(recording_id)
@@ -486,7 +485,7 @@ class RecordingManager:
         except asyncio.CancelledError:
             pass
         except Exception as e:
-            logger.error(f"Error monitoring recording {recording_id}: {e}")
+            logger.error("Error monitoring recording %s: %s", recording_id, e)
         finally:
             self.processes.pop(recording_id, None)
             self.start_times.pop(recording_id, None)
@@ -503,9 +502,9 @@ class RecordingManager:
         if recording.get('file_path') and os.path.exists(recording['file_path']):
             try:
                 os.remove(recording['file_path'])
-                logger.debug(f"Deleted recording file: {recording['file_path']}")
+                logger.debug("Deleted recording file: %s", recording['file_path'])
             except Exception as e:
-                logger.error(f"Error deleting file: {e}")
+                logger.error("Error deleting file: %s", e)
 
         return self.db.delete_recording(recording_id)
 
@@ -555,7 +554,7 @@ class RecordingManager:
         """Delete recordings older than retention period."""
         old_recordings = self.db.get_old_recordings(self.retention_days)
         for recording in old_recordings:
-            logger.info(f"Auto-deleting old recording: {recording['id']}")
+            logger.info("Auto-deleting old recording: %s", recording['id'])
             await self.delete_recording(recording['id'])
 
     async def cleanup_loop(self):
@@ -564,7 +563,7 @@ class RecordingManager:
             try:
                 await self.cleanup_old_recordings()
             except Exception as e:
-                logger.error(f"Error in cleanup loop: {e}")
+                logger.error("Error in cleanup loop: %s", e)
             await asyncio.sleep(3600)
 
     async def shutdown(self):

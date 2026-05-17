@@ -4,9 +4,10 @@ from urllib.parse import urlparse
 
 logger = logging.getLogger(__name__)
 
+
 class OrionExtractor:
     """Extractor for Orionoid streams to ensure correct headers are passed."""
-    
+
     def __init__(self, request_headers, proxies=None):
         self.request_headers = request_headers
         self.proxies = proxies or []
@@ -17,7 +18,7 @@ class OrionExtractor:
     async def extract(self, url, **kwargs):
         parsed_url = urlparse(url)
         origin = f"{parsed_url.scheme}://{parsed_url.netloc}"
-        
+
         headers = self.base_headers.copy()
         # Default headers that mimic a browser request
         headers.update({
@@ -39,5 +40,5 @@ class OrionExtractor:
         return {
             "destination_url": url,
             "request_headers": headers,
-            "mediaflow_endpoint": "hls_proxy" 
+            "mediaflow_endpoint": "hls_proxy"
         }

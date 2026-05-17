@@ -1,8 +1,8 @@
 # Python AES-GCM implementation for use without cryptography library
 # Adapted from https://github.com/Gujal00/ResolveURL/blob/master/script.module.resolveurl/lib/resolveurl/plugins/f16px.py
 
-import struct
 import binascii
+import struct
 
 
 def _bytes_to_int(data):
@@ -28,7 +28,7 @@ def _aes_block_encrypt(key, block):
         return cipher.encrypt(block)
     except ImportError:
         pass
-    
+
     try:
         from cryptography.hazmat.primitives.ciphers import Cipher, algorithms, modes
         from cryptography.hazmat.backends import default_backend
@@ -37,7 +37,7 @@ def _aes_block_encrypt(key, block):
         return encryptor.update(block) + encryptor.finalize()
     except ImportError:
         pass
-    
+
     raise ImportError("No AES implementation available. Install pycryptodome or cryptography.")
 
 
@@ -57,39 +57,40 @@ def _gf_mult(a, b):
 
 def _ghash(h_int, aad, ciphertext):
     """GHASH function for GCM."""
+
     def _pad16(data):
         if len(data) % 16:
             return data + b'\x00' * (16 - len(data) % 16)
         return data
-    
+
     data = _pad16(aad) + _pad16(ciphertext)
     data += struct.pack('>QQ', len(aad) * 8, len(ciphertext) * 8)
-    
+
     y = 0
     for i in range(0, len(data), 16):
-        block_int = _bytes_to_int(data[i:i+16])
+        block_int = _bytes_to_int(data[i:i + 16])
         y = _gf_mult(y ^ block_int, h_int)
-    
+
     return y
 
 
 class AESGCM:
     """Pure Python AES-GCM implementation."""
-    
+
     def __init__(self, key):
         self.key = key
         # Compute H = E(K, 0^128)
         h_block = _aes_block_encrypt(key, b'\x00' * 16)
         self.h_int = _bytes_to_int(h_block)
-    
+
     def open(self, nonce, ciphertext_with_tag, aad=b''):
         """Decrypt and verify AES-GCM ciphertext."""
         if len(ciphertext_with_tag) < 16:
             return None
-        
+
         ciphertext = ciphertext_with_tag[:-16]
         tag = ciphertext_with_tag[-16:]
-        
+
         # Compute J0 (counter block)
         if len(nonce) == 12:
             j0 = nonce + b'\x00\x00\x00\x01'
@@ -97,27 +98,27 @@ class AESGCM:
             # For other nonce lengths, use GHASH
             ghash_result = _ghash(self.h_int, b'', nonce)
             j0 = _int_to_bytes(ghash_result, 16)
-        
+
         # Generate keystream and decrypt
         plaintext = bytearray()
         counter = _bytes_to_int(j0)
-        
+
         for i in range(0, len(ciphertext), 16):
             counter = (counter & 0xffffffffffffffffffffffff00000000) | (((counter & 0xffffffff) + 1) & 0xffffffff)
             counter_block = _int_to_bytes(counter, 16)
             keystream = _aes_block_encrypt(self.key, counter_block)
-            block = ciphertext[i:i+16]
+            block = ciphertext[i:i + 16]
             plaintext.extend(_xor_bytes(block, keystream[:len(block)]))
-        
+
         # Compute expected tag
         s = _ghash(self.h_int, aad, ciphertext)
         j0_encrypted = _aes_block_encrypt(self.key, j0)
         expected_tag = _xor_bytes(_int_to_bytes(s, 16), j0_encrypted)
-        
+
         # Verify tag (constant-time comparison would be better for security)
         if tag != expected_tag:
             return None
-        
+
         return bytes(plaintext)
 
 

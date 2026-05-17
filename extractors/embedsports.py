@@ -1,15 +1,14 @@
+import aiohttp
 import asyncio
 import logging
 import os
 import socket
 import sys
 import time
-from typing import Any
-from urllib.parse import urlparse
-
-import aiohttp
 from aiohttp import ClientSession, ClientTimeout, TCPConnector
 from playwright.async_api import TimeoutError as PlaywrightTimeoutError, async_playwright
+from typing import Any
+from urllib.parse import urlparse
 from yarl import URL
 
 from config import GLOBAL_PROXIES, TRANSPORT_ROUTES, get_connector_for_proxy, get_proxy_for_url
@@ -260,9 +259,9 @@ class EmbedSportsExtractor:
                     content_type = (response.headers.get("content-type") or "").lower()
                     path = urlparse(response_url).path.lower()
                     is_manifest = (
-                        path.endswith(".m3u8")
-                        or "application/vnd.apple.mpegurl" in content_type
-                        or "application/x-mpegurl" in content_type
+                            path.endswith(".m3u8")
+                            or "application/vnd.apple.mpegurl" in content_type
+                            or "application/x-mpegurl" in content_type
                     )
                     if not is_manifest or response.status != 200:
                         return

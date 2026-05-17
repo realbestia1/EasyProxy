@@ -1,5 +1,5 @@
 # Adapted for use in EasyProxy from:
-#https://github.com/einars/js-beautify/blob/master/python/jsbeautifier/unpackers/packer.py
+# https://github.com/einars/js-beautify/blob/master/python/jsbeautifier/unpackers/packer.py
 # Unpacker for Dean Edward's p.a.c.k.e.r, a part of javascript beautifier
 # by Einar Lielmanis <einar@beautifier.io>
 #
@@ -12,14 +12,13 @@
 #
 """Unpacker for Dean Edward's p.a.c.k.e.r"""
 
-import re
-from bs4 import BeautifulSoup, SoupStrainer
-from urllib.parse import urljoin, urlparse
-import logging
 import asyncio
+import logging
+import re
 from aiohttp_socks import ProxyError as AioProxyError
+from bs4 import BeautifulSoup, SoupStrainer
 from python_socks import ProxyError as PyProxyError
-
+from urllib.parse import urljoin, urlparse
 
 logger = logging.getLogger(__name__)
 
@@ -89,7 +88,7 @@ def _replacestrings(source):
         for index, value in enumerate(lookup):
             source = source.replace(variable % index, '"%s"' % value)
         return source[startpoint:]
-    return source 
+    return source
 
 
 class Unbaser(object):
@@ -134,19 +133,21 @@ class Unbaser(object):
         """Decodes a  value to an integer."""
         ret = 0
         for index, cipher in enumerate(string[::-1]):
-            ret += (self.base**index) * self.dictionary[cipher]
+            ret += (self.base ** index) * self.dictionary[cipher]
         return ret
+
 
 class UnpackingError(Exception):
     """Badly packed source or general error. Argument is a
     meaningful description."""
     pass
 
+
 async def eval_solver(session, url: str, headers: dict, patterns: list[str]) -> str:
     try:
         async with session.get(url, headers=headers) as response:
             text = await response.text()
-        
+
         # Check for common error messages indicating video not found or unavailable
         error_indicators = [
             "can't find the video",
@@ -156,49 +157,51 @@ async def eval_solver(session, url: str, headers: dict, patterns: list[str]) -> 
             "this file does not exist",
             "video not found"
         ]
-        
+
         text_lower = text.lower()
         for indicator in error_indicators:
             if indicator in text_lower:
                 logger.warning("Video not available at %s: detected '%s'", url, indicator)
                 raise UnpackingError(f"Video not found or unavailable at {url}")
-        
+
         # Try to find and unpack JavaScript
         soup = BeautifulSoup(text, "lxml", parse_only=SoupStrainer("script"))
         script_all = soup.find_all("script")
-        
+
         packed_scripts = []
         for i in script_all:
             if i.text and detect(i.text):
                 packed_scripts.append(i.text)
-        
+
         if not packed_scripts:
             logger.warning("No packed JavaScript found at %s. Page may have changed structure.", url)
-            raise UnpackingError(f"No packed JavaScript found at {url}. The video may not exist or the page structure has changed.")
-        
+            raise UnpackingError(
+                f"No packed JavaScript found at {url}. The video may not exist or the page structure has changed.")
+
         # Try to extract URL from packed scripts
         for script in packed_scripts:
             try:
                 unpacked_code = unpack(script)
                 logger.debug("Unpacked code snippet: %s", unpacked_code[:200])
-                
+
                 for pattern in patterns:
                     match = re.search(pattern, unpacked_code)
                     if match:
                         extracted_url = match.group(1)
                         if not urlparse(extracted_url).scheme:
                             extracted_url = urljoin(url, extracted_url)
-                        
+
                         logger.info("Successfully extracted URL from %s", url)
                         return extracted_url
             except Exception as unpack_error:
                 logger.debug("Failed to unpack script: %s", str(unpack_error))
                 continue
-        
+
         # If we got here, we found packed JS but couldn't extract the URL
         logger.warning("Found packed JavaScript but no patterns matched at %s. Patterns tried: %s", url, patterns)
-        raise UnpackingError(f"Found packed JavaScript but could not extract video URL. The extraction patterns may need updating.")
-        
+        raise UnpackingError(
+            f"Found packed JavaScript but could not extract video URL. The extraction patterns may need updating.")
+
     except (UnpackingError, AioProxyError, PyProxyError, asyncio.TimeoutError):
         raise
     except Exception as e:

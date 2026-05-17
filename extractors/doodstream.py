@@ -1,4 +1,5 @@
 import asyncio
+import cloudscraper
 import logging
 import os
 import random
@@ -7,7 +8,6 @@ import string
 import time
 from urllib.parse import urljoin, urlparse
 
-import cloudscraper
 from config import GLOBAL_PROXIES, TRANSPORT_ROUTES, get_proxy_for_url
 from utils.cookie_cache import CookieCache
 
@@ -23,6 +23,7 @@ _DOOD_UA = (
     "(KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36"
 )
 
+
 class DoodStreamExtractor:
     """
     DoodStream / PlayMogo extractor using cloudscraper.
@@ -36,6 +37,7 @@ class DoodStreamExtractor:
         self.last_used_proxy = None
         self.mediaflow_endpoint = "proxy_stream_endpoint"
         self.cache = CookieCache("dood")
+
     def _get_proxy(self, url: str, bypass_warp: bool = None) -> str | None:
         return get_proxy_for_url(url, TRANSPORT_ROUTES, GLOBAL_PROXIES, bypass_warp=bypass_warp)
 
@@ -112,7 +114,7 @@ class DoodStreamExtractor:
             "cf-browser-verification": "cf-browser-verification" in html,
             "Just a moment...": "Just a moment..." in html,
         }
-        logger.debug(f"DoodStream HTML length: {len(html)} | markers: {markers}")
+        logger.debug("DoodStream HTML length: %d | markers: %s", len(html), markers)
 
         for marker in ("pass_md5", "makePlay(", "token="):
             idx = html.find(marker)
@@ -120,17 +122,17 @@ class DoodStreamExtractor:
                 start = max(0, idx - 180)
                 end = min(len(html), idx + 320)
                 snippet = re.sub(r"\s+", " ", html[start:end]).strip()
-                logger.debug(f"DoodStream marker snippet [{marker}]: {snippet}")
+                logger.debug("DoodStream marker snippet [%s]: %s", marker, snippet)
                 return
 
         compact_html = re.sub(r"\s+", " ", html[:1200]).strip()
-        logger.debug(f"DoodStream compact HTML snippet (first 1200 chars): {compact_html}")
+        logger.debug("DoodStream compact HTML snippet (first 1200 chars): %s", compact_html)
 
     async def _do_extract_with_proxy(self, embed_url: str, scraper_proxies: dict | None) -> dict | None:
         scraper = cloudscraper.create_scraper(delay=5)
         if scraper_proxies:
             self.last_used_proxy = scraper_proxies["https"]
-            logger.info(f"DoodStream: cloudscraper using proxy {scraper_proxies['https']}")
+            logger.info("DoodStream: cloudscraper using proxy %s", scraper_proxies['https'])
         else:
             self.last_used_proxy = None
             logger.info("DoodStream: cloudscraper using direct connection")
@@ -148,7 +150,7 @@ class DoodStreamExtractor:
         html = response.text
         title_match = re.search(r"<title>(.*?)</title>", html, re.I)
         if title_match:
-            logger.info(f"DoodStream Page Title: {title_match.group(1)}")
+            logger.info("DoodStream Page Title: %s", title_match.group(1))
 
         if "Just a moment..." in html or "DDoS protection" in html or "cf-browser-verification" in html:
             logger.warning("DoodStream: cloudscraper returned 200 but Cloudflare challenge is present.")
@@ -160,7 +162,7 @@ class DoodStreamExtractor:
             return None
 
         pass_url = urljoin(embed_url, pass_path)
-        logger.info(f"Cloudscraper found pass_md5 path: {pass_path}")
+        logger.info("Cloudscraper found pass_md5 path: %s", pass_path)
 
         pass_response = await asyncio.to_thread(
             scraper.get,
@@ -190,7 +192,7 @@ class DoodStreamExtractor:
         bypass_warp = kwargs.get("bypass_warp")
 
         try:
-            logger.info(f"DoodStream: Trying cloudscraper extraction for {embed_url}")
+            logger.info("DoodStream: Trying cloudscraper extraction for %s", embed_url)
 
             # 1. First attempt: Use default proxy (WARP if enabled) or user-specified bypass_warp
             result = await self._do_extract_with_proxy(
@@ -202,7 +204,7 @@ class DoodStreamExtractor:
 
             # 2. Fallback: If first attempt failed and we haven't tried bypassing WARP yet, try direct connection
             if not bypass_warp:
-                logger.info(f"DoodStream: first attempt failed, retrying with warp=off (direct) for {embed_url}")
+                logger.info("DoodStream: first attempt failed, retrying with warp=off (direct) for %s", embed_url)
                 result = await self._do_extract_with_proxy(
                     embed_url,
                     self._build_scraper_proxies(embed_url, bypass_warp=True),
@@ -214,7 +216,7 @@ class DoodStreamExtractor:
             raise ExtractorError("DoodStream: tokens not found after primary attempts")
 
         except Exception as e:
-            logger.error(f"DoodStream: cloudscraper error: {e}")
+            logger.error("DoodStream: cloudscraper error: %s", e)
             raise ExtractorError(f"DoodStream: cloudscraper extraction failed: {e}")
 
     def _finalize_extraction(self, base_stream: str, html: str, base_url: str, ua: str) -> dict:
@@ -229,7 +231,7 @@ class DoodStreamExtractor:
         rand_str = "".join(random.choice(string.ascii_letters + string.digits) for _ in range(10))
         final_url = f"{base_stream}{rand_str}?token={token}&expiry={expiry}"
 
-        logger.info(f"DoodStream successful sniffed extraction: {final_url[:60]}...")
+        logger.info("DoodStream successful sniffed extraction: %s...", final_url[:60])
         return {
             "destination_url": final_url,
             "request_headers": {"User-Agent": ua, "Referer": f"{base_url}/", "Accept": "*/*"},

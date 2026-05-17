@@ -1,6 +1,8 @@
 import re
 from urllib.parse import urljoin, urlparse
+
 from extractors.base import BaseExtractor, ExtractorError
+
 
 class VidmolyExtractor(BaseExtractor):
     """Vidmoly URL extractor."""

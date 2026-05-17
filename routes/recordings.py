@@ -22,7 +22,7 @@ def setup_recording_routes(app, recording_manager):
                 return web.Response(text=f.read(), content_type='text/html')
         except FileNotFoundError:
             return web.Response(text="Recordings template not found",
-                               status=404)
+                                status=404)
 
     async def handle_list_recordings(request):
         """GET /api/recordings - List all recordings."""
@@ -47,7 +47,7 @@ def setup_recording_routes(app, recording_manager):
 
         if not recording:
             return web.json_response({"error": "Recording not found"},
-                                    status=404)
+                                     status=404)
 
         return web.json_response(recording)
 
@@ -115,7 +115,7 @@ def setup_recording_routes(app, recording_manager):
             return web.json_response({"success": True})
         else:
             return web.json_response({"error": "Recording not found"},
-                                    status=404)
+                                     status=404)
 
     async def handle_delete_recording_get(request):
         """GET /api/recordings/{id}/delete - Delete a recording via GET (for Stremio).
@@ -129,7 +129,7 @@ def setup_recording_routes(app, recording_manager):
         success = await recording_manager.delete_recording(recording_id)
 
         if success:
-            logger.debug(f"Recording {recording_id} deleted via GET request")
+            logger.debug("Recording %s deleted via GET request", recording_id)
             # Return a simple message - Stremio will show "playback failed" but recording is deleted
             return web.Response(
                 text="Recording deleted successfully. Close this and refresh the catalog.",
@@ -151,7 +151,7 @@ def setup_recording_routes(app, recording_manager):
                 await recording_manager.delete_recording(rec['id'])
                 deleted += 1
             except Exception as e:
-                logger.warning(f"Failed to delete recording {rec['id']}: {e}")
+                logger.warning("Failed to delete recording %s: %s", rec['id'], e)
 
         return web.json_response({"success": True, "deleted": deleted})
 
@@ -165,12 +165,12 @@ def setup_recording_routes(app, recording_manager):
 
         if not recording:
             return web.json_response({"error": "Recording not found"},
-                                    status=404)
+                                     status=404)
 
         file_path = recording.get('file_path')
         if not file_path or not os.path.exists(file_path):
             return web.json_response({"error": "Recording file not found"},
-                                    status=404)
+                                     status=404)
 
         # Security check
         recordings_dir = os.path.abspath(recording_manager.recordings_dir)
@@ -212,12 +212,12 @@ def setup_recording_routes(app, recording_manager):
 
         if not recording:
             return web.json_response({"error": "Recording not found"},
-                                    status=404)
+                                     status=404)
 
         file_path = recording.get('file_path')
         if not file_path or not os.path.exists(file_path):
             return web.json_response({"error": "Recording file not found"},
-                                    status=404)
+                                     status=404)
 
         # Security check
         recordings_dir = os.path.abspath(recording_manager.recordings_dir)
@@ -254,7 +254,7 @@ def setup_recording_routes(app, recording_manager):
         )
         await response.prepare(request)
 
-        logger.debug(f"Starting live stream of active recording {recording_id}")
+        logger.debug("Starting live stream of active recording %s", recording_id)
 
         try:
             with open(file_path, 'rb') as f:
@@ -266,14 +266,14 @@ def setup_recording_routes(app, recording_manager):
                         # Check if recording is still active
                         rec = recording_manager.get_recording(recording_id)
                         if not rec or not rec.get('is_active'):
-                            logger.debug(f"Recording {recording_id} finished, ending stream")
+                            logger.debug("Recording %s finished, ending stream", recording_id)
                             break
                         # Wait for more data from FFmpeg
                         await asyncio.sleep(0.5)
         except ConnectionResetError:
-            logger.debug(f"Client disconnected from recording {recording_id} stream")
+            logger.debug("Client disconnected from recording %s stream", recording_id)
         except Exception as e:
-            logger.warning(f"Error streaming recording {recording_id}: {e}")
+            logger.warning("Error streaming recording %s: %s", recording_id, e)
 
         await response.write_eof()
         return response
@@ -338,10 +338,10 @@ def setup_recording_routes(app, recording_manager):
             pending = recording_manager.get_pending_recording_by_url(url)
             if pending:
                 if pending.get('is_active'):
-                    logger.debug(f"Already recording URL: {url}")
+                    logger.debug("Already recording URL: %s", url)
                 else:
                     # Stuck 'starting' entry - clean it up and try again
-                    logger.warning(f"Cleaning up stuck entry for URL: {url}")
+                    logger.warning("Cleaning up stuck entry for URL: %s", url)
                     await recording_manager.delete_recording(pending['id'])
                     # Try starting again
                     recording = await recording_manager.start_recording(
@@ -351,10 +351,10 @@ def setup_recording_routes(app, recording_manager):
                         clearkey=clearkey
                     )
                     if not recording:
-                        logger.error(f"Failed to start recording after cleanup: {url}")
+                        logger.error("Failed to start recording after cleanup: %s", url)
             # Even if recording failed, still redirect to live stream
             # so user can watch while we figure out what went wrong
-            logger.debug(f"Recording may have failed, but redirecting to live stream anyway")
+            logger.debug("Recording may have failed, but redirecting to live stream anyway")
 
         # Build proxy URL to watch the live stream while recording
         from urllib.parse import urlencode

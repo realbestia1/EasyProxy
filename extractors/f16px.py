@@ -1,16 +1,15 @@
-import re
 import base64
-import json
-import time
 import hashlib
+import json
 import os
 import random
+import re
+import time
 import uuid
-from urllib.parse import urlparse
-
 from Crypto.Hash import SHA256
 from Crypto.PublicKey import ECC
 from Crypto.Signature import DSS
+from urllib.parse import urlparse
 
 from extractors.base import BaseExtractor, ExtractorError
 from utils import python_aesgcm
@@ -48,6 +47,7 @@ class F16PxExtractor(BaseExtractor):
                 return int(s.get("label", 0))
             except:
                 return 0
+
         return sorted(sources, key=label_key, reverse=True)[0]["url"]
 
     # ✅ Correct fingerprint (ResolveURL compatible)

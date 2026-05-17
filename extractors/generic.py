@@ -1,8 +1,10 @@
 import logging
-from urllib.parse import urlparse
 import ssl
 import yarl
-from extractors.base import BaseExtractor, ExtractorError
+from urllib.parse import urlparse
+
+from extractors.base import BaseExtractor
+
 
 class GenericHLSExtractor(BaseExtractor):
     def __init__(self, request_headers, proxies=None):
@@ -22,14 +24,14 @@ class GenericHLSExtractor(BaseExtractor):
         session = await self._get_session(url)
         parsed_url = urlparse(url)
         origin = f"{parsed_url.scheme}://{parsed_url.netloc}"
-        
+
         # DEBUG INSIDE EXTRACTOR
-        # logger.debug(f"[GenericHLSExtractor] Extracting {url}")
-        # logger.debug(f"[GenericHLSExtractor] self.request_headers: {self.request_headers}")
+        # logger.debug("[GenericHLSExtractor] Extracting %s", url)
+        # logger.debug("[GenericHLSExtractor] self.request_headers: %s", self.request_headers)
 
         # Inizializza headers con User-Agent di default
         headers = {"user-agent": self.base_headers.get("User-Agent", self.base_headers.get("user-agent"))}
-        
+
         # ✅ FIX: Non sovrascrivere Referer/Origin se già presenti in request_headers (es. passati via h_ params)
         # Cerchiamo in modo case-insensitive
         has_referer = False
@@ -37,44 +39,44 @@ class GenericHLSExtractor(BaseExtractor):
         for k, v in self.request_headers.items():
             if k.lower() == 'referer':
                 has_referer = True
-                headers["referer"] = v # Usa quello passato
+                headers["referer"] = v  # Usa quello passato
             elif k.lower() == 'origin':
                 has_origin = True
-                headers["origin"] = v # Usa quello passato
+                headers["origin"] = v  # Usa quello passato
 
         parsed = urlparse(url)
         referer = kwargs.get('h_Referer', kwargs.get('h_referer'))
-        
+
         # ✅ CinemaCity CDN Fix: No Referer/Origin if missing for cccdn.net
         if not referer and "cccdn.net" not in parsed.netloc:
             referer = f"{parsed.scheme}://{parsed.netloc}/"
-            
+
         origin = kwargs.get('h_Origin', kwargs.get('h_origin'))
         if not origin and "cccdn.net" not in parsed.netloc:
             origin = f"{parsed.scheme}://{parsed.netloc}"
 
         if not has_referer and referer:
             headers["referer"] = referer
-        
+
         if not has_origin and origin:
             headers["origin"] = origin
 
         # Applica altri header passati dal proxy (h_ params)
         for h, v in self.request_headers.items():
             h_lower = h.lower()
-            
+
             # ✅ FIX DLHD: Accetta User-Agent passato via h_ (browser vero)
             if h_lower == "user-agent":
                 if "chrome" in v.lower() or "applewebkit" in v.lower():
                     headers["user-agent"] = v
                 continue
-            
+
             if h_lower in ["referer", "origin"]:
-                continue # Già gestiti sopra
+                continue  # Già gestiti sopra
 
             # Filtra e aggiunge solo gli header necessari/sicuri
             if h_lower in [
-                "authorization", "x-api-key", "x-auth-token", "cookie", "x-channel-key", 
+                "authorization", "x-api-key", "x-auth-token", "cookie", "x-channel-key",
                 "accept", "accept-language", "accept-encoding", "dnt", "upgrade-insecure-requests",
                 "sec-fetch-dest", "sec-fetch-mode", "sec-fetch-site", "sec-fetch-user",
                 "sec-ch-ua", "sec-ch-ua-mobile", "sec-ch-ua-platform",
@@ -82,7 +84,7 @@ class GenericHLSExtractor(BaseExtractor):
             ]:
                 # Sovrascrive garantendo che non ci siano duplicati grazie alla chiave minuscola
                 headers[h_lower] = v
-            
+
             # Blocca esplicitamente header di tracciamento IP/Proxy
             if h_lower in ["x-forwarded-for", "x-real-ip", "forwarded", "via", "host"]:
                 continue
@@ -100,8 +102,8 @@ class GenericHLSExtractor(BaseExtractor):
             headers["accept-encoding"] = "gzip, deflate, br, zstd"
 
         return {
-            "destination_url": str(yarl.URL(url, encoded=True)), 
-            "request_headers": headers, 
+            "destination_url": str(yarl.URL(url, encoded=True)),
+            "request_headers": headers,
             "mediaflow_endpoint": "hls_proxy"
         }
 

@@ -1,3 +1,4 @@
+import aiohttp
 import asyncio
 import json
 import logging
@@ -6,13 +7,12 @@ import random
 import re
 import threading
 import time
-from typing import Any, Dict
-from urllib.parse import parse_qs, parse_qsl, urlencode, urljoin, urlparse, urlunparse
-
-import aiohttp
 from aiohttp import ClientSession, ClientTimeout, TCPConnector
 from aiohttp_socks import ProxyError as AioProxyError
 from python_socks import ProxyError as PyProxyError
+from typing import Any, Dict
+from urllib.parse import parse_qs, parse_qsl, urlencode, urljoin, urlparse, urlunparse
+
 from config import get_proxy_for_url, TRANSPORT_ROUTES, GLOBAL_PROXIES, get_connector_for_proxy, SELECTED_PROXY_CONTEXT
 
 logger = logging.getLogger(__name__)
@@ -24,6 +24,7 @@ class ExtractorError(Exception):
 
 class VixSrcExtractor:
     """VixSrc URL extractor per risolvere link VixSrc."""
+
     def __init__(self, request_headers: dict, proxies: list = None):
         self.request_headers = request_headers
         self.base_headers = self._default_headers()
@@ -33,6 +34,7 @@ class VixSrcExtractor:
         self.proxies = proxies or GLOBAL_PROXIES
         self.is_vixsrc = True
         self.last_used_proxy = None
+
     @staticmethod
     def _normalize_proxy_url(proxy_value: str) -> str:
         proxy_value = proxy_value.strip()
@@ -127,7 +129,7 @@ class VixSrcExtractor:
         return self.session
 
     async def _make_robust_request(
-        self, url: str, headers: dict = None, retries: int = 3, initial_delay: int = 2
+            self, url: str, headers: dict = None, retries: int = 3, initial_delay: int = 2
     ):
         """Effettua richieste HTTP robuste con retry automatico."""
         final_headers = headers or {}
@@ -165,19 +167,19 @@ class VixSrcExtractor:
                     return MockResponse(content, response.status, response.headers, response.url)
 
             except (
-                aiohttp.ClientConnectionError,
-                aiohttp.ServerDisconnectedError,
-                aiohttp.ClientPayloadError,
-                asyncio.TimeoutError,
-                OSError,
-                ConnectionResetError,
-                AioProxyError,
-                PyProxyError,
+                    aiohttp.ClientConnectionError,
+                    aiohttp.ServerDisconnectedError,
+                    aiohttp.ClientPayloadError,
+                    asyncio.TimeoutError,
+                    OSError,
+                    ConnectionResetError,
+                    AioProxyError,
+                    PyProxyError,
             ) as e:
                 is_proxy_err = isinstance(e, (AioProxyError, PyProxyError))
                 is_timeout = isinstance(e, asyncio.TimeoutError)
                 err_type = "Proxy" if is_proxy_err else ("Timeout" if is_timeout else "Connection")
-                
+
                 logger.warning(
                     "%s error attempt %s for %s: %s", err_type, attempt + 1, url, str(e)
                 )
@@ -189,14 +191,13 @@ class VixSrcExtractor:
                     except Exception:
                         pass
                 self.session = None
-                
+
                 if is_proxy_err and SELECTED_PROXY_CONTEXT.get():
                     logger.info("Clearing sticky proxy context due to ProxyError")
                     SELECTED_PROXY_CONTEXT.set(None)
 
-
                 if attempt < retries - 1:
-                    delay = initial_delay * (2**attempt)
+                    delay = initial_delay * (2 ** attempt)
                     logger.info("Waiting %s seconds before next attempt...", delay)
                     await asyncio.sleep(delay)
                 else:
@@ -205,7 +206,6 @@ class VixSrcExtractor:
             except aiohttp.ClientResponseError as e:
                 if e.status == 404:
                     raise ExtractorError(f"VixSrc content not found (404): {url}")
-                
 
                 if attempt == retries - 1:
                     raise ExtractorError(f"Final HTTP error {e.status} for {url}: {str(e)}")
@@ -396,7 +396,7 @@ class VixSrcExtractor:
                 logger.info("URL is already a VixSrc manifest, no extraction required.")
                 # Preserve selected_proxy from query if present
                 selected_proxy = kwargs.get("proxy") or parse_qs(parsed_url.query).get("proxy", [None])[0]
-                logger.debug(f"Extractor Debug: Extractor result selected_proxy: {selected_proxy}")
+                logger.debug("Extractor Debug: Extractor result selected_proxy: %s", selected_proxy)
                 return {
                     "destination_url": url,
                     "request_headers": self._fresh_headers(),

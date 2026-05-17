@@ -1,10 +1,12 @@
 import logging
 import re
 from urllib.parse import urljoin, urlparse
+
 from extractors.base import BaseExtractor, ExtractorError
 from utils.packed import unpack
 
 logger = logging.getLogger(__name__)
+
 
 class StreamHGExtractor(BaseExtractor):
     """Extractor for StreamHG-style players (dhcplay/vibuxer mirrors)."""
@@ -71,14 +73,14 @@ class StreamHGExtractor(BaseExtractor):
                 if not stream_url:
                     continue
 
-                logger.info(f"Successfully extracted StreamHG URL: {stream_url[:80]}...")
+                logger.info("Successfully extracted StreamHG URL: %s...", stream_url[:80])
                 return {
                     "destination_url": stream_url,
                     "request_headers": {},
                     "mediaflow_endpoint": self.mediaflow_endpoint,
                 }
             except Exception as e:
-                logger.debug(f"StreamHG candidate failed {candidate}: {e}")
+                logger.debug("StreamHG candidate failed %s: %s", candidate, e)
                 continue
 
         raise ExtractorError(f"STREAMHG extraction failed for {url}")

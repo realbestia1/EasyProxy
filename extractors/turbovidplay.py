@@ -1,6 +1,8 @@
 import re
 from urllib.parse import urljoin, urlparse
+
 from extractors.base import BaseExtractor, ExtractorError
+
 
 class TurboVidPlayExtractor(BaseExtractor):
     """TurboVidPlay URL extractor."""

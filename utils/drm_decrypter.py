@@ -1,11 +1,10 @@
 import argparse
+import array
 import struct
 import sys
-from typing import Optional, Union
-
 from Crypto.Cipher import AES
 from collections import namedtuple
-import array
+from typing import Optional, Union
 
 CENCSampleAuxiliaryDataFormat = namedtuple("CENCSampleAuxiliaryDataFormat", ["is_encrypted", "iv", "sub_samples"])
 
@@ -82,7 +81,7 @@ class MP4Parser:
         if size < 8 or pos + size - 8 > len(self.data):
             return None
 
-        atom_data = self.data[pos : pos + size - 8]
+        atom_data = self.data[pos: pos + size - 8]
         self.position = pos + size - 8
         return MP4Atom(atom_type, size, atom_data)
 
@@ -120,7 +119,7 @@ class MP4Parser:
         if size < 8 or pos + size - 8 > end:
             return None
 
-        atom_data = self.data[pos : pos + size - 8]
+        atom_data = self.data[pos: pos + size - 8]
         return MP4Atom(atom_type, size, atom_data)
 
     def print_atoms_structure(self, indent: int = 0):
@@ -357,7 +356,7 @@ class MP4Decrypter:
                 break  # No more data to process
 
             sample_size = self.trun_sample_sizes[i] if i < len(self.trun_sample_sizes) else len(mdat_data) - position
-            sample = mdat_data[position : position + sample_size]
+            sample = mdat_data[position: position + sample_size]
             position += sample_size
             decrypted_sample = self._process_sample(sample, info, self.current_key)
             decrypted_samples.extend(decrypted_sample)
@@ -390,7 +389,7 @@ class MP4Decrypter:
             if position + 8 > len(data):
                 break
 
-            iv = data[position : position + 8].tobytes()
+            iv = data[position: position + 8].tobytes()
             position += 8
 
             sub_samples = []
@@ -429,11 +428,11 @@ class MP4Decrypter:
             kid = self.track_kid_map[track_id]
             if kid in self.key_map:
                 return self.key_map[kid]
-        
+
         # Single key: use it directly
         if len(self.key_map) == 1:
             return next(iter(self.key_map.values()))
-        
+
         # Last resort fallback: index-based (for segments without moov/tenc info)
         keys_list = list(self.key_map.values())
         key_index = (track_id - 1) % len(keys_list)
@@ -441,7 +440,7 @@ class MP4Decrypter:
 
     @staticmethod
     def _process_sample(
-        sample: memoryview, sample_info: CENCSampleAuxiliaryDataFormat, key: bytes
+            sample: memoryview, sample_info: CENCSampleAuxiliaryDataFormat, key: bytes
     ) -> Union[memoryview, bytearray, bytes]:
         """
         Processes and decrypts a sample using the provided sample information and decryption key.
@@ -469,9 +468,9 @@ class MP4Decrypter:
         result = bytearray()
         offset = 0
         for clear_bytes, encrypted_bytes in sample_info.sub_samples:
-            result.extend(sample[offset : offset + clear_bytes])
+            result.extend(sample[offset: offset + clear_bytes])
             offset += clear_bytes
-            result.extend(cipher.decrypt(sample[offset : offset + encrypted_bytes]))
+            result.extend(cipher.decrypt(sample[offset: offset + encrypted_bytes]))
             offset += encrypted_bytes
 
         # If there's any remaining data, treat it as encrypted
@@ -796,15 +795,15 @@ def decrypt_segment(init_segment: bytes, segment_content: bytes, key_id: str, ke
     # Support multi-key: "KID1,KID2" and "KEY1,KEY2"
     kid_list = [k.strip() for k in key_id.split(',')]
     key_list = [k.strip() for k in key.split(',')]
-    
+
     if len(kid_list) != len(key_list):
         raise ValueError(f"Mismatched key_id/key count: {len(kid_list)} key_ids vs {len(key_list)} keys")
-    
+
     # Build key_map with all key pairs
     key_map = {}
     for kid, k in zip(kid_list, key_list):
         key_map[bytes.fromhex(kid)] = bytes.fromhex(k)
-    
+
     decrypter = MP4Decrypter(key_map)
     decrypted_content = decrypter.decrypt_segment(init_segment + segment_content)
     return decrypted_content

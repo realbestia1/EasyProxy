@@ -1,15 +1,16 @@
-import asyncio
-import logging
-import time
-import socket
-import hashlib
 import aiohttp
+import asyncio
+import hashlib
+import logging
+import random
+import socket
+import time
 from aiohttp import ClientSession, ClientTimeout, TCPConnector
 from aiohttp_socks import ProxyConnector
 from typing import Optional, Dict, Any
 from urllib.parse import quote_plus
+
 from config import get_proxy_for_url, TRANSPORT_ROUTES, GLOBAL_PROXIES, get_connector_for_proxy
-import random
 
 logger = logging.getLogger(__name__)
 
@@ -27,7 +28,7 @@ class ExtractorError(Exception):
 
 class VavooExtractor:
     """Vavoo URL extractor — resolves vavoo.to play URLs to clean HLS via lokke.app auth."""
-    
+
     def __init__(self, request_headers: dict, proxies: list = None):
         self.request_headers = request_headers
         self.base_headers = {
@@ -42,20 +43,20 @@ class VavooExtractor:
     def _get_random_proxy(self):
         """Restituisce un proxy casuale dalla lista."""
         return random.choice(self.proxies) if self.proxies else None
-        
+
     async def _get_session(self, url: str = None):
         if self.session is None or self.session.closed:
             timeout = ClientTimeout(total=60, connect=30, sock_read=30)
-            
+
             # Determina il proxy per l'URL (se fornito)
             proxy = None
             if url:
                 proxy = get_proxy_for_url(url, TRANSPORT_ROUTES, self.proxies)
             else:
                 proxy = self._get_random_proxy()
-                
+
             if proxy:
-                logger.debug(f"Using proxy for Vavoo session: {proxy}")
+                logger.debug("Using proxy for Vavoo session: %s", proxy)
                 connector = get_connector_for_proxy(proxy)
             else:
                 connector = TCPConnector(
@@ -90,7 +91,8 @@ class VavooExtractor:
             "locale": "de",
             "theme": "dark",
             "metadata": {
-                "device": {"type": "Handset", "brand": "google", "model": "Nexus", "name": "21081111RG", "uniqueId": unique_id},
+                "device": {"type": "Handset", "brand": "google", "model": "Nexus", "name": "21081111RG",
+                           "uniqueId": unique_id},
                 "os": {"name": "android", "version": "7.1.2", "abis": ["arm64-v8a"], "host": "android"},
                 "app": {"platform": "android", "version": "1.1.0", "buildId": "97215000", "engine": "hbc85",
                         "signatures": ["6e8a975e3cbf07d5de823a760d4c2547f86c1403105020adee5de67ac510999e"],
@@ -125,7 +127,8 @@ class VavooExtractor:
 
         for attempt in range(3):
             try:
-                async with session.post(_LOKKE_PING_URL, json=body, headers=headers, timeout=ClientTimeout(total=10)) as resp:
+                async with session.post(_LOKKE_PING_URL, json=body, headers=headers,
+                                        timeout=ClientTimeout(total=10)) as resp:
                     if resp.status == 200:
                         data = await resp.json()
                         sig = data.get("addonSig")
@@ -134,9 +137,9 @@ class VavooExtractor:
                             self._cached_sig_ts = time.time()
                             logger.debug("Got auth signature from lokke.app")
                             return sig
-                    logger.warning(f"Ping attempt {attempt+1} failed: status {resp.status}")
+                    logger.warning("Ping attempt %d failed: status %d", attempt + 1, resp.status)
             except Exception as e:
-                logger.warning(f"Ping attempt {attempt+1} exception: {e}")
+                logger.warning("Ping attempt %d exception: %s", attempt + 1, e)
         return None
 
     async def _get_ts_signature(self) -> Optional[str]:
@@ -145,10 +148,10 @@ class VavooExtractor:
         for attempt in range(3):
             try:
                 async with session.post(
-                    _TS_PING2_URL,
-                    data={"vec": _TS_VEC},
-                    headers={"content-type": "application/x-www-form-urlencoded"},
-                    timeout=ClientTimeout(total=10)
+                        _TS_PING2_URL,
+                        data={"vec": _TS_VEC},
+                        headers={"content-type": "application/x-www-form-urlencoded"},
+                        timeout=ClientTimeout(total=10)
                 ) as resp:
                     if resp.status == 200:
                         data = await resp.json()
@@ -157,7 +160,7 @@ class VavooExtractor:
                             logger.debug("Got TS signature from ping2")
                             return signed
             except Exception as e:
-                logger.warning(f"TS ping2 attempt {attempt+1} exception: {e}")
+                logger.warning("TS ping2 attempt %d exception: %s", attempt + 1, e)
         return None
 
     async def _resolve_via_mediahubmx(self, url: str, signature: str) -> Optional[str]:
@@ -179,7 +182,7 @@ class VavooExtractor:
         try:
             async with session.post(_RESOLVE_URL, json=body, headers=headers, timeout=ClientTimeout(total=12)) as resp:
                 if resp.status != 200:
-                    logger.warning(f"Resolve returned status {resp.status}")
+                    logger.warning("Resolve returned status %d", resp.status)
                     return None
                 data = await resp.json()
                 if isinstance(data, list) and data and data[0].get("url"):
@@ -191,7 +194,7 @@ class VavooExtractor:
                         return str(data["data"]["url"])
                 return None
         except Exception as e:
-            logger.warning(f"Resolve exception: {e}")
+            logger.warning("Resolve exception: %s", e)
             return None
 
     def _build_ts_fallback_url(self, play_url: str, ts_sig: str) -> Optional[str]:
@@ -206,7 +209,7 @@ class VavooExtractor:
     async def extract(self, url: str, **kwargs) -> Dict[str, Any]:
         if "vavoo.to" not in url:
             raise ExtractorError("Not a valid Vavoo URL")
-        
+
         resolved_url = None
         stream_headers = {}
 
@@ -215,7 +218,7 @@ class VavooExtractor:
         if sig:
             resolved_url = await self._resolve_via_mediahubmx(url, sig)
             if resolved_url:
-                logger.info(f"Resolved via mediahubmx: {resolved_url[:80]}...")
+                logger.info("Resolved via mediahubmx: %s...", resolved_url[:80])
                 stream_headers = {
                     "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
                     "Referer": "https://vavoo.to",
@@ -229,7 +232,7 @@ class VavooExtractor:
                 ts_url = self._build_ts_fallback_url(url, ts_sig)
                 if ts_url:
                     resolved_url = ts_url
-                    logger.info(f"Resolved via TS fallback: {resolved_url[:80]}...")
+                    logger.info("Resolved via TS fallback: %s...", resolved_url[:80])
                     stream_headers = {
                         "user-agent": "VAVOO/2.6",
                     }
@@ -237,7 +240,7 @@ class VavooExtractor:
         # Step 3: Last resort — pass raw URL (may not work without proper player)
         if not resolved_url:
             resolved_url = url
-            logger.warning(f"Using Direct Mode (unresolved): {resolved_url}")
+            logger.warning("Using Direct Mode (unresolved): %s", resolved_url)
             stream_headers = {
                 "user-agent": "VAVOO/2.6",
                 "referer": "https://vavoo.to/",

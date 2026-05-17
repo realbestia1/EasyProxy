@@ -1,11 +1,10 @@
 import asyncio
+import cloudscraper
 import logging
 import re
 import time
-from urllib.parse import urlparse, urljoin
-
-import cloudscraper
 from bs4 import BeautifulSoup
+from urllib.parse import urlparse, urljoin
 
 from config import (
     get_proxy_for_url,
@@ -16,8 +15,10 @@ from utils.cookie_cache import CookieCache
 
 logger = logging.getLogger(__name__)
 
+
 class ExtractorError(Exception):
     pass
+
 
 class MixdropExtractor:
     _result_cache = {}
@@ -26,7 +27,8 @@ class MixdropExtractor:
         self.request_headers = request_headers or {}
         self.base_headers = self.request_headers.copy()
         if "User-Agent" not in self.base_headers and "user-agent" not in self.base_headers:
-             self.base_headers["User-Agent"] = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+            self.base_headers[
+                "User-Agent"] = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
         self.proxies = proxies or GLOBAL_PROXIES
         self.cookie_cache = CookieCache("universal")
         self.mediaflow_endpoint = "proxy_stream_endpoint"
@@ -53,16 +55,18 @@ class MixdropExtractor:
             p, a, c, k = match.groups()
             p = p.strip("'\"")
             a, c, k = int(a), int(c), k.split('|')
+
             def e(c):
                 res = ""
                 if c >= a: res = e(c // a)
                 return res + "0123456789abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ"[c % a]
+
             d = {e(i): (k[i] if k[i] else e(i)) for i in range(c)}
             for i in range(c):
                 if str(i) not in d: d[str(i)] = k[i] if k[i] else str(i)
             return re.sub(r'\b(\w+)\b', lambda m: d.get(m.group(1), m.group(1)), p)
         except Exception as e:
-            logger.debug(f"Unpack failed: {e}")
+            logger.debug("Unpack failed: %s", e)
             return packed_js
 
     async def extract(self, url: str, **kwargs) -> dict:
@@ -71,16 +75,16 @@ class MixdropExtractor:
         if cache_key in MixdropExtractor._result_cache:
             result, timestamp = MixdropExtractor._result_cache[cache_key]
             if time.time() - timestamp < 600:
-                logger.info(f"🚀 [Cache Hit] Using cached extraction result for: {normalized_url}")
+                logger.info("🚀 [Cache Hit] Using cached extraction result for: %s", normalized_url)
                 return result
 
-        logger.info(f"🔍 [Cache Miss] Extracting new link for: {normalized_url}")
+        logger.info("🔍 [Cache Miss] Extracting new link for: %s", normalized_url)
         proxy = get_proxy_for_url(normalized_url, TRANSPORT_ROUTES, self.proxies, self.bypass_warp_active)
         try:
             ua, cookies = self.base_headers.get("User-Agent"), {}
             if "/f/" in url: url = url.replace("/f/", "/e/")
             if "/mix/" in url: url = url.replace("/mix/", "/e/")
-            
+
             mirrors = [
                 url,
                 url.replace("mixdrop.co", "mixdrop.vip"),
@@ -89,7 +93,7 @@ class MixdropExtractor:
                 url.replace("mixdrop.co", "mixdrop.ps"),
                 url.replace("mixdrop.co", "mixdrop.ag"),
             ]
-            
+
             def _build_cs_proxies(pref_p):
                 if not pref_p:
                     return None
@@ -101,7 +105,7 @@ class MixdropExtractor:
                     m_headers = self._step_headers(ua, current_url)
                     pref_p = get_proxy_for_url(current_url, TRANSPORT_ROUTES, self.proxies, self.bypass_warp_active)
                     cs_proxies = _build_cs_proxies(pref_p)
-                    
+
                     async def fetch_page():
                         try:
                             scraper = self._get_scraper()
@@ -115,7 +119,8 @@ class MixdropExtractor:
                                 t = resp.text
                                 if not any(m in t.lower() for m in ["cf-challenge", "robot", "checking your browser"]):
                                     return t, str(resp.url), ua, dict(resp.cookies)
-                        except: pass
+                        except:
+                            pass
                         return None
 
                     async def _process_result(res):
@@ -123,15 +128,15 @@ class MixdropExtractor:
                             return None
                         html, final_url, ua_res, new_cookies = res
                         cookies.update(new_cookies)
-                        
+
                         if "eval(function(p,a,c,k,e,d)" in html:
                             for block in re.findall(r'eval\(function\(p,a,c,k,e,d\).*?\}\(.*\)\)', html, re.S):
                                 html += "\n" + self._unpack(block)
 
                         patterns = [
-                            r'(?:MDCore|vsConfig)\.wurl\s*=\s*["\']([^"\']+)["\']', 
-                            r'source\s*src\s*=\s*["\']([^"\']+)["\']', 
-                            r'file:\s*["\']([^"\']+)["\']', 
+                            r'(?:MDCore|vsConfig)\.wurl\s*=\s*["\']([^"\']+)["\']',
+                            r'source\s*src\s*=\s*["\']([^"\']+)["\']',
+                            r'file:\s*["\']([^"\']+)["\']',
                             r'["\'](https?://[^\s"\']+\.(?:mp4|m3u8)[^\s"\']*)["\']',
                             r'wurl\s*:\s*["\']([^"\']+)["\']'
                         ]
@@ -154,7 +159,8 @@ class MixdropExtractor:
                     result = await _process_result(direct_res)
                     if result:
                         return result
-                except: pass
+                except:
+                    pass
                 return None
 
             mirror_tasks = [asyncio.create_task(solve_url(m)) for m in mirrors]
@@ -172,7 +178,8 @@ class MixdropExtractor:
         headers = {"Referer": referer, "User-Agent": ua, "Origin": f"https://{urlparse(referer).netloc}"}
         if cookies:
             headers["Cookie"] = "; ".join([f"{k}={v}" for k, v in cookies.items()])
-        return {"destination_url": video_url, "request_headers": headers, "mediaflow_endpoint": self.mediaflow_endpoint, "bypass_warp": self.bypass_warp_active}
+        return {"destination_url": video_url, "request_headers": headers, "mediaflow_endpoint": self.mediaflow_endpoint,
+                "bypass_warp": self.bypass_warp_active}
 
     async def close(self):
         self._scraper = None

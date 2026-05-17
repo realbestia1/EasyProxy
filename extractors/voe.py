@@ -2,7 +2,9 @@ import base64
 import json
 import re
 from urllib.parse import urljoin
+
 from extractors.base import BaseExtractor, ExtractorError
+
 
 class VoeExtractor(BaseExtractor):
     def __init__(self, request_headers: dict, proxies: list = None):

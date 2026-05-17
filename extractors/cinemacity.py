@@ -1,21 +1,24 @@
+import aiohttp
 import base64
-import yarl
 import json
 import logging
 import random
 import re
 import urllib.parse
+import yarl
+from aiohttp import ClientSession, ClientTimeout, TCPConnector
 from typing import Any, Dict, Optional
 
-import aiohttp
-from aiohttp import ClientSession, ClientTimeout, TCPConnector
-from config import FLARESOLVERR_URL, FLARESOLVERR_TIMEOUT, get_proxy_for_url, TRANSPORT_ROUTES, GLOBAL_PROXIES, get_connector_for_proxy, get_solver_proxy_url
+from config import FLARESOLVERR_URL, FLARESOLVERR_TIMEOUT, get_proxy_for_url, TRANSPORT_ROUTES, GLOBAL_PROXIES, \
+    get_connector_for_proxy, get_solver_proxy_url
 
 logger = logging.getLogger(__name__)
+
 
 class ExtractorError(Exception):
     """Exception for extraction errors."""
     pass
+
 
 class CinemaCityExtractor:
     """CinemaCity m3u8 extractor (Direct URL only)."""
@@ -46,7 +49,8 @@ class CinemaCityExtractor:
             self.session = ClientSession(timeout=timeout, connector=connector, headers={'User-Agent': self.user_agent})
         return self.session
 
-    async def _request_flaresolverr(self, cmd: str, url: str = None, post_data: str = None, headers: dict | None = None) -> dict:
+    async def _request_flaresolverr(self, cmd: str, url: str = None, post_data: str = None,
+                                    headers: dict | None = None) -> dict:
         """Performs a request via FlareSolverr."""
         if not self.flaresolverr_url:
             raise ExtractorError("FlareSolverr URL not configured")
@@ -57,7 +61,7 @@ class CinemaCityExtractor:
             "maxTimeout": (self.flaresolverr_timeout + 60) * 1000,
         }
         fs_headers = {}
-        if url: 
+        if url:
             payload["url"] = url
             # Determina dinamicamente il proxy per questo specifico URL
             proxy = get_proxy_for_url(
@@ -67,7 +71,7 @@ class CinemaCityExtractor:
                 payload["proxy"] = {"url": proxy}
                 solver_proxy = get_solver_proxy_url(proxy)
                 fs_headers["X-Proxy-Server"] = solver_proxy
-                logger.debug(f"CinemaCity: Passing explicit proxy to solver: {solver_proxy}")
+                logger.debug("CinemaCity: Passing explicit proxy to solver: %s", solver_proxy)
 
         if post_data: payload["postData"] = post_data
         cookie_header = (headers or {}).get("Cookie") or (headers or {}).get("cookie")
@@ -89,21 +93,21 @@ class CinemaCityExtractor:
         async with aiohttp.ClientSession() as session:
             try:
                 async with session.post(
-                    endpoint,
-                    json=payload,
-                    headers=fs_headers,
-                    timeout=aiohttp.ClientTimeout(total=self.flaresolverr_timeout + 95),
+                        endpoint,
+                        json=payload,
+                        headers=fs_headers,
+                        timeout=aiohttp.ClientTimeout(total=self.flaresolverr_timeout + 95),
                 ) as resp:
                     if resp.status != 200:
                         raise ExtractorError(f"FlareSolverr HTTP {resp.status}")
                     data = await resp.json()
             except Exception as e:
-                logger.error(f"CinemaCity: FlareSolverr request failed ({cmd}): {e}")
+                logger.error("CinemaCity: FlareSolverr request failed (%s): %s", cmd, e)
                 raise ExtractorError(f"FlareSolverr bypass failed: {e}")
 
         if data.get("status") != "ok":
             raise ExtractorError(f"FlareSolverr ({cmd}): {data.get('message', 'unknown error')}")
-        
+
         return data
 
     async def _fetch_page(self, url: str, headers: dict) -> tuple[str, dict]:
@@ -116,7 +120,7 @@ class CinemaCityExtractor:
                         cookies = {k: v.value for k, v in resp.cookies.items()}
                         return html, cookies
         except Exception as e:
-            logger.debug(f"CinemaCity direct fetch failed: {e}")
+            logger.debug("CinemaCity direct fetch failed: %s", e)
 
         result = await self._request_flaresolverr("request.get", url, headers=headers)
         solution = result.get("solution", {})
@@ -129,13 +133,17 @@ class CinemaCityExtractor:
             missing_padding = len(data) % 4
             if missing_padding: data += '=' * (4 - missing_padding)
             decoded_bytes = base64.b64decode(data)
-            try: return decoded_bytes.decode('utf-8')
-            except: return decoded_bytes.decode('latin-1')
-        except: return ""
+            try:
+                return decoded_bytes.decode('utf-8')
+            except:
+                return decoded_bytes.decode('latin-1')
+        except:
+            return ""
 
     def get_session_cookies(self) -> str:
         # Fixed login cookies
-        return self.base64_decode("ZGxlX3VzZXJfaWQ9MzI3Mjk7IGRsZV9wYXNzd29yZD04OTQxNzFjNmE4ZGFiMThlZTU5NGQ1YzY1MjAwOWEzNTs=")
+        return self.base64_decode(
+            "ZGxlX3VzZXJfaWQ9MzI3Mjk7IGRsZV9wYXNzd29yZD04OTQxNzFjNmE4ZGFiMThlZTU5NGQ1YzY1MjAwOWEzNTs=")
 
     def extract_json_array(self, decoded: str) -> Optional[str]:
         start = decoded.find("file:")
@@ -145,9 +153,11 @@ class CinemaCityExtractor:
         if start == -1: return None
         depth = 0
         for i in range(start, len(decoded)):
-            if decoded[i] == "[": depth += 1
-            elif decoded[i] == "]": depth -= 1
-            if depth == 0: return decoded[start:i+1]
+            if decoded[i] == "[":
+                depth += 1
+            elif decoded[i] == "]":
+                depth -= 1
+            if depth == 0: return decoded[start:i + 1]
         return None
 
     def _collect_file_entries(self, items) -> list[dict]:
@@ -167,7 +177,8 @@ class CinemaCityExtractor:
         if isinstance(file_data, str): return file_data
         if isinstance(file_data, list):
             # Movie or flat list
-            if media_type == 'movie' or all(isinstance(x, dict) and "file" in x and "folder" not in x for x in file_data):
+            if media_type == 'movie' or all(
+                    isinstance(x, dict) and "file" in x and "folder" not in x for x in file_data):
                 return file_data[0].get('file') if file_data else None
 
             # Series (Season -> Episode)
@@ -198,18 +209,18 @@ class CinemaCityExtractor:
                 if episode_candidates:
                     ep_data = episode_candidates[idx] if idx < len(episode_candidates) else episode_candidates[0]
                     selected_ep = ep_data.get('file')
-            
+
             if selected_ep:
-                logger.debug(f"CinemaCity: Selected S{season}E{episode} -> {selected_ep[:50]}...")
+                logger.debug("CinemaCity: Selected S%sE%s -> %s...", season, episode, selected_ep[:50])
             else:
-                logger.warning(f"CinemaCity: Failed to find S{season}E{episode} in file_data")
-            
+                logger.warning("CinemaCity: Failed to find S%sE%s in file_data", season, episode)
+
             return selected_ep
         return None
 
     async def extract(self, url: str, **kwargs) -> dict:
         cookies = self.get_session_cookies()
-        
+
         # Get params from kwargs or infer from URL/query
         media_type = kwargs.get('type')
         if not media_type:
@@ -218,16 +229,19 @@ class CinemaCityExtractor:
                 media_type = "series"
             else:
                 media_type = "movie"
-        
+
         # Try to extract s/e from URL if not in kwargs
         url_params = urllib.parse.parse_qs(urllib.parse.urlparse(url).query)
-        
-        s_val = kwargs.get('s') or kwargs.get('season') or url_params.get('s', [None])[0] or url_params.get('season', ['1'])[0]
-        e_val = kwargs.get('e') or kwargs.get('episode') or url_params.get('e', [None])[0] or url_params.get('episode', ['1'])[0]
-        
+
+        s_val = kwargs.get('s') or kwargs.get('season') or url_params.get('s', [None])[0] or \
+                url_params.get('season', ['1'])[0]
+        e_val = kwargs.get('e') or kwargs.get('episode') or url_params.get('e', [None])[0] or \
+                url_params.get('episode', ['1'])[0]
+
         season = int(s_val) if str(s_val).isdigit() else 1
         episode = int(e_val) if str(e_val).isdigit() else 1
-        if media_type == "movie" and (url_params.get('s') or url_params.get('season') or url_params.get('e') or url_params.get('episode')):
+        if media_type == "movie" and (
+                url_params.get('s') or url_params.get('season') or url_params.get('e') or url_params.get('episode')):
             media_type = "series"
 
         headers = {
@@ -253,14 +267,14 @@ class CinemaCityExtractor:
             if len(encoded) < 50: continue
             decoded = self.base64_decode(encoded)
             if not decoded: continue
-            
+
             if decoded.strip().startswith("["):
                 try:
                     file_data = json.loads(decoded)
                     if file_data: break
                 except json.JSONDecodeError:
                     pass
-            
+
             raw_json = self.extract_json_array(decoded)
             if raw_json:
                 try:
@@ -272,7 +286,7 @@ class CinemaCityExtractor:
                     except json.JSONDecodeError:
                         pass
                 if file_data: break
-            
+
             file_match = re.search(r'(?:file|sources)\s*:\s*["\'](.*?)["\']', decoded, re.I)
             if file_match:
                 f_url = file_match.group(1)
@@ -285,7 +299,7 @@ class CinemaCityExtractor:
         if not stream_url: raise ExtractorError("Pick failed")
 
         safe_url = str(yarl.URL(stream_url, encoded=True))
-        
+
         # ✅ FIX: Unisci i cookie di sessione con quelli dinamici (Cloudflare/PHPSESSID)
         merged_cookies = {}
         # 1. Carica i cookie di sessione base
@@ -293,13 +307,13 @@ class CinemaCityExtractor:
             if "=" in c:
                 k, v = c.strip().split("=", 1)
                 merged_cookies[k] = v
-        
+
         # 2. Sovrascrivi/Aggiungi quelli dinamici
         if dynamic_cookies:
             merged_cookies.update(dynamic_cookies)
-            
+
         clean_cookies = "; ".join([f"{k}={v}" for k, v in merged_cookies.items()])
-        
+
         # Standard cookies don't strictly require a trailing semicolon
         clean_cookies = clean_cookies.strip().rstrip(';')
 
