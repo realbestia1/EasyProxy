@@ -58,7 +58,8 @@ from config import (
     SELECTED_PROXY_CONTEXT,
     mark_proxy_dead,
 )
-from extractors.generic import GenericHLSExtractor, ExtractorError
+from extractors.generic import GenericHLSExtractor
+from extractors.base import ExtractorError
 from services.manifest_rewriter import ManifestRewriter
 
 # Global registry for domains already bypassed in WARP to avoid redundant os.system calls
@@ -1540,7 +1541,7 @@ class HLSProxy:
                     and request.path.endswith("manifest.m3u8")
             ):
                 captured_url, captured_manifest, captured_headers, stored_at, entry_ttl, source_url = \
-                self.captured_hls_manifest_map[url_id]
+                    self.captured_hls_manifest_map[url_id]
                 if time.time() - stored_at <= entry_ttl:
                     self.captured_hls_manifest_map[url_id] = (
                         captured_url,
@@ -3108,7 +3109,7 @@ class HLSProxy:
                 # ✅ FIX LOG: Determine correct routing for display
                 if session_proxy:
                     routing = f"WARP (Cloudflare IP)" if (
-                                WARP_PROXY_URL and session_proxy == WARP_PROXY_URL) else f"PROXY ({session_proxy})"
+                            WARP_PROXY_URL and session_proxy == WARP_PROXY_URL) else f"PROXY ({session_proxy})"
                 else:
                     routing = "BYPASS (Real IP)"
 
