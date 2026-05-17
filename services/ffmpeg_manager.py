@@ -150,12 +150,12 @@ class FFmpegManager:
                 "-level", "4.1",
                 "-pix_fmt", "yuv420p",
                 # bitrate stabile
-                "-b:v", "3500k",
-                "-maxrate", "4200k",
+                "-b:v", "3000k",
+                "-maxrate", "3500k",
                 "-bufsize", "7000k",
                 # GOP aligned
-                "-g", "120",
-                "-keyint_min", "120",
+                "-g", "100",
+                "-keyint_min", "100",
                 "-sc_threshold", "0",
                 # AUDIO
                 "-c:a", "aac",
@@ -168,7 +168,7 @@ class FFmpegManager:
                 # HLS
                 "-f", "hls",
                 "-hls_time", "4",
-                "-hls_list_size", "6",
+                "-hls_list_size", "8",
                 "-hls_flags", "delete_segments+independent_segments",
                 "-hls_segment_type", "mpegts",
                 "-max_muxing_queue_size", "4096",
