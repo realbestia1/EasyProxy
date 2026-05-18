@@ -1,18 +1,17 @@
 import asyncio
 import logging
-import os
 import socket
-import sys
 import time
 from typing import Any
 from urllib.parse import urlparse
 
 import aiohttp
 from aiohttp import ClientSession, ClientTimeout, TCPConnector
-from playwright.async_api import TimeoutError as PlaywrightTimeoutError, async_playwright
+from playwright.async_api import TimeoutError as PlaywrightTimeoutError
 from yarl import URL
 
 from config import GLOBAL_PROXIES, TRANSPORT_ROUTES, get_connector_for_proxy, get_proxy_for_url
+from extractors.shared_browser import close_shared_browser, get_shared_browser_context
 
 logger = logging.getLogger(__name__)
 
@@ -48,7 +47,56 @@ class EmbedSportsExtractor:
         self._manifest_cache: dict[str, tuple[str, str, float, list[dict], dict[str, str]]] = {}
         self._manifest_cache_ttl = 12
         self._captured_cookies: list[dict] = []
-        self._live_pages: dict[str, Any] = {}
+        self._live_pages: dict[str, tuple[Any, float]] = {}
+        self._last_browser_extract: dict[str, float] = {}
+        self._last_activity = time.time()
+        self._watchdog_task = asyncio.create_task(self._browser_watchdog())
+
+    def _get_shared_activity_time(self) -> float:
+        import os
+        activity_file = os.path.join(os.getcwd(), "dlstreams_activity.txt")
+        try:
+            if os.path.exists(activity_file):
+                with open(activity_file, "r") as f:
+                    return float(f.read().strip())
+        except Exception:
+            pass
+        return self._last_activity
+
+    def _update_shared_activity(self):
+        import os
+        now = time.time()
+        self._last_activity = now
+        activity_file = os.path.join(os.getcwd(), "dlstreams_activity.txt")
+        try:
+            with open(activity_file, "w") as f:
+                f.write(str(now))
+        except Exception:
+            pass
+
+    async def _browser_watchdog(self):
+        while True:
+            await asyncio.sleep(10)
+            if self._context:
+                now = time.time()
+                for cache_key, (page, last_used) in list(self._live_pages.items()):
+                    if now - last_used <= 10:
+                        continue
+                    try:
+                        if not page.is_closed():
+                            await page.close()
+                    except Exception:
+                        pass
+                    self._live_pages.pop(cache_key, None)
+                    logger.info("💤 EmbedSports: chiusa pagina live inattiva per %s", cache_key)
+
+                last_activity = self._get_shared_activity_time()
+                if time.time() - last_activity > 30:
+                    logger.info("💤 EmbedSports: nessuna attività per 30 secondi. Chiusura browser condiviso...")
+                    await close_shared_browser()
+                    self._context = None
+                    self._browser = None
+                    self._playwright = None
 
     @staticmethod
     def _origin_of(url: str) -> str:
@@ -150,69 +198,62 @@ class EmbedSportsExtractor:
 
     async def _launch_browser(self):
         async with self._browser_launch_lock:
-            if self._browser and self._context:
-                try:
-                    await self._browser.version()
-                    return self._playwright, self._browser, self._context
-                except Exception:
-                    self._browser = None
-                    self._context = None
-
-            if not self._playwright:
-                self._playwright = await async_playwright().start()
-
-            # Try to connect to shared browser on port 9222
-            try:
-                self._browser = await self._playwright.chromium.connect_over_cdp(
-                    "http://localhost:9222",
-                    timeout=2000
-                )
-                logger.info("🔗 [Shared Browser] Connected to existing instance on port 9222")
-            except Exception:
-                chrome_path = os.getenv("CHROME_BIN") or os.getenv("CHROME_EXE_PATH")
-                executable_path = chrome_path if chrome_path and os.path.exists(chrome_path) else None
-                self._browser = await self._playwright.chromium.launch(
-                    headless=sys.platform.startswith("linux"),
-                    executable_path=executable_path,
-                    args=[
-                        "--remote-debugging-port=9222",
-                        "--disable-blink-features=AutomationControlled",
-                        "--no-sandbox",
-                        "--disable-dev-shm-usage",
-                        "--autoplay-policy=no-user-gesture-required",
-                    ],
-                )
-                logger.info("🚀 [Shared Browser] Launching new instance on port 9222")
-
-            # Always create a fresh context for embedsports-specific headers
-            self._context = await self._browser.new_context(
-                user_agent=self.base_headers["User-Agent"],
-                viewport={"width": 1366, "height": 768},
-                extra_http_headers={
-                    "Referer": f"{EMBEDSPORTS_ORIGIN}/",
-                    "Origin": EMBEDSPORTS_ORIGIN,
-                    "Accept-Language": self._get_header("Accept-Language", "en-US,en;q=0.9"),
-                },
+            self._playwright, self._browser, self._context = await get_shared_browser_context(
+                self.base_headers["User-Agent"]
             )
-
-            # Keep context alive with a dummy page
-            if not self._context.pages:
-                dummy_page = await self._context.new_page()
-                await dummy_page.goto("about:blank")
-
+            self._update_shared_activity()
             return self._playwright, self._browser, self._context
 
-    async def _capture_manifest(self, embed_url: str, force_refresh: bool = False) -> tuple[str, str]:
+    async def _http_refresh_manifest(self, cache_key: str, stream_url: str, extra_headers: dict | None = None) -> tuple[str, str] | None:
+        """Try to refresh manifest via HTTP with cached cookies. Returns None if it fails."""
+        try:
+            session = await self._get_session()
+            headers = self._build_playback_headers(stream_url)
+            if extra_headers:
+                headers.update(extra_headers)
+            async with session.get(
+                stream_url,
+                headers=headers,
+                timeout=aiohttp.ClientTimeout(total=10),
+                allow_redirects=True,
+            ) as resp:
+                if resp.status == 200:
+                    text = await resp.text()
+                    if text.lstrip().startswith("#EXTM3U"):
+                        return text, str(resp.url)
+        except Exception as exc:
+            logger.debug("EmbedSports HTTP refresh failed for %s: %s", stream_url, exc)
+        return None
+
+    async def _capture_manifest(self, embed_url: str, force_refresh: bool = False, request_headers: dict | None = None) -> tuple[str, str]:
         cache_key = self._cache_key(embed_url)
         lock = self._capture_locks.setdefault(cache_key, asyncio.Lock())
 
         async with lock:
             cached = self._manifest_cache.get(cache_key)
-            live_page = self._live_pages.get(cache_key)
-            if live_page and not live_page.is_closed() and cached:
-                if not force_refresh:
+            live_entry = self._live_pages.get(cache_key)
+            live_page = live_entry[0] if live_entry and not live_entry[0].is_closed() else None
+
+            # Try HTTP refresh first (fast path, no browser)
+            if force_refresh and cached:
+                if live_page:
+                    self._live_pages[cache_key] = (live_page, time.time())
+                http_result = await self._http_refresh_manifest(cache_key, cached[1], request_headers)
+                if http_result:
+                    manifest_text, manifest_url = http_result
+                    self._manifest_cache[cache_key] = (
+                        manifest_text, manifest_url, time.time(),
+                        self._captured_cookies, {manifest_url: manifest_text},
+                    )
+                    return manifest_text, manifest_url
+
+            # Reuse live page if available
+            if live_page and cached:
+                self._live_pages[cache_key] = (live_page, time.time())
+                if not force_refresh and time.time() - cached[2] < self._manifest_cache_ttl:
                     await self._nudge_playback(live_page)
                     return cached[0], cached[1]
+                # force_refresh or cache expired → reload live page
                 try:
                     await live_page.reload(wait_until="domcontentloaded", timeout=30000)
                     await live_page.wait_for_timeout(1500)
@@ -222,21 +263,30 @@ class EmbedSportsExtractor:
                         ).first.click(timeout=2500)
                     except Exception:
                         pass
-
                     deadline = time.time() + 8
                     last_seen = cached[2]
                     while time.time() < deadline:
                         refreshed = self._manifest_cache.get(cache_key)
                         if refreshed and refreshed[2] > last_seen:
+                            self._live_pages[cache_key] = (live_page, time.time())
                             return refreshed[0], refreshed[1]
                         await live_page.wait_for_timeout(500)
                 except Exception as exc:
                     logger.debug("EmbedSports live page reload failed for %s: %s", embed_url, exc)
                     self._live_pages.pop(cache_key, None)
-            if not force_refresh and cached and time.time() - cached[2] < self._manifest_cache_ttl:
-                manifest_text, stream_url, _, cookies, _ = cached
-                self._captured_cookies = cookies
-                return manifest_text, stream_url
+
+            # Return fresh or stale cache for non-force path
+            if not force_refresh and cached:
+                if time.time() - cached[2] < self._manifest_cache_ttl:
+                    manifest_text, stream_url, _, cookies, _ = cached
+                    self._captured_cookies = cookies
+                    return manifest_text, stream_url
+                logger.debug("EmbedSports cache expired, reusing stale for %s", embed_url)
+                self._manifest_cache[cache_key] = (
+                    cached[0], cached[1], time.time(), cached[3] or self._captured_cookies, cached[4]
+                )
+                self._captured_cookies = cached[3] or self._captured_cookies
+                return cached[0], cached[1]
 
             _, _, context = await self._launch_browser()
             page = await context.new_page()
@@ -330,7 +380,11 @@ class EmbedSportsExtractor:
                     self._captured_cookies,
                     captured_manifests,
                 )
-                self._live_pages[cache_key] = page
+                if len(self._manifest_cache) > 10:
+                    oldest = min(self._manifest_cache.keys(), key=lambda k: self._manifest_cache[k][2])
+                    self._manifest_cache.pop(oldest, None)
+                self._live_pages[cache_key] = (page, time.time())
+                self._update_shared_activity()
                 return manifest_text, manifest_url
             finally:
                 if not manifest_text:
@@ -344,13 +398,20 @@ class EmbedSportsExtractor:
             manifest_text, manifest_url = await self._capture_manifest(
                 url,
                 force_refresh=kwargs.get("force_refresh", False),
+                request_headers=kwargs.get("request_headers"),
             )
+            self._update_shared_activity()
+
+            cache_key = self._cache_key(url)
+            cached = self._manifest_cache.get(cache_key, (None, None, None, None, {}))
+            all_manifests = cached[4] if cached else {}
+
             return {
                 "destination_url": manifest_url,
                 "request_headers": self._build_playback_headers(manifest_url),
                 "mediaflow_endpoint": self.mediaflow_endpoint,
                 "captured_manifest": manifest_text,
-                "captured_manifests": self._manifest_cache[self._cache_key(url)][4],
+                "captured_manifests": all_manifests,
                 "bypass_warp": self.bypass_warp_active,
             }
         except PlaywrightTimeoutError as exc:
@@ -362,15 +423,18 @@ class EmbedSportsExtractor:
             raise ExtractorError(f"EmbedSports extraction failed: {exc}") from exc
 
     async def fetch_manifest_via_browser(self, embed_url: str, manifest_url: str) -> tuple[str, str] | None:
-        cache_key = self._cache_key(embed_url)
-        page = self._live_pages.get(cache_key)
-        if not page or page.is_closed():
-            await self._capture_manifest(embed_url, force_refresh=False)
-            page = self._live_pages.get(cache_key)
-        if not page or page.is_closed():
-            return None
-
+        _, _, context = await self._launch_browser()
+        page = await context.new_page()
         try:
+            try:
+                await page.goto(
+                    embed_url,
+                    wait_until="domcontentloaded",
+                    timeout=30000,
+                    referer=self._get_header("Referer", f"{EMBEDSPORTS_ORIGIN}/"),
+                )
+            except Exception:
+                pass
             text = await page.evaluate(
                 """async (manifestUrl) => {
                     const response = await fetch(manifestUrl, {
@@ -391,12 +455,13 @@ class EmbedSportsExtractor:
                 manifest_url,
             )
             if isinstance(text, str) and text.lstrip().startswith("#EXTM3U"):
+                cache_key = self._cache_key(embed_url)
                 cached = self._manifest_cache.get(cache_key)
                 if cached:
-                    manifest_text, stream_url, _, cookies, captured_manifests = cached
+                    m_text, stream_url, _, cookies, captured_manifests = cached
                     captured_manifests[manifest_url] = text
                     self._manifest_cache[cache_key] = (
-                        manifest_text,
+                        m_text,
                         stream_url,
                         time.time(),
                         cookies,
@@ -405,18 +470,12 @@ class EmbedSportsExtractor:
                 return text, manifest_url
         except Exception as exc:
             logger.debug("EmbedSports browser fetch failed for %s: %s", manifest_url, exc)
+        finally:
+            if not page.is_closed():
+                await page.close()
         return None
 
     async def close(self):
         if self.session and not self.session.closed:
             await self.session.close()
             self.session = None
-        if self._context:
-            await self._context.close()
-            self._context = None
-        if self._browser:
-            await self._browser.close()
-            self._browser = None
-        if self._playwright:
-            await self._playwright.stop()
-            self._playwright = None

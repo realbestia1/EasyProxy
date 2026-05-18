@@ -470,8 +470,13 @@ class HLSProxy:
                         refreshed_manifests = list(
                             (refreshed.get("captured_manifests") or {}).items()
                         )
+                        if not refreshed_manifests and refreshed.get("captured_manifest"):
+                            refreshed_manifests = [(
+                                refreshed.get("destination_url"),
+                                refreshed.get("captured_manifest"),
+                            )]
                         for refreshed_url, refreshed_manifest in reversed(refreshed_manifests):
-                            if urllib.parse.urlparse(refreshed_url).path.endswith(suffix):
+                            if refreshed_url and urllib.parse.urlparse(refreshed_url).path.endswith(suffix):
                                 refreshed_headers = refreshed.get("request_headers", captured_headers)
                                 self.captured_hls_manifest_map[url_id] = (
                                     refreshed_url,
@@ -2841,8 +2846,9 @@ class HLSProxy:
     async def _proxy_segment(self, request, segment_url, stream_headers, segment_name):
         """✅ NUOVO: Proxy dedicato per segmenti .ts con Content-Disposition"""
         try:
-            # Ping DLStreams extractor to keep browser alive during playback
-            ext = self.extractors.get("dlstreams") or self.extractors.get("dlstreams_direct")
+            # Ping browser-based extractors to keep shared browser alive
+            ext = (self.extractors.get("dlstreams") or self.extractors.get("dlstreams_direct")
+                   or self.extractors.get("embedsports") or self.extractors.get("embedsports_direct"))
             if ext and hasattr(ext, "_update_shared_activity"):
                 ext._update_shared_activity()
 
@@ -2945,8 +2951,9 @@ class HLSProxy:
         forced_proxy = forced_proxy or request.query.get("proxy") or None
 
         try:
-            # Ping DLStreams extractor to keep browser alive during playback
-            ext = self.extractors.get("dlstreams") or self.extractors.get("dlstreams_direct")
+            # Ping browser-based extractors to keep shared browser alive
+            ext = (self.extractors.get("dlstreams") or self.extractors.get("dlstreams_direct")
+                   or self.extractors.get("embedsports") or self.extractors.get("embedsports_direct"))
             if ext and hasattr(ext, "_update_shared_activity"):
                 ext._update_shared_activity()
 
