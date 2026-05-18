@@ -140,29 +140,39 @@ class FFmpegManager:
 
         cmd.extend([
             "-i", url,
-            # --- 1080p TRANSCODE for high quality ---
-            "-threads", "0",  # Use all CPU cores
-            "-vf", "scale=-2:1080",  # Scale to 1080p max height, keep aspect ratio
+            "-threads", "0",
+            # VIDEO
+            "-vf", "scale=-2:1080",
             "-c:v", "libx264",
-            "-preset", "ultrafast",
-            "-tune", "zerolatency",
-            "-crf", "24",
-            "-g", "60",
-            "-profile:v", "main",
-            # --- AUDIO ---
+            "-preset", "veryfast",
+            "-profile:v", "high",
+            "-level", "4.1",
+            "-pix_fmt", "yuv420p",
+            # bitrate stabile
+            "-b:v", "3000k",
+            "-maxrate", "3500k",
+            "-bufsize", "7000k",
+            # GOP aligned
+            "-g", "100",
+            "-keyint_min", "100",
+            "-sc_threshold", "0",
+            # AUDIO
             "-c:a", "aac",
-            "-b:a", "96k",
+            "-b:a", "128k",
             "-ac", "2",
-            "-ar", "44100",
-            "-bsf:v", "h264_mp4toannexb",
-            # --- Timestamp fixes ---
+            "-ar", "48000",
+            # TIMESTAMPS
+            "-fflags", "+genpts",
             "-avoid_negative_ts", "make_zero",
-            "-max_muxing_queue_size", "2048",
+            # HLS
             "-f", "hls",
-            "-hls_time", "2",
-            "-hls_list_size", "15",
+            "-hls_time", "4",
+            "-hls_list_size", "8",
             "-hls_flags", "delete_segments+independent_segments",
-            "-hls_segment_filename", os.path.join(stream_dir, "segment_%03d.ts"),
+            "-hls_segment_type", "mpegts",
+            "-max_muxing_queue_size", "4096",
+            "-hls_segment_filename",
+            os.path.join(stream_dir, "segment_%03d.ts"),
             playlist_path
         ])
         
