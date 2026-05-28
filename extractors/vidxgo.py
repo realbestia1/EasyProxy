@@ -251,12 +251,16 @@ class VidXgoExtractor:
         logger.info(f"vidxgo: extracted m3u8 for {url} -> {m3u8_url[:80]}...")
 
         # 3. Fetch master + each referenced variant playlist.
+        # Override referer/origin to match the actual CDN domain from the m3u8 URL.
+        m3u8_parsed = urlparse(m3u8_url)
+        m3u8_domain = f"{m3u8_parsed.scheme}://{m3u8_parsed.netloc}"
+        cdn_headers = {**playback_headers, "referer": f"{m3u8_domain}/", "origin": m3u8_domain}
         # We keep the manifests as VOD (with ENDLIST) so the player starts
         # from the beginning and seeking works correctly. CDN tokens (~5 min
         # TTL, visible as `e=` ms epoch) are rotated by EP's background
         # refresh loop, and the segment proxy handler rewrites the `t=`/`e=`
         # query of each segment to the latest captured value at fetch time.
-        master_text = await self._fetch(m3u8_url, playback_headers)
+        master_text = await self._fetch(m3u8_url, cdn_headers)
         if "#EXTM3U" not in master_text:
             raise ExtractorError("VidXgo: extracted URL did not return a valid HLS manifest")
 
@@ -286,7 +290,7 @@ class VidXgoExtractor:
         # still plays even if one rendition is broken.
         async def _grab(v_url: str) -> tuple[str, str | None]:
             try:
-                txt = await self._fetch(v_url, playback_headers)
+                txt = await self._fetch(v_url, cdn_headers)
                 return v_url, txt
             except Exception as e:
                 logger.warning(f"vidxgo: variant fetch failed {v_url[:80]}...: {e}")
@@ -305,7 +309,7 @@ class VidXgoExtractor:
         # 4. Return.
         return {
             "destination_url": m3u8_url,
-            "request_headers": playback_headers,
+            "request_headers": cdn_headers,
             "captured_manifest": master_text,
             "captured_manifests": captured_map,
             "mediaflow_endpoint": self.mediaflow_endpoint,
