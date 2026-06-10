@@ -648,14 +648,16 @@ class VixSrcExtractor:
         try:
             payload = json.loads(response.text)
         except json.JSONDecodeError:
-            # Try to extract JSON from HTML (FlareSolverr wraps JSON in <pre>)
+            text = None
+            # Try <pre> tag (Chrome JSON viewer wraps JSON in <pre>)
             pre_match = re.search(r"<pre[^>]*>(.*?)</pre>", response.text, re.DOTALL)
-            text = html.unescape(pre_match.group(1)) if pre_match else None
-            if not text:
-                # Try to find JSON object anywhere in response
-                json_match = re.search(r'(\{.*"src".*\})', response.text, re.DOTALL)
-                if json_match:
-                    text = json_match.group(1)
+            if pre_match:
+                text = html.unescape(pre_match.group(1))
+            else:
+                # Try direct JSON with HTML entities decoded
+                stripped = response.text.strip()
+                if stripped.startswith("{"):
+                    text = html.unescape(stripped)
             if text:
                 try:
                     payload = json.loads(text)
