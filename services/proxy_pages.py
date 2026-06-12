@@ -9,7 +9,7 @@ from services.proxy_shared import (
 )
 from extractors.registry import *
 import config_store
-from config import reload_config
+from config import reload_config, clear_proxy_affinity
 
 class HLSProxyPagesMixin:
 
@@ -692,7 +692,7 @@ class HLSProxyPagesMixin:
             "enable_warp", "warp_license_key",
             "global_proxies", "transport_routes", "extractor_proxies",
             "warp_off_extractors", "warp_exclude_domains_custom",
-            "mpd_mode", "dvr_enabled", "recordings_dir",
+            "mpd_mode", "dvr_enabled",
             "max_recording_duration", "recordings_retention_days",
             "enable_remuxing",
             "proxy_test_timeout", "proxy_test_concurrency", "segment_cache_ttl",
@@ -707,6 +707,7 @@ class HLSProxyPagesMixin:
         if updates:
             config_store.update(updates)
             reload_config()
+            clear_proxy_affinity()
             # Invalidate extractor cache if proxy-related settings changed
             if any(k in updates for k in ("global_proxies", "extractor_proxies", "transport_routes")):
                 self.extractors.clear()
@@ -725,6 +726,8 @@ class HLSProxyPagesMixin:
         enable = data.get("enable", False)
         config_store.set("enable_warp", bool(enable))
         reload_config()
+        clear_proxy_affinity()
+        self.extractors.clear()
         self._warp_check_ts = 0  # Force refresh on next status check
 
         status = "enabled" if enable else "disabled"
@@ -768,6 +771,8 @@ class HLSProxyPagesMixin:
 
         config_store.set("extractor_proxies", extractor_proxies)
         reload_config()
+        clear_proxy_affinity()
+        self.extractors.clear()
 
         return web.json_response({"status": "ok", "extractor": extractor, "proxy": proxy or None})
 
@@ -798,6 +803,8 @@ class HLSProxyPagesMixin:
                 return web.Response(status=400, text="Config must be a JSON object")
             config_store.replace_all(data)
             reload_config()
+            clear_proxy_affinity()
+            self.extractors.clear()
             return web.json_response({"status": "ok", "message": "Config imported successfully"})
         except json.JSONDecodeError:
             return web.Response(status=400, text="Invalid JSON file")

@@ -412,10 +412,6 @@
                 <span id="dvr-label" class="badge badge-off">OFF</span>
             </div>
             <div class="row">
-                <label>Directory</label>
-                <input type="text" id="dvr-dir" value="recordings" onchange="saveField('recordings_dir', this.value)">
-            </div>
-            <div class="row">
                 <label>Max Duration</label>
                 <input type="number" id="dvr-max" value="28800" min="60" onchange="saveField('max_recording_duration', parseInt(this.value))">
             </div>
@@ -502,7 +498,6 @@ async function loadConfig() {
         document.getElementById('mpd-mode').value = config.mpd_mode || 'legacy';
         setToggle('remux-toggle', config.enable_remuxing !== false);
         setToggle('dvr-toggle', config.dvr_enabled || false);
-        document.getElementById('dvr-dir').value = config.recordings_dir || 'recordings';
         document.getElementById('dvr-max').value = config.max_recording_duration || 28800;
         document.getElementById('dvr-retention').value = config.recordings_retention_days || 7;
         document.getElementById('proxy-test-timeout').value = config.proxy_test_timeout || 10;

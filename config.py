@@ -438,6 +438,10 @@ def mark_proxy_dead(proxy_url: str, dead_duration: int = 300):
 
 
 _proxy_affinity: dict = {}
+
+def clear_proxy_affinity():
+    _proxy_affinity.clear()
+
 def _get_stream_key(url: str) -> str | None:
     if not url:
         return None
@@ -487,7 +491,15 @@ def get_proxy_for_url(url: str, transport_routes: list = None, global_proxies: l
     if stream_key and stream_key in _proxy_affinity:
         cached_proxy, timestamp = _proxy_affinity[stream_key]
         if time.time() - timestamp < 120 and is_proxy_alive(cached_proxy):
-            return cached_proxy
+            # If cached proxy is WARP, validate WARP is still enabled
+            if cached_proxy == _WARP_PROXY_URL:
+                is_excluded = any(domain in url.lower() for domain in _WARP_EXCLUDE_DOMAINS)
+                if _ENABLE_WARP and not bypass_warp and not is_excluded:
+                    return cached_proxy
+                # WARP no longer valid, remove from cache
+                del _proxy_affinity[stream_key]
+            else:
+                return cached_proxy
 
     normalized_url = url.lower()
 
@@ -654,7 +666,7 @@ API_PASSWORD = os.environ.get("API_PASSWORD")
 PORT = int(os.environ.get("PORT", 7860))
 
 # --- Version/Mode Configuration ---
-APP_VERSION = "2.9.0"
+APP_VERSION = "2.9.01"
 
 _has_solvers = os.path.exists("flaresolverr")
 VERSION_MODE = "Full" if _has_solvers else "Light"
