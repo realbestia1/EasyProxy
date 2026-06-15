@@ -308,14 +308,14 @@
 
         .checkbox-grid {
             display: grid;
-            grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+            grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
             gap: 0.75rem;
             margin-bottom: 1.25rem;
         }
 
         .checkbox-label {
             display: flex;
-            align-items: center;
+            align-items: flex-start;
             gap: 10px;
             padding: 0.65rem 1rem;
             border-radius: var(--border-radius);
@@ -338,12 +338,20 @@
             accent-color: var(--accent-primary);
             cursor: pointer;
             flex-shrink: 0;
+            margin-top: 2px;
         }
 
         .checkbox-label code {
             font-family: 'Consolas', 'Monaco', 'Courier New', monospace;
             font-size: 0.78rem;
             color: var(--accent-primary);
+        }
+
+        .checkbox-desc {
+            font-size: 0.72rem;
+            color: var(--text-muted);
+            margin-top: 4px;
+            line-height: 1.35;
         }
 
         .btn-row {
@@ -607,23 +615,38 @@
                 <div class="checkbox-grid">
                     <label class="checkbox-label">
                         <input id="proxyRedirectStream" type="checkbox">
-                        <span>Add <code>redirect_stream=true</code></span>
+                        <div>
+                            <span>Add <code>redirect_stream=true</code></span>
+                            <div class="checkbox-desc">Redirects directly to the decrypted stream URL instead of proxying/segmenting all data chunks through this server.</div>
+                        </div>
                     </label>
                     <label class="checkbox-label">
                         <input id="proxyBypassWarp" type="checkbox">
-                        <span>Add <code>warp=off</code></span>
+                        <div>
+                            <span>Add <code>warp=off</code></span>
+                            <div class="checkbox-desc">Bypasses the Cloudflare WARP VPN for this specific stream, forcing the connection via the server's real IP.</div>
+                        </div>
                     </label>
                     <label class="checkbox-label">
                         <input id="proxyBypassProxy" type="checkbox">
-                        <span>Add <code>proxy=off</code></span>
+                        <div>
+                            <span>Add <code>proxy=off</code></span>
+                            <div class="checkbox-desc">Bypasses all configured custom proxies (global/per-extractor) for this stream, falling back to WARP/Direct.</div>
+                        </div>
                     </label>
                     <label class="checkbox-label">
                         <input id="proxyDisableSSL" type="checkbox">
-                        <span>Add <code>disable_ssl=1</code></span>
+                        <div>
+                            <span>Add <code>disable_ssl=1</code></span>
+                            <div class="checkbox-desc">Disables SSL certificate verification for this stream. Useful for resolving connection errors with self-signed CDNs.</div>
+                        </div>
                     </label>
                     <label class="checkbox-label">
                         <input id="proxyNativeMpd" type="checkbox">
-                        <span>Native MPD endpoint (<code>/proxy/mpd/manifest.mpd</code>)</span>
+                        <div>
+                            <span>Native MPD endpoint (<code>/proxy/mpd/manifest.mpd</code>)</span>
+                            <div class="checkbox-desc">Use the native MPD manifest rewriting engine (no HLS m3u8 conversion).</div>
+                        </div>
                     </label>
                 </div>
                 <div class="btn-row">
@@ -706,19 +729,31 @@
                 <div class="checkbox-grid">
                     <label class="checkbox-label">
                         <input id="extractorRedirectStream" type="checkbox">
-                        <span>Add <code>redirect_stream=true</code></span>
+                        <div>
+                            <span>Add <code>redirect_stream=true</code></span>
+                            <div class="checkbox-desc">Redirects directly to the decrypted stream URL instead of proxying/segmenting all data chunks through this server.</div>
+                        </div>
                     </label>
                     <label class="checkbox-label">
                         <input id="extractorBypassWarp" type="checkbox">
-                        <span>Add <code>warp=off</code></span>
+                        <div>
+                            <span>Add <code>warp=off</code></span>
+                            <div class="checkbox-desc">Bypasses the Cloudflare WARP VPN for this specific stream, forcing the connection via the server's real IP.</div>
+                        </div>
                     </label>
                     <label class="checkbox-label">
                         <input id="extractorBypassProxy" type="checkbox">
-                        <span>Add <code>proxy=off</code></span>
+                        <div>
+                            <span>Add <code>proxy=off</code></span>
+                            <div class="checkbox-desc">Bypasses all configured custom proxies (global/per-extractor) for this stream, falling back to WARP/Direct.</div>
+                        </div>
                     </label>
                     <label class="checkbox-label">
                         <input id="extractorDisableSSL" type="checkbox">
-                        <span>Add <code>disable_ssl=1</code></span>
+                        <div>
+                            <span>Add <code>disable_ssl=1</code></span>
+                            <div class="checkbox-desc">Disables SSL certificate verification for this stream. Useful for resolving connection errors with CDNs.</div>
+                        </div>
                     </label>
                 </div>
                 <div class="btn-row">
