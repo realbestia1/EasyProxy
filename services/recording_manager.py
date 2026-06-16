@@ -48,10 +48,6 @@ class RecordingManager:
     RECONNECT_TYPES = {StreamType.VAVOO, StreamType.FREESHOT,
                        StreamType.SPORTSONLINE, StreamType.MPD}
 
-    def __init__(self, recordings_dir: str):
-        self.recordings_dir = recordings_dir
-        if not os.path.exists(self.recordings_dir):
-            os.makedirs(self.recordings_dir)
         self.db = RecordingDB(recordings_dir)
         self.processes: Dict[str, asyncio.subprocess.Process] = {}
         self.start_times: Dict[str, float] = {}
