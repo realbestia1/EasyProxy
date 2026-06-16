@@ -43,9 +43,9 @@ def create_app():
     app['proxy'] = proxy
 
     # Initialize recording manager for DVR functionality
-    recording_manager = RecordingManager(
-        recordings_dir=RECORDINGS_DIR
-    )
+recording_manager = RecordingManager(
+    os.getenv("RECORDINGS_DIR", "/opt/render/project/src/storage/recordings")
+)
     app['recording_manager'] = recording_manager
     
     # Registra le route
