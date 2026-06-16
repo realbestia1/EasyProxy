@@ -179,15 +179,15 @@ class RecordingManager:
             params['api_password'] = API_PASSWORD
         return params
         
-def __init__(self, recordings_dir: Optional[str] = None):
-    default_dir = os.getenv("RECORDINGS_DIR", "/opt/render/project/src/storage/recordings")
-    self.recordings_dir = str(Path(recordings_dir or default_dir))
-    Path(self.recordings_dir).mkdir(parents=True, exist_ok=True)
+    def __init__(self, recordings_dir: Optional[str] = None):
+        default_dir = os.getenv("RECORDINGS_DIR", "/opt/render/project/src/storage/recordings")
+        self.recordings_dir = str(Path(recordings_dir or default_dir))
+        Path(self.recordings_dir).mkdir(parents=True, exist_ok=True)
 
-    self.db = RecordingDB(self.recordings_dir)
-    self.processes: Dict[str, asyncio.subprocess.Process] = {}
-    self.start_times: Dict[str, float] = {}
-    self._session: Optional[aiohttp.ClientSession] = None
+        self.db = RecordingDB(self.recordings_dir)
+        self.processes: Dict[str, asyncio.subprocess.Process] = {}
+        self.start_times: Dict[str, float] = {}
+        self._session: Optional[aiohttp.ClientSession] = None
     
     # =========================================================================
     # Master Playlist Parsing
