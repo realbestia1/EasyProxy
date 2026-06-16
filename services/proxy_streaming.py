@@ -1326,6 +1326,9 @@ class HLSProxyStreamingMixin:
             if forced_proxy and forced_proxy.lower() == "off":
                 forced_proxy = None
                 _shared.BYPASS_PROXIES_CONTEXT.set(True)
+            logger.debug(f"🔍 [Decrypt-DEBUG] bypass_warp={bypass_warp}, forced_proxy={forced_proxy}, warp_param='{request.query.get('warp', 'NOT_FOUND')}'")
+            proxy_from_config = get_proxy_for_url(url, bypass_warp=bypass_warp)
+            logger.debug(f"🔍 [Decrypt-DEBUG] get_proxy_for_url returned: {proxy_from_config}")
             segment_session, segment_proxy = await self._get_proxy_session(
                 url, bypass_warp=bypass_warp, forced_proxy=forced_proxy
             )
