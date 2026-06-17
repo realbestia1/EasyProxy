@@ -10,10 +10,8 @@ import urllib.request
 from dotenv import load_dotenv
 from config_store import get as _cfg_get, set as _cfg_set, get_all as _cfg_get_all
 
-APP_VERSION = "2.9.23"
+APP_VERSION = "2.9.24"
 
-_proxy_source_cache: dict[str, tuple[float, list]] = {}
-_PROXY_SOURCE_TTL = 600
 
 def get_extractor_proxies(extractor_name: str) -> list:
     """Returns proxies from config_store for the given extractor.
@@ -35,10 +33,6 @@ def get_extractor_proxies(extractor_name: str) -> list:
 
 
 def _read_proxy_source(source: str) -> list:
-    now = time.time()
-    cached = _proxy_source_cache.get(source)
-    if cached and (now - cached[0]) < _PROXY_SOURCE_TTL:
-        return cached[1]
     try:
         if source.startswith(("http://", "https://")):
             with urllib.request.urlopen(source, timeout=10) as resp:
@@ -51,7 +45,6 @@ def _read_proxy_source(source: str) -> list:
             line = line.strip()
             if line and not line.startswith("#"):
                 proxies.append(line)
-        _proxy_source_cache[source] = (now, proxies)
         return proxies
     except Exception as e:
         logger.warning(f"Error reading proxy source {source}: {e}")
@@ -539,10 +532,9 @@ def mark_proxy_dead(proxy_url: str, dead_duration: int = 300):
             _PROXY_STATUS_CACHE["last_check"] = now
 
 
-_proxy_affinity: dict = {}
-
 def clear_proxy_affinity():
-    _proxy_affinity.clear()
+    pass
+
 
 def _get_stream_key(url: str) -> str | None:
     if not url:
@@ -592,9 +584,6 @@ def get_proxy_for_url(
         if _ENABLE_WARP and not bypass_warp and not is_excluded:
             warp_alive = is_proxy_alive(_WARP_PROXY_URL)
             if warp_alive:
-                stream_key = _get_stream_key(url) if url else None
-                if stream_key:
-                    _proxy_affinity[stream_key] = (_WARP_PROXY_URL, time.time())
                 return _WARP_PROXY_URL
         return None
 
@@ -609,20 +598,7 @@ def get_proxy_for_url(
         if selected_proxy and STRICT_PROXY_CONTEXT.get():
             return selected_proxy
 
-    # Proxy affinity: keep the same proxy for the same stream
     stream_key = _get_stream_key(url)
-    if stream_key and stream_key in _proxy_affinity:
-        cached_proxy, timestamp = _proxy_affinity[stream_key]
-        if time.time() - timestamp < 120 and is_proxy_alive(cached_proxy):
-            # If cached proxy is WARP, validate WARP is still enabled
-            if cached_proxy == _WARP_PROXY_URL:
-                is_excluded = _is_warp_excluded(url)
-                if _ENABLE_WARP and not bypass_warp and not is_excluded:
-                    return cached_proxy
-                # WARP no longer valid, remove from cache
-                del _proxy_affinity[stream_key]
-            else:
-                return cached_proxy
 
     normalized_url = url.lower()
 
@@ -637,8 +613,6 @@ def get_proxy_for_url(
                 proxy_value = route.get("proxy")
                 if not proxy_value:
                     return None
-                if stream_key:
-                    _proxy_affinity[stream_key] = (proxy_value, time.time())
                 STRICT_PROXY_CONTEXT.set(True)
                 SELECTED_PROXY_CONTEXT.set(proxy_value)
                 return proxy_value
@@ -646,8 +620,6 @@ def get_proxy_for_url(
     # Explicit GLOBAL_PROXY wins over WARP. warp=off disables only WARP, not configured proxies.
     proxy = SELECTED_PROXY_CONTEXT.get()
     if proxy and is_proxy_alive(proxy):
-        if stream_key:
-            _proxy_affinity[stream_key] = (proxy, time.time())
         return proxy
 
     # Try next alive proxy from the same source list (extractor, proxy_file, etc.)
@@ -662,8 +634,6 @@ def get_proxy_for_url(
         STRICT_PROXY_CONTEXT.set(False)
 
     if proxy and is_proxy_alive(proxy):
-        if stream_key:
-            _proxy_affinity[stream_key] = (proxy, time.time())
         return proxy
 
     # Check if WARP should be used only when no explicit proxy is configured.
@@ -672,28 +642,20 @@ def get_proxy_for_url(
     if _ENABLE_WARP and not bypass_warp and not is_excluded:
         warp_alive = is_proxy_alive(_WARP_PROXY_URL)
         if warp_alive:
-            if stream_key:
-                _proxy_affinity[stream_key] = (_WARP_PROXY_URL, time.time())
             return _WARP_PROXY_URL
         return None
 
     proxy = SELECTED_PROXY_CONTEXT.get()
     if proxy and is_proxy_alive(proxy):
-        if stream_key:
-            _proxy_affinity[stream_key] = (proxy, time.time())
         return proxy
 
     proxy = _next_from_source(proxy)
     if proxy:
         SELECTED_PROXY_CONTEXT.set(proxy)
-        if stream_key:
-            _proxy_affinity[stream_key] = (proxy, time.time())
         return proxy
 
     proxy = random.choice(global_proxies) if global_proxies else None
     if proxy and is_proxy_alive(proxy):
-        if stream_key:
-            _proxy_affinity[stream_key] = (proxy, time.time())
         return proxy
 
     return None
@@ -855,7 +817,6 @@ def reload_config():
     mod.ENABLE_REMUXING = _cfg_get("enable_remuxing", True)
     mod.PROXY_TEST_TIMEOUT = _cfg_get("proxy_test_timeout", 10)
     mod.PROXY_TEST_CONCURRENCY = _get_dynamic_proxy_test_concurrency()
-    mod.SEGMENT_CACHE_TTL = _cfg_get("segment_cache_ttl", 30)
     mod.LOG_LEVEL_STR = _cfg_get("log_level", LOG_LEVEL_STR)
     _level = LOG_LEVEL_MAP.get(mod.LOG_LEVEL_STR.upper(), logging.WARNING)
     logging.getLogger().setLevel(_level)
@@ -891,7 +852,6 @@ def __getattr__(name):
         "WARP_LICENSE_KEY": lambda: _cfg_get("warp_license_key", ""),
         "PROXY_TEST_TIMEOUT": lambda: int(_cfg_get("proxy_test_timeout", 10)),
         "PROXY_TEST_CONCURRENCY": _get_dynamic_proxy_test_concurrency,
-        "SEGMENT_CACHE_TTL": lambda: int(_cfg_get("segment_cache_ttl", 30)),
         "LOG_LEVEL_STR": lambda: str(_cfg_get("log_level", "WARNING")),
     }
     getter = _dynamic_attrs.get(name)

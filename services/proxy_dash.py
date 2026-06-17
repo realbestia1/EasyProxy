@@ -1,4 +1,6 @@
+import base64
 import hashlib
+import json
 import time
 import aiohttp
 from urllib.parse import urljoin
@@ -17,18 +19,45 @@ from services.proxy_shared import (
     binascii,
 )
 
+
+def _encode_dash_state(base_url: str, headers: dict, clearkey: str | None) -> str:
+    """Encode DASH routing state into a compact base64url string."""
+    payload = json.dumps({
+        "b": base_url,
+        "h": headers,
+        "k": clearkey,
+    }, separators=(",", ":"), ensure_ascii=False)
+    return base64.urlsafe_b64encode(payload.encode()).decode().rstrip("=")
+
+
+def _decode_dash_state(token: str) -> tuple[str, dict, str | None] | None:
+    """Decode DASH routing state from base64url token."""
+    try:
+        padding = 4 - len(token) % 4
+        if padding != 4:
+            token += "=" * padding
+        payload = base64.urlsafe_b64decode(token).decode()
+        data = json.loads(payload)
+        return data.get("b", ""), data.get("h", {}), data.get("k")
+    except Exception:
+        return None
+
+
 class HLSProxyDashMixin:
 
     async def handle_dash_segment(self, request):
-        """Proxy for native DASH segments with optional ClearKey decryption."""
-        session_id = request.match_info.get("session_id")
+        """Proxy for native DASH segments with optional ClearKey decryption. Stateless."""
+        token = request.match_info.get("session_id")
         path = request.match_info.get("tail")
 
-        session = await self._get_dash_session(session_id)
-        if not session:
-            return web.Response(text="Session expired or invalid", status=404)
+        decoded = _decode_dash_state(token) if token else None
+        if not decoded:
+            return web.Response(text="Invalid or missing DASH state token", status=400)
 
-        base_url, headers, clearkey, init_segment, _ = session
+        base_url, headers, clearkey = decoded
+        if not base_url:
+            return web.Response(text="Missing base_url in DASH state", status=400)
+
         segment_url = urljoin(base_url, path)
 
         # Parse clearkey into KID and KEY for decrypter
@@ -48,56 +77,37 @@ class HLSProxyDashMixin:
 
                 content = await resp.read()
 
-                if is_init:
-                    # Update session with init segment for subsequent media segments
-                    self.dash_sessions[session_id] = (base_url, headers, clearkey, content, time.time())
-                    return web.Response(body=content, content_type=resp.content_type)
+                # For media segments with ClearKey, re-fetch init segment live (no cache)
+                if not is_init and kid and key and decrypt_segment:
+                    # Try to locate init segment URL by convention
+                    init_url = None
+                    dir_path = base_url.rstrip("/")
+                    # Common DASH init naming
+                    for candidate in ("init.m4s", "init.mp4", "header.m4s", "header.mp4"):
+                        candidate_url = urljoin(base_url, candidate)
+                        # Only try if it plausibly exists (same dir)
+                        if candidate_url.startswith(dir_path):
+                            init_url = candidate_url
+                            break
 
-                if kid and key and decrypt_segment:
-                    # Decrypt server-side
-                    try:
-                        decrypted = decrypt_segment(init_segment or b"", content, kid, key)
-                        return web.Response(body=decrypted, content_type=resp.content_type)
-                    except Exception as e:
-                        logger.warning(f"DASH decryption failed for {path}: {e}. Falling back to direct proxy.")
+                    if init_url:
+                        try:
+                            async with self.session.get(init_url, headers=headers, timeout=aiohttp.ClientTimeout(total=10)) as init_resp:
+                                if init_resp.status in [200, 206]:
+                                    init_segment = await init_resp.read()
+                                    try:
+                                        decrypted = decrypt_segment(init_segment or b"", content, kid, key)
+                                        return web.Response(body=decrypted, content_type=resp.content_type)
+                                    except Exception as e:
+                                        logger.warning(f"DASH decryption failed for {path}: {e}. Falling back to direct proxy.")
+                        except Exception as e:
+                            logger.debug(f"DASH init re-fetch failed for {path}: {e}")
 
                 return web.Response(body=content, content_type=resp.content_type)
 
         except Exception as e:
             logger.error(f"Error proxying DASH segment {path}: {e}")
             return web.Response(status=502)
-
-    async def _create_dash_session(self, base_url, headers, clearkey=None):
-        """Creates a new DASH session and returns its ID."""
-        await self._cleanup_dash_sessions()
-
-        # Deterministic ID based on content to avoid duplicates
-        raw = f"{base_url}|{clearkey}"
-        session_id = hashlib.md5(raw.encode()).hexdigest()[:16]
-
-        # (base_url, headers, clearkey, init_segment, timestamp)
-        self.dash_sessions[session_id] = (base_url, headers, clearkey, None, time.time())
-        return session_id
-
-    async def _get_dash_session(self, session_id):
-        """Retrieves a DASH session if it's not expired."""
-        session = self.dash_sessions.get(session_id)
-        if not session:
-            return None
-
-        _, _, _, _, timestamp = session
-        if time.time() - timestamp > self.dash_session_ttl:
-            del self.dash_sessions[session_id]
-            return None
-
-        return session
-
-    async def _cleanup_dash_sessions(self):
-        """Removes expired DASH sessions."""
-        now = time.time()
-        expired = [sid for sid, (_, _, _, _, ts) in self.dash_sessions.items() if now - ts > self.dash_session_ttl]
-        for sid in expired:
-            del self.dash_sessions[sid]
 
     async def handle_key_request(self, request):
         """✅ NUOVO: Gestisce richieste per chiavi AES-128"""

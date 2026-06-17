@@ -42,7 +42,6 @@ DEFAULT_CONFIG = {
     "enable_remuxing": True,
     "proxy_test_timeout": 10,
     "proxy_test_concurrency": None,
-    "segment_cache_ttl": 30,
     "log_level": "WARNING",
 }
 

@@ -14,7 +14,7 @@ from services.proxy_shared import (
     STRICT_PROXY_CONTEXT,
     ManifestRewriter,
     check_vavoo_request,
-    should_use_short_captured_manifest_urls,
+    should_use_short_manifest_urls,
     parse_clearkey_params,
     MPDToHLSConverter,
     get_ssl_setting_for_url,
@@ -62,11 +62,8 @@ class HLSProxyManifestHandlerMixin:
         try:
             extractor = None
 
-            # --- Gestione URL brevi (Shortened URLs) ---
+            # --- Gestione URL brevi (Shortened URLs, base64 only) ---
             url_id = request.query.get("hls_url_id")
-            if url_id and url_id in self.captured_hls_manifest_map:
-                captured_url, _, _, _, entry_ttl, _ = self.captured_hls_manifest_map[url_id]
-                target_url = captured_url
             if url_id and not target_url:
                 resolved = await self._resolve_url_id(url_id)
                 if resolved:
@@ -90,11 +87,6 @@ class HLSProxyManifestHandlerMixin:
                 "segment." in request.path
             )
             display_url = target_url
-            if url_id and url_id in self.captured_hls_manifest_map:
-                try:
-                    display_url = self.captured_hls_manifest_map[url_id][5] or target_url
-                except Exception:
-                    pass
             _shared.record_stream_activity(
                 get_client_ip(request),
                 display_url,
@@ -116,63 +108,9 @@ class HLSProxyManifestHandlerMixin:
                     header_name = param_name[2:]
                     combined_headers[header_name] = param_value
 
-            if (
-                url_id
-                and url_id in self.captured_hls_manifest_map
-                and request.path.endswith("manifest.m3u8")
-            ):
-                captured_url, captured_manifest, captured_headers, stored_at, entry_ttl, source_url = self.captured_hls_manifest_map[url_id]
-                if time.time() - stored_at <= entry_ttl:
-                    self.captured_hls_manifest_map[url_id] = (
-                        captured_url,
-                        captured_manifest,
-                        captured_headers,
-                        time.time(),
-                        entry_ttl,
-                        source_url,
-                    )
-                    scheme = request.headers.get("X-Forwarded-Proto", request.scheme)
-                    host = request.headers.get("X-Forwarded-Host", request.host)
-                    proxy_base = f"{scheme}://{host}"
-                    merged_headers = {**captured_headers, **combined_headers}
-                    rewritten_manifest = await ManifestRewriter.rewrite_manifest_urls(
-                        manifest_content=captured_manifest,
-                        base_url=captured_url,
-                        proxy_base=proxy_base,
-                        stream_headers=merged_headers,
-                        original_channel_url=request.query.get("orig_url") or source_url or request.query.get("url") or request.query.get("d", ""),
-                        api_password=request.query.get("api_password"),
-                        get_extractor_func=lambda url, headers, host=None: self.get_extractor(
-                            url, headers, host, bypass_warp=bypass_warp
-                        ),
-                        no_bypass=request.query.get("no_bypass") == "1",
-                        shorten_url_func=None,
-                        bypass_warp=bypass_warp,
-                        bypass_proxies=bypass_proxies,
-                        disable_ssl=request.query.get("disable_ssl") == "1",
-                        selected_proxy=selected_proxy,
-                        force_direct=force_direct,
-                        extractor_key=request.query.get("extractor_key"),
-                        stream_key=request.query.get("stream_key"),
-                    )
-                    return web.Response(
-                        text=rewritten_manifest,
-                        headers={
-                            "Content-Type": "application/vnd.apple.mpegurl",
-                            "Access-Control-Allow-Origin": "*",
-                            "Cache-Control": "no-cache",
-                        },
-                    )
-                self.captured_hls_manifest_map.pop(url_id, None)
-
             captured_manifest = None
             is_rewritten_hls_segment = request.path.startswith("/proxy/hls/segment.")
             if is_rewritten_hls_segment:
-                # For signed-token CDNs (e.g. VidXgo) the original `?d=` URL
-                # carries a short-lived token. If the latest captured manifest
-                # for the same stream has fresher tokens, use those instead so
-                # we never hit 403 on the upstream fetch.
-                target_url = self._refresh_segment_token(target_url) or target_url
                 extractor = None
                 stream_url = target_url
                 stream_headers = {}
@@ -263,8 +201,9 @@ class HLSProxyManifestHandlerMixin:
                         captured_manifest = await resp.text()
                         stream_url = str(resp.url)
 
-                # Create DASH session
-                session_id = await self._create_dash_session(
+                # Encode DASH routing state into base64 token (stateless, no server-side session)
+                from services.proxy_dash import _encode_dash_state
+                session_id = _encode_dash_state(
                     stream_url.rsplit('/', 1)[0] + '/',
                     stream_headers,
                     clearkey=parse_clearkey_params(request)
@@ -338,24 +277,8 @@ class HLSProxyManifestHandlerMixin:
                 original_channel_url = request.query.get("orig_url") or request.query.get("url") or request.query.get("d", "")
                 api_password = request.query.get("api_password")
                 no_bypass = request.query.get("no_bypass") == "1"
-                use_short_hls_urls = should_use_short_captured_manifest_urls(
-                    original_channel_url,
-                    request.query.get("host", ""),
-                )
                 is_vavoo_req = check_vavoo_request(combined_headers, request, stream_url)
                 disable_ssl = request.query.get("disable_ssl") == "1" or force_disable_ssl or is_vavoo_req
-
-                async def shorten_captured_manifest_url(manifest_url: str) -> str:
-                    captured_text = captured_manifests.get(manifest_url)
-                    if captured_text:
-                        return await self.store_captured_hls_manifest(
-                            manifest_url,
-                            captured_text,
-                            stream_headers,
-                            ttl=300,
-                            source_url=original_channel_url,
-                        )
-                    return await self.shorten_hls_url(manifest_url)
 
                 rewritten_manifest = await ManifestRewriter.rewrite_manifest_urls(
                     manifest_content=captured_manifest,
@@ -366,7 +289,7 @@ class HLSProxyManifestHandlerMixin:
                     api_password=api_password,
                     get_extractor_func=lambda url, headers, host=None: self.get_extractor(url, headers, host, bypass_warp=bypass_warp),
                     no_bypass=no_bypass,
-                    shorten_url_func=shorten_captured_manifest_url if use_short_hls_urls else None,
+                    shorten_url_func=self.shorten_hls_url,
                     bypass_warp=bypass_warp,
                     bypass_proxies=bypass_proxies,
                     disable_ssl=disable_ssl,

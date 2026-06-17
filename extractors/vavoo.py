@@ -35,8 +35,6 @@ class VavooExtractor:
         self.session = None
         self.mediaflow_endpoint = "proxy_stream_endpoint"
         self.proxies = proxies or _cfg.GLOBAL_PROXIES
-        self._cached_sig = None
-        self._cached_sig_ts = 0
         self._session_proxy = None
 
     def _get_random_proxy(self):
@@ -83,10 +81,6 @@ class VavooExtractor:
 
     async def _get_auth_signature(self) -> Optional[str]:
         """Get addon signature from lokke.app (aligned with plugin.video.vavooto)."""
-        # Cache signature for 5 minutes
-        if self._cached_sig and (time.time() - self._cached_sig_ts) < 300:
-            return self._cached_sig
-
         session = await self._get_session(_LOKKE_PING_URL)
         now_ms = int(time.time() * 1000)
         body = {
@@ -133,8 +127,6 @@ class VavooExtractor:
                         data = await resp.json()
                         sig = data.get("addonSig")
                         if sig:
-                            self._cached_sig = sig
-                            self._cached_sig_ts = time.time()
                             logger.debug("Got auth signature from lokke.app")
                             return sig
                     logger.warning(f"Ping attempt {attempt+1} failed: status {resp.status}")

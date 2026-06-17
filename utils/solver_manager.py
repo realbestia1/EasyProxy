@@ -17,6 +17,12 @@ logger = logging.getLogger(__name__)
 _mock_server_running = False
 _runner = None
 _sessions_proxies = {}
+_domain_locks = {}
+
+def _get_domain_lock(domain: str) -> asyncio.Lock:
+    if domain not in _domain_locks:
+        _domain_locks[domain] = asyncio.Lock()
+    return _domain_locks[domain]
 
 COOKIE_CACHE_FILE = os.path.normpath(os.path.normpath(os.path.join(os.path.dirname(__file__), "..", "cache", "solver_cookies.json")))
 
@@ -378,69 +384,72 @@ async def handle_v1_request(request):
                 return p.get("url", "direct")
             return str(p)
             
-        current_proxy_str = normalize_proxy_to_str(proxy)
         domain = urlparse(url).netloc
-        cache = _load_cookie_cache()
+        current_proxy_str = normalize_proxy_to_str(proxy)
         
-        # Check cache
-        cached_entry = cache.get(domain)
-        if cached_entry:
-            cached_proxy_str = cached_entry.get("proxy", "direct")
-            cache_age = time.time() - cached_entry.get("timestamp", 0)
+        # Per-domain lock: only one browser per domain at a time
+        async with _get_domain_lock(domain):
+            cache = _load_cookie_cache()
             
-            # Check if this domain was served from cache very recently
-            last_hit_time = _last_cache_hits.get(domain, 0)
-            time_since_last_hit = time.time() - last_hit_time
-            is_rapid_retry = time_since_last_hit < 15
-            
-            # Disable rapid retry check for POST requests to allow GET->POST sequences
-            if cmd == "request.post":
-                is_rapid_retry = False
-            
-            # Use cache ONLY if it's fresh (less than 1 hour), the proxy/IP has not changed, and it's not a rapid retry
-            if cache_age < 3600 and current_proxy_str == cached_proxy_str and not is_rapid_retry:
-                logger.info(f"Found cached cookies for domain: {domain} (age: {int(cache_age)}s, proxy: {current_proxy_str}). Verifying...")
-                res = await fetch_page_with_cached_cookies(
-                    url, 
-                    cached_entry["cookies"], 
-                    cached_entry["userAgent"], 
-                    proxy,
-                    post_data=post_data if cmd == "request.post" else None
-                )
-                if res:
-                    # Update cache hit timestamp
-                    _last_cache_hits[domain] = time.time()
-                    # Update the cache with any new cookies captured
-                    cached_entry["cookies"] = res["solution"]["cookies"]
-                    cached_entry["timestamp"] = time.time()
-                    cache[domain] = cached_entry
-                    _save_cookie_cache(cache)
-                    return web.json_response(res)
-            else:
-                reason = "stale" if cache_age >= 3600 else ("rapid retry / failed cache" if is_rapid_retry else "proxy/IP changed")
-                logger.info(f"Cached cookies for domain {domain} are invalid or failed ({reason}). Forcing new solver run.")
-                if is_rapid_retry:
-                    # Clear cache entry to prevent looping
-                    cache.pop(domain, None)
-                    _save_cookie_cache(cache)
+            # Check cache
+            cached_entry = cache.get(domain)
+            if cached_entry:
+                cached_proxy_str = cached_entry.get("proxy", "direct")
+                cache_age = time.time() - cached_entry.get("timestamp", 0)
                 
-        # Cache miss or verification failed, run SeleniumBase
-        loop = asyncio.get_running_loop()
-        res = await loop.run_in_executor(None, run_seleniumbase_request, url, proxy, post_data)
-        
-        if res.get("status") == "ok":
-            # Save new cookies to cache along with the proxy used
-            cache[domain] = {
-                "cookies": res["solution"]["cookies"],
-                "userAgent": res["solution"]["userAgent"],
-                "timestamp": time.time(),
-                "proxy": current_proxy_str
-            }
-            _save_cookie_cache(cache)
-            # Set the initial cache hit timestamp
-            _last_cache_hits[domain] = time.time()
+                # Check if this domain was served from cache very recently
+                last_hit_time = _last_cache_hits.get(domain, 0)
+                time_since_last_hit = time.time() - last_hit_time
+                is_rapid_retry = time_since_last_hit < 15
+                
+                # Disable rapid retry check for POST requests to allow GET->POST sequences
+                if cmd == "request.post":
+                    is_rapid_retry = False
+                
+                # Use cache ONLY if it's fresh (less than 1 hour), the proxy/IP has not changed, and it's not a rapid retry
+                if cache_age < 3600 and current_proxy_str == cached_proxy_str and not is_rapid_retry:
+                    logger.info(f"Found cached cookies for domain: {domain} (age: {int(cache_age)}s, proxy: {current_proxy_str}). Verifying...")
+                    res = await fetch_page_with_cached_cookies(
+                        url, 
+                        cached_entry["cookies"], 
+                        cached_entry["userAgent"], 
+                        proxy,
+                        post_data=post_data if cmd == "request.post" else None
+                    )
+                    if res:
+                        # Update cache hit timestamp
+                        _last_cache_hits[domain] = time.time()
+                        # Update the cache with any new cookies captured
+                        cached_entry["cookies"] = res["solution"]["cookies"]
+                        cached_entry["timestamp"] = time.time()
+                        cache[domain] = cached_entry
+                        _save_cookie_cache(cache)
+                        return web.json_response(res)
+                else:
+                    reason = "stale" if cache_age >= 3600 else ("rapid retry / failed cache" if is_rapid_retry else "proxy/IP changed")
+                    logger.info(f"Cached cookies for domain {domain} are invalid or failed ({reason}). Forcing new solver run.")
+                    if is_rapid_retry:
+                        # Clear cache entry to prevent looping
+                        cache.pop(domain, None)
+                        _save_cookie_cache(cache)
+                    
+            # Cache miss or verification failed, run SeleniumBase
+            loop = asyncio.get_running_loop()
+            res = await loop.run_in_executor(None, run_seleniumbase_request, url, proxy, post_data)
             
-        return web.json_response(res)
+            if res.get("status") == "ok":
+                # Save new cookies to cache along with the proxy used
+                cache[domain] = {
+                    "cookies": res["solution"]["cookies"],
+                    "userAgent": res["solution"]["userAgent"],
+                    "timestamp": time.time(),
+                    "proxy": current_proxy_str
+                }
+                _save_cookie_cache(cache)
+                # Set the initial cache hit timestamp
+                _last_cache_hits[domain] = time.time()
+                
+            return web.json_response(res)
         
     elif cmd == "sessions.create":
         session_id = f"sb-session-{uuid.uuid4()}"

@@ -289,6 +289,27 @@ class HLSProxyStreamingMixin:
                 request.query.get("stream_key"),
             )
 
+            # ✅ LIVE CDN TOKEN SUBSTITUTION: If the CDN token was refreshed via
+            # re-extract on 403, replace the old base URL with the new one so every
+            # subsequent segment gets a fresh token without re-extracting each time.
+            stream_key = request.query.get("stream_key")
+            if stream_key and stream_key in getattr(self, '_renewed_cdn_tokens', {}):
+                old_b, new_b, new_q = self._renewed_cdn_tokens[stream_key]
+                if stream_url.startswith(old_b):
+                    seg_name = stream_url[len(old_b):].split("?", 1)[0]
+                    stream_url = new_b + seg_name + new_q
+                    self._renewed_cdn_token_atimes[stream_key] = time.time()
+
+            # Inline cleanup of stale tokens (backstop for cleanup cycle)
+            now_ = time.time()
+            stale_tok = [
+                k for k, t in getattr(self, '_renewed_cdn_token_atimes', {}).items()
+                if now_ - t > 300
+            ]
+            for k in stale_tok:
+                self._renewed_cdn_tokens.pop(k, None)
+                self._renewed_cdn_token_atimes.pop(k, None)
+
             headers = dict(stream_headers)
 
             # Passa attraverso alcuni headers del client, ma FILTRA quelli che potrebbero leakare l'IP
@@ -491,102 +512,6 @@ class HLSProxyStreamingMixin:
                     timeout=segment_timeout if is_hls_segment_request else None,
                 )
 
-            async def retry_hls_segment_with_fresh_token():
-                if not request.path.startswith("/proxy/hls/segment."):
-                    return None
-                refreshed_url = self._refresh_segment_token(stream_url)
-                if not refreshed_url or refreshed_url == stream_url:
-                    refreshed = await self._refresh_captured_hls_for_segment(
-                        stream_url,
-                        bypass_warp=bypass_warp,
-                        forced_proxy=forced_proxy,
-                    )
-                    if not refreshed:
-                        return None
-                    refreshed_url = self._refresh_segment_token(stream_url)
-                    if not refreshed_url or refreshed_url == stream_url:
-                        return None
-
-                if force_direct:
-                    retry_session = await self._get_session(url=refreshed_url)
-                    retry_proxy = None
-                else:
-                    retry_session, retry_proxy = await self._get_proxy_session(
-                        refreshed_url,
-                        bypass_warp=bypass_warp,
-                        forced_proxy=forced_proxy,
-                    )
-
-                retry_disable_ssl = (
-                    request.query.get("h_X-EasyProxy-Disable-SSL") == "1"
-                    or request.query.get("disable_ssl") == "1"
-                    or get_ssl_setting_for_url(refreshed_url)
-                )
-
-                try:
-                    async with retry_session.get(
-                        yarl.URL(refreshed_url, encoded=True),
-                        headers=headers,
-                        ssl=not retry_disable_ssl,
-                        timeout=segment_timeout,
-                    ) as retry_resp:
-                        if retry_resp.status not in [200, 206]:
-                            retry_routing = (
-                                f"WARP ({retry_proxy})"
-                                if retry_proxy and _shared.WARP_PROXY_URL and retry_proxy == _shared.WARP_PROXY_URL
-                                else ("BYPASS" if retry_proxy is None else f"PROXY ({retry_proxy})")
-                            )
-                            logger.warning(
-                                "HLS segment token retry failed %s for %s [Routing: %s]",
-                                retry_resp.status,
-                                refreshed_url,
-                                retry_routing,
-                            )
-                            return None
-
-                        retry_content = await retry_resp.read()
-                        segment_was_stripped = False
-                        if request.path.endswith(".ts") or refreshed_url.endswith(".ts"):
-                            original_len = len(retry_content)
-                            retry_content = self._strip_fake_png_header_from_ts(retry_content)
-                            segment_was_stripped = len(retry_content) != original_len
-
-                        retry_headers = {}
-                        for header in [
-                            "content-type",
-                            "content-length",
-                            "content-range",
-                            "accept-ranges",
-                            "last-modified",
-                            "etag",
-                        ]:
-                            if header in retry_resp.headers:
-                                retry_headers[header] = retry_resp.headers[header]
-
-                        if (
-                            refreshed_url.endswith(".ts") or request.path.endswith(".ts")
-                        ) and "video/mp2t" not in retry_headers.get(
-                            "content-type", ""
-                        ).lower():
-                            set_response_header(retry_headers, "Content-Type", "video/MP2T")
-                        if segment_was_stripped:
-                            retry_headers.pop("content-range", None)
-                            retry_headers.pop("Content-Range", None)
-                            retry_headers.pop("accept-ranges", None)
-                            retry_headers.pop("Accept-Ranges", None)
-
-                        set_response_header(retry_headers, "Access-Control-Allow-Origin", "*")
-                        set_response_header(retry_headers, "Content-Length", str(len(retry_content)))
-                        logger.info("HLS segment recovered with refreshed token: %s", refreshed_url)
-                        return web.Response(
-                            body=retry_content,
-                            status=retry_resp.status,
-                            headers=retry_headers,
-                        )
-                except Exception as exc:
-                    logger.debug("HLS segment token retry failed for %s: %s", refreshed_url, exc)
-                    return None
-
             async def retry_with_different_proxy():
                 if forced_proxy or not session_proxy:
                     return None
@@ -622,31 +547,8 @@ class HLSProxyStreamingMixin:
                 except Exception as exc:
                     logger.debug("Proxy rotation direct retry failed: %s", exc)
 
-                # 2) Re-extract full manifest via new proxy, then retry segment
-                logger.info("Proxy rotation: re-extracting via %s", rot_proxy or "direct")
-                try:
-                    refreshed = await self._refresh_captured_hls_for_segment(
-                        stream_url,
-                        bypass_warp=True,
-                        forced_proxy=rot_proxy,
-                    )
-                    if refreshed:
-                        fresh_url = self._refresh_segment_token(stream_url)
-                        if fresh_url and fresh_url != stream_url:
-                            for _ in range(2):
-                                try:
-                                    fr_target = yarl.URL(fresh_url, encoded=True)
-                                    async with rot_session.get(fr_target, headers=headers, ssl=not disable_ssl, timeout=segment_timeout) as fr_resp:
-                                        if fr_resp.status in [200, 206]:
-                                            logger.info("Proxy rotation successful (re-extract): %s -> %s", old_proxy, rot_proxy or "direct")
-                                            fr_body = await fr_resp.read()
-                                            rh = dict(fr_resp.headers)
-                                            rh["Access-Control-Allow-Origin"] = "*"
-                                            return web.Response(body=fr_body, status=fr_resp.status, headers=rh)
-                                except Exception:
-                                    await asyncio.sleep(0.5)
-                except Exception as exc:
-                    logger.debug("Proxy rotation re-extract failed: %s", exc)
+                # 2) Re-extract not available (no captured manifest cache) — give up
+                logger.info("Proxy rotation: re-extract not available (live mode, no cache)")
                 return None
 
             async def retry_same_segment_after_payload_error(reason):
@@ -689,12 +591,15 @@ class HLSProxyStreamingMixin:
 
                 if resp.status not in [200, 206]:
                     if resp.status == 403:
-                        retry_response = await retry_hls_segment_with_fresh_token()
-                        if retry_response:
-                            return retry_response
                         rot_response = await retry_with_different_proxy()
                         if rot_response:
                             return rot_response
+                        # Last resort: re-extract to refresh signed CDN token (e.g. VidXgo)
+                        re_response = await self._reextract_and_retry_segment(
+                            request, stream_url, headers, bypass_warp, forced_proxy, force_direct, disable_ssl
+                        )
+                        if re_response:
+                            return re_response
                     if is_special_cdn and resp.status == 403 and not goto_manifest_processing:
                         retry_result = await self._retry_special_cdn_request(
                             request_target,
@@ -838,17 +743,6 @@ class HLSProxyStreamingMixin:
 
                     disable_ssl = request.query.get("disable_ssl") == "1" or get_ssl_setting_for_url(str(resp.url))
 
-                    # Check manifest cache
-                    cache_key = hashlib.md5(str(resp.url).encode()).hexdigest()
-                    if cache_key in self._manifest_cache:
-                        cached, cached_at = self._manifest_cache[cache_key]
-                        if time.time() - cached_at < self._manifest_cache_ttl:
-                            return web.Response(text=cached, headers={
-                                "Content-Type": "application/vnd.apple.mpegurl",
-                                "Access-Control-Allow-Origin": "*",
-                                "Cache-Control": "no-cache",
-                            })
-
                     rewritten = await ManifestRewriter.rewrite_manifest_urls(
                         manifest_content=manifest_content,
                         base_url=str(resp.url),
@@ -867,8 +761,6 @@ class HLSProxyStreamingMixin:
                         extractor_key=request.query.get("extractor_key"),
                         stream_key=request.query.get("stream_key"),
                     )
-                    self._manifest_cache[cache_key] = (rewritten, time.time())
-                    self._trim_cache(self._manifest_cache, max_size=100, trim_count=20)
                     return web.Response(text=rewritten, headers={
                         "Content-Type": "application/vnd.apple.mpegurl",
                         "Access-Control-Allow-Origin": "*",
@@ -1117,122 +1009,105 @@ class HLSProxyStreamingMixin:
             )
             return web.Response(text=f"Stream error: {err_msg}", status=500)
 
-    async def _prefetch_next_segments(
-        self, current_url, init_url, key, key_id, headers, bypass_warp: bool = False
+    async def _reextract_and_retry_segment(
+        self, request, stream_url, headers, bypass_warp, forced_proxy, force_direct, disable_ssl
     ):
-        """Identifica i prossimi segmenti e avvia il download in background."""
+        """Re-extract the source on 403 to refresh signed CDN tokens, then retry the segment."""
+        import urllib.parse as _up
+        from services.proxy_shared import ProxyDeadRetryError
+
+        orig_url = request.query.get("orig_url")
+        if not orig_url:
+            return None
+
+        # Only attempt for HLS segment requests with an extractor source URL
+        if not request.path.startswith("/proxy/hls/segment."):
+            return None
+
         try:
-            parsed = urllib.parse.urlparse(current_url)
-            path = parsed.path
+            extractor = await self.get_extractor(orig_url, headers, bypass_warp=bypass_warp)
+            if not extractor:
+                return None
 
-            match = self._SEGMENT_URL_PATTERN.search(path)
-            if not match:
-                return
+            refreshed = await extractor.extract(
+                orig_url,
+                force_refresh=True,
+                request_headers=headers,
+                bypass_warp=bypass_warp,
+                proxy=forced_proxy,
+            )
+        except Exception as exc:
+            logger.debug("Re-extract for segment 403 failed: %s", exc)
+            return None
 
-            separator, current_number, extension = match.groups()
-            current_num = int(current_number)
+        captured_manifests = refreshed.get("captured_manifests") or {}
+        master_url = refreshed.get("destination_url")
+        master_text = refreshed.get("captured_manifest")
+        if not master_text and master_url:
+            captured_manifests = {master_url: master_text} if master_text else {}
 
-            # Prefetch next 3 segments
-            for i in range(1, 4):
-                next_num = current_num + i
+        # Find the refreshed segment URL matching the requested segment filename
+        seg_filename = stream_url.rsplit("/", 1)[-1].split("?")[0]
+        fresh_url = None
+        for m_url, m_text in captured_manifests.items():
+            for line in (m_text or "").splitlines():
+                line = line.strip()
+                if not line or line.startswith("#"):
+                    continue
+                abs_url = _up.urljoin(m_url, line)
+                if abs_url.rsplit("/", 1)[-1].split("?")[0] == seg_filename:
+                    fresh_url = abs_url
+                    break
+            if fresh_url:
+                break
 
-                # Replace number in path
-                pattern = f"{separator}{current_number}{re.escape(extension)}$"
-                replacement = f"{separator}{next_num}{extension}"
-                new_path = re.sub(pattern, replacement, path)
+        if not fresh_url or fresh_url.rsplit("/", 1)[-1].split("?")[0] != seg_filename:
+            logger.debug("Re-extract: could not locate %s in refreshed manifest", seg_filename)
+            return None
 
-                # Reconstruct URL
-                next_url = urllib.parse.urlunparse(parsed._replace(path=new_path))
-
-                cache_key = f"{next_url}:{key_id}"
-
-                async with self._prefetch_lock:
-                    if (
-                        cache_key not in self.segment_cache
-                        and cache_key not in self.prefetch_tasks
-                    ):
-                        self.prefetch_tasks.add(cache_key)
-                        asyncio.create_task(
-                            self._fetch_and_cache_segment(
-                                next_url,
-                                init_url,
-                                key,
-                                key_id,
-                                headers,
-                                cache_key,
-                                bypass_warp=bypass_warp,
-                            )
-                        )
-
-        except Exception as e:
-            logger.warning(f"⚠️ Prefetch error: {e}")
-
-    async def _fetch_and_cache_segment(
-        self, url, init_url, key, key_id, headers, cache_key, bypass_warp: bool = False
-    ):
-        """Scarica, decripta e mette in cache un segmento in background."""
-        async with self._prefetch_semaphore:
-            try:
-                if decrypt_segment is None:
-                    return
-
-                # Ensure dynamic WARP bypass for prefetch
-                await self._check_dynamic_warp_bypass(url)
-
-                session, _ = await self._get_proxy_session(url, bypass_warp=bypass_warp)
-
-                # Download Init (usa cache se possibile)
-                init_content = b""
-                if init_url:
-                    if init_url in self.init_cache:
-                        init_content = self.init_cache[init_url]
-                    else:
-                        disable_ssl = get_ssl_setting_for_url(init_url)
-                        try:
-                            async with session.get(
-                                init_url,
-                                headers=headers,
-                                ssl=not disable_ssl,
-                                timeout=aiohttp.ClientTimeout(total=10),
-                            ) as resp:
-                                if resp.status == 200:
-                                    init_content = await resp.read()
-                                    self.init_cache[init_url] = init_content
-                                    self._trim_cache(self.init_cache)
-                        except Exception as e:
-                            logger.debug("Failed to cache init segment %s: %s", init_url, e)
-
-                # Download Segment
-                segment_content = None
-                disable_ssl = get_ssl_setting_for_url(url)
-                try:
-                    async with session.get(
-                        url,
-                        headers=headers,
-                        ssl=not disable_ssl,
-                        timeout=aiohttp.ClientTimeout(total=15),
-                    ) as resp:
-                        if resp.status == 200:
-                            segment_content = await resp.read()
-                except Exception as e:
-                    logger.debug("Failed to fetch segment %s: %s", url, e)
-
-                if segment_content:
-                    # Decrypt in thread pool to avoid blocking event loop
-                    loop = asyncio.get_event_loop()
-                    decrypted_content = await loop.run_in_executor(
-                        None, decrypt_segment, init_content, segment_content, key_id, key
+        # Fetch the segment with the fresh token
+        try:
+            if force_direct:
+                retry_session = await self._get_session(url=fresh_url)
+            else:
+                retry_session, _ = await self._get_proxy_session(
+                    fresh_url, bypass_warp=bypass_warp, forced_proxy=forced_proxy,
+                )
+            import yarl
+            target = yarl.URL(fresh_url, encoded=True)
+            async with retry_session.get(
+                target,
+                headers=headers,
+                ssl=not disable_ssl,
+                timeout=aiohttp.ClientTimeout(total=30),
+            ) as fr_resp:
+                if fr_resp.status not in [200, 206]:
+                    logger.warning(
+                        "Re-extract segment retry still failed %d for %s",
+                        fr_resp.status, fresh_url,
                     )
+                    return None
+                body = await fr_resp.read()
+                rh = {"Access-Control-Allow-Origin": "*", "Content-Type": "video/MP2T"}
+                logger.info("✅ Segment recovered via re-extract: %s", seg_filename)
 
-                    self.segment_cache[cache_key] = (decrypted_content, time.time())
-                    self._trim_cache(self.segment_cache)
-                    logger.info(f"📦 Prefetched segment: {url.split('/')[-1]}")
+                # Save refreshed CDN base URL for this stream_key so subsequent
+                # segments use the new token without re-extracting each time.
+                stream_key = request.query.get("stream_key")
+                if stream_key:
+                    old_base_dir = stream_url.rsplit("/", 1)[0] + "/"
+                    new_base_dir = fresh_url.rsplit("/", 1)[0] + "/"
+                    new_qs = ""
+                    if "?" in fresh_url:
+                        new_qs = "?" + fresh_url.split("?", 1)[1]
+                    self._renewed_cdn_tokens[stream_key] = (old_base_dir, new_base_dir, new_qs)
+                    self._renewed_cdn_token_atimes[stream_key] = time.time()
+                    logger.info("🔑 CDN token saved for stream_key=%s — subsequent segments skip re-extract", stream_key[:8])
 
-            except Exception as e:
-                logger.debug("Segment prefetch failed for %s: %s", url.split('/')[-1], e)
-            finally:
-                if cache_key in self.prefetch_tasks:
-                    self.prefetch_tasks.remove(cache_key)
+                return web.Response(body=body, status=fr_resp.status, headers=rh)
+        except Exception as exc:
+            logger.debug("Re-extract segment fetch error: %s", exc)
+            return None
 
     async def _remux_to_ts(self, content):
         """Converte segmenti (fMP4) in MPEG-TS usando FFmpeg pipe."""
@@ -1296,26 +1171,6 @@ class HLSProxyStreamingMixin:
                 text="Decrypt not available (MPD_MODE is ffmpeg or disabled)", status=503
             )
 
-        # Check cache first
-
-        cache_key = f"{url}:{key_id}:ts"  # Use distinct cache key for TS
-        if cache_key in self.segment_cache:
-            cached_content, cached_time = self.segment_cache[cache_key]
-            if time.time() - cached_time < config_store.get("segment_cache_ttl", 30):
-                logger.info(f"📦 Cache HIT for segment: {url.split('/')[-1]}")
-                return web.Response(
-                    body=cached_content,
-                    status=200,
-                    headers={
-                        "Content-Type": "video/MP2T",
-                        "Access-Control-Allow-Origin": "*",
-                        "Cache-Control": "no-cache",
-                        "Connection": "keep-alive",
-                    },
-                )
-            else:
-                del self.segment_cache[cache_key]
-
         try:
             # Ricostruisce gli headers per le richieste upstream
             headers = {"Connection": "keep-alive", "Accept-Encoding": "identity"}
@@ -1344,8 +1199,6 @@ class HLSProxyStreamingMixin:
                 async def fetch_init():
                     if not init_url:
                         return b""
-                    if init_url in self.init_cache:
-                        return self.init_cache[init_url]
                     disable_ssl = get_ssl_setting_for_url(init_url)
                     try:
                         async with segment_session.get(
@@ -1356,8 +1209,6 @@ class HLSProxyStreamingMixin:
                         ) as resp:
                             if resp.status == 200:
                                 content = await resp.read()
-                                self.init_cache[init_url] = content
-                                self._trim_cache(self.init_cache)
                                 return content
                             logger.error(
                                 f"❌ Init segment returned status {resp.status}: {init_url}"
@@ -1432,15 +1283,6 @@ class HLSProxyStreamingMixin:
                 logger.debug("⏩ Remuxing disabled, serving raw fMP4")
                 ts_content = combined_content
                 content_type = "video/mp4"
-
-            # Store in cache
-            self.segment_cache[cache_key] = (ts_content, time.time())
-            self._trim_cache(self.segment_cache)
-
-            # Prefetch next segments in background
-            await self._prefetch_next_segments(
-                url, init_url, key, key_id, headers, bypass_warp=bypass_warp
-            )
 
             # Invia Risposta
             return web.Response(

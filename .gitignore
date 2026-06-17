@@ -11,3 +11,4 @@ config.json
 /downloaded_files
 /cache
 /tests
+/graphify-out

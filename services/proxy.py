@@ -30,31 +30,25 @@ class HLSProxy(
         else:
             self.playlist_builder = None
 
-        # Cache per segmenti di inizializzazione (URL -> content)
-        self.init_cache = {}
-
-        # Cache per segmenti decriptati (URL -> (content, timestamp))
-        self.segment_cache = {}
-
-        # Prefetch queue for background downloading
+        # Prefetch queue for background downloading (kept for prefetch logic, no segment cache storage)
         self.prefetch_tasks = set()
         self._prefetch_semaphore = asyncio.Semaphore(5)
         self._prefetch_lock = asyncio.Lock()
-        self._manifest_cache = {}
-        self._manifest_cache_ttl = 5
 
         # Sessione condivisa per il proxy (no proxy)
         self.session = None
         self.flex_session = None
-
-        self.captured_hls_manifest_map = {}
-        self.captured_hls_refresh_tasks = {}
 
         # Cache for proxy sessions (proxy_url -> session)
         # This reuses connections for the same proxy to improve performance
         self.proxy_sessions = {}
         self._proxy_session_atimes = {}  # proxy_url -> last access time
         self.curl_sessions = {}  # Registry for pooled curl_cffi sessions
+
+        # Refreshed CDN tokens for live token substitution after re-extract on 403.
+        # stream_key -> (old_base_dir, new_base_dir, new_query_string_with_leading_question_mark)
+        self._renewed_cdn_tokens: dict[str, tuple[str, str, str]] = {}
+        self._renewed_cdn_token_atimes: dict[str, float] = {}
 
         # Template cache (read once, serve many)
         self._template_cache = {}
@@ -64,11 +58,6 @@ class HLSProxy(
         self.latest_version = "Checking..."
         self.warp_status = "Checking..."
         self._warp_ip = ""
-
-        # Registry for DASH native sessions (to handle segment proxying without HLS conversion)
-        # session_id -> (base_url, headers, clearkey, timestamp)
-        self.dash_sessions = {}
-        self.dash_session_ttl = 21600  # 6 hours
 
 
 

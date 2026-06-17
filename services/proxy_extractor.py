@@ -10,7 +10,6 @@ from services.proxy_shared import (
     ManifestRewriter,
 )
 import config_store
-from extractors.provider_hooks import requires_captured_manifest_proxy
 from config import FLARESOLVERR_URL
 import asyncio
 import base64
@@ -265,66 +264,33 @@ class HLSProxyExtractorHandlerMixin:
                 is_vavoo_req = check_vavoo_request(stream_headers, request, stream_url)
                 disable_ssl = request.query.get("disable_ssl") == "1" or force_disable_ssl or is_vavoo_req
 
-                async def shorten_captured_manifest_url(manifest_url: str) -> str:
-                    captured_text = captured_manifests.get(manifest_url)
-                    if captured_text:
-                        return await self.store_captured_hls_manifest(
-                            manifest_url,
-                            captured_text,
-                            stream_headers,
-                            source_url=original_channel_url,
-                        )
-                    return await self.shorten_hls_url(manifest_url)
-
-                # Signed HLS providers need direct captured manifest responses so
-                # segment retries can refresh stale tokenized URLs.
-                extractor_name = getattr(extractor, 'extractor_name', None)
-                uses_captured_manifest = extractor_name in {"vidxgo"}
-                if uses_captured_manifest:
-                    rewritten_manifest = await ManifestRewriter.rewrite_manifest_urls(
-                        manifest_content=captured_manifest,
-                        base_url=stream_url,
-                        proxy_base=proxy_base,
-                        stream_headers=stream_headers,
-                        original_channel_url=original_channel_url,
-                        api_password=api_password,
-                        get_extractor_func=lambda url, headers, host=None: self.get_extractor(
-                            url, headers, host, bypass_warp=bypass_warp
-                        ),
-                        no_bypass=no_bypass,
-                        shorten_url_func=shorten_captured_manifest_url,
-                        bypass_warp=bypass_warp,
-                        bypass_proxies=bypass_proxies,
-                        disable_ssl=disable_ssl,
-                        selected_proxy=selected_proxy,
-                        force_direct=force_direct,
-                        extractor_key=extractor_key,
-                        stream_key=stream_key,
-                    )
-                    return web.Response(
-                        text=rewritten_manifest,
-                        headers={
-                            "Content-Type": "application/vnd.apple.mpegurl",
-                            "Access-Control-Allow-Origin": "*",
-                            "Cache-Control": "no-cache",
-                        },
-                    )
-                else:
-                    for man_url in captured_manifests:
-                        await shorten_captured_manifest_url(man_url)
-
-            if (
-                redirect_stream
-                and endpoint == "/proxy/hls/manifest.m3u8"
-                and requires_captured_manifest_proxy(host_param, url, stream_url)
-            ):
-                logger.warning(
-                    "Captured manifest required for %s, refusing direct redirect",
-                    host_param or url,
+                rewritten_manifest = await ManifestRewriter.rewrite_manifest_urls(
+                    manifest_content=captured_manifest,
+                    base_url=stream_url,
+                    proxy_base=proxy_base,
+                    stream_headers=stream_headers,
+                    original_channel_url=original_channel_url,
+                    api_password=api_password,
+                    get_extractor_func=lambda url, headers, host=None: self.get_extractor(
+                        url, headers, host, bypass_warp=bypass_warp
+                    ),
+                    no_bypass=no_bypass,
+                    shorten_url_func=self.shorten_hls_url,
+                    bypass_warp=bypass_warp,
+                    bypass_proxies=bypass_proxies,
+                    disable_ssl=disable_ssl,
+                    selected_proxy=selected_proxy,
+                    force_direct=force_direct,
+                    extractor_key=extractor_key,
+                    stream_key=stream_key,
                 )
                 return web.Response(
-                    text="Captured manifest required for this extractor",
-                    status=502,
+                    text=rewritten_manifest,
+                    headers={
+                        "Content-Type": "application/vnd.apple.mpegurl",
+                        "Access-Control-Allow-Origin": "*",
+                        "Cache-Control": "no-cache",
+                    },
                 )
 
             # 1. URL COMPLETO (Solo per il redirect)
@@ -335,23 +301,15 @@ class HLSProxyExtractorHandlerMixin:
                 full_proxy_url += "&redirect_stream=true"
 
             if redirect_stream:
-                # For Vavoo, proxy the stream directly instead of returning a 302 redirect
-                # because Vavoo URLs/tokens change frequently and are highly dynamic.
-                is_vavoo = (host_param or "").lower() == "vavoo" or "vavoo.to" in url.lower() or "vavoo.tv" in url.lower()
-                if is_vavoo:
-                    logger.info("[PLAY] Vavoo stream detected: proxying directly without redirect")
-                    return await self._proxy_stream(
-                        request,
-                        stream_url,
-                        stream_headers,
-                        bypass_warp=bypass_warp,
-                        forced_proxy=selected_proxy,
-                        force_direct=force_direct,
-                    )
-
-                logger.info("↪️ Redirecting extractor result to proxy endpoint: %s", endpoint)
-                logger.debug(f"↪️ Redirecting to: {full_proxy_url}")
-                return web.HTTPFound(full_proxy_url)
+                logger.info("[PLAY] Proxying stream directly without redirect")
+                return await self._proxy_stream(
+                    request,
+                    stream_url,
+                    stream_headers,
+                    bypass_warp=bypass_warp,
+                    forced_proxy=selected_proxy,
+                    force_direct=force_direct,
+                )
 
             # 2. URL PULITO (Per il JSON stile MediaFlow)
             q_params = {}

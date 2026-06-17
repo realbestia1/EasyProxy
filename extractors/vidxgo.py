@@ -3,9 +3,7 @@ VidXgo extractor.
 
 Decodes the obfuscated player at v.vidxgo.co / vidxgo.* and returns the master
 HLS playlist. CDN signed URLs on the .ts segments have a ~5 min TTL. Always
-re-fetches the embed page on each extract() call to get fresh tokens. Token
-refresh happens transparently at the segment level via
-`_refresh_segment_token()` when a 403 is returned.
+re-fetches the embed page on each extract() call to get fresh tokens.
 """
 
 import asyncio
@@ -71,8 +69,6 @@ class VidXgoExtractor:
         self.selected_proxy = None
         self.session = None
         self.mediaflow_endpoint = "hls_proxy"
-        self._result_cache = {}
-        self._cached_log_ts = 0
 
         # Headers used for fetching the embed page.
         # NOTE: the host enforces presence of Sec-Fetch-* headers; without them
@@ -207,18 +203,6 @@ class VidXgoExtractor:
         }
 
         bypass_warp = bool(kwargs.get("bypass_warp"))
-        cache_key = (url, vd_domain, kwargs.get("proxy") or "", bypass_warp)
-        cached = self._result_cache.get(cache_key)
-        if cached:
-            cached_ts, cached_result = cached
-            # Background refresh can be triggered by many segment requests at once.
-            # Reuse a very recent extraction to avoid token/host churn and load spikes.
-            if time.time() - cached_ts < 45 and (background_refresh or not force_refresh):
-                if time.time() - self._cached_log_ts > 45:
-                    self._cached_log_ts = time.time()
-                    logger.debug("vidxgo: using cached m3u8 for %s", url)
-                return dict(cached_result)
-
         # 1. Fetch embed page.
         embed_headers = {**self.embed_headers, **{k.lower(): v for k, v in request_headers.items() if k.lower() == "cookie"}}
         html = await self._fetch(url, embed_headers)
@@ -278,7 +262,6 @@ class VidXgoExtractor:
             "mediaflow_endpoint": self.mediaflow_endpoint,
             "selected_proxy": self.selected_proxy,
         }
-        self._result_cache[cache_key] = (time.time(), dict(result))
         return result
 
     async def close(self):

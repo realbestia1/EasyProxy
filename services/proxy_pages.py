@@ -707,7 +707,7 @@ class HLSProxyPagesMixin:
             "mpd_mode", "dvr_enabled",
             "max_recording_duration", "recordings_retention_days",
             "enable_remuxing",
-            "proxy_test_timeout", "proxy_test_concurrency", "segment_cache_ttl",
+            "proxy_test_timeout", "proxy_test_concurrency",
             "log_level",
         }
 
@@ -746,13 +746,10 @@ class HLSProxyPagesMixin:
             result = await self.reconnect_warp()
             if result.get("status") != "ok":
                 logger.warning(f"WARP enable failed: {result.get('message')}")
-                self._warp_check_ts = 0
                 return web.json_response({"status": "error", "message": result.get("message", "WARP connect failed")}, status=500)
         else:
             logger.info("WARP disabled via admin panel")
             await self._stop_warp_proxy()
-
-        self._warp_check_ts = 0  # Force refresh on next status check
 
         return web.json_response({"status": "ok", "warp": "enabled" if enable else "disabled"})
 
