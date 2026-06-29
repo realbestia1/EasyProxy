@@ -13,7 +13,7 @@ Pillow
 curl_cffi
 cloudscraper
 brotli
-camoufox
+camoufox[geoip]
 pyautogui
 pyvirtualdisplay
 psutil

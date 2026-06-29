@@ -72,7 +72,17 @@ async def _get_or_create_browser(pool_key: str):
         if pool_key != "direct":
             launch_kw["proxy"] = {"server": pool_key}
 
-        lo = _cf_lo(**launch_kw)
+        try:
+            lo = _cf_lo(**launch_kw)
+        except Exception as e:
+            if "geoip" in str(e).lower() or "extra" in str(e).lower():
+                logger.warning(
+                    "[CamoufoxSolver] GeoIP extra not installed. Launching browser without geoip."
+                )
+                launch_kw["geoip"] = False
+                lo = _cf_lo(**launch_kw)
+            else:
+                raise
         safe_key = pool_key.replace(":", "_").replace("/", "_")[:32]
         ctx_dir = os.path.join(tempfile.gettempdir(), f"camoufox_{safe_key}")
         os.makedirs(ctx_dir, exist_ok=True)
