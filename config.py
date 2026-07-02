@@ -10,7 +10,7 @@ import urllib.request
 from dotenv import load_dotenv
 from config_store import get as _cfg_get, set as _cfg_set, get_all as _cfg_get_all
 
-APP_VERSION = "2.9.38"
+APP_VERSION = "2.9.39"
 
 
 def get_extractor_proxies(extractor_name: str) -> list:

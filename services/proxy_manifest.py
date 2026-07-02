@@ -108,6 +108,7 @@ class HLSProxyManifestHandlerMixin:
                     header_name = param_name[2:]
                     combined_headers[header_name] = param_value
 
+            extractor_key = None
             captured_manifest = None
             is_rewritten_hls_segment = request.path.startswith("/proxy/hls/segment.")
             if is_rewritten_hls_segment:
