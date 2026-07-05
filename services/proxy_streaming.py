@@ -1090,16 +1090,13 @@ class HLSProxyStreamingMixin:
                 )
 
 
-        except (ClientPayloadError, ConnectionResetError, OSError) as e:
-            # Errori tipici di disconnessione client o payload troncato durante stream.
-            # Non punire il proxy: i player HLS cancellano spesso richieste in corso.
+        except (ClientPayloadError, ConnectionResetError) as e:
             active_proxy = session_proxy or forced_proxy
             if active_proxy:
                 logger.info(
                     "Stream interrupted while using proxy %s (payload/reset): %r.",
                     active_proxy, e
                 )
-            is_read_timeout = 'Timeout on reading' in str(e) or 'TimeoutError' in type(e).__name__
             logger.info(f"[INFO] Client disconnected from stream: {stream_url} ({str(e)})")
             return web.Response(text="Client disconnected", status=499)
 
@@ -1107,6 +1104,7 @@ class HLSProxyStreamingMixin:
             ServerDisconnectedError,
             ClientConnectionError,
             asyncio.TimeoutError,
+            OSError,
             AioProxyError,
             PyProxyError,
         ) as e:
