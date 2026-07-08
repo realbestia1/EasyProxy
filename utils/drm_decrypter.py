@@ -318,7 +318,7 @@ class MP4Decrypter:
         atoms = parser.list_atoms()
 
         # calculate encryption_overhead earlier to avoid dependency on trun
-        self.encryption_overhead = sum(a.size for a in atoms if a.atom_type in {b"senc", b"saiz", b"saio"})
+        self.encryption_overhead = sum(a.size for a in atoms if a.atom_type in {b"senc", b"saiz", b"saio", b"sbgp", b"sgpd"})
 
         for atom in atoms:
             if atom.atom_type == b"tfhd":
@@ -331,7 +331,7 @@ class MP4Decrypter:
             elif atom.atom_type == b"senc":
                 # Parse senc but don't include it in the new decrypted traf data and similarly don't include saiz and saio
                 sample_info = self._parse_senc(atom, sample_count)
-            elif atom.atom_type not in {b"saiz", b"saio"}:
+            elif atom.atom_type not in {b"saiz", b"saio", b"sbgp", b"sgpd"}:
                 new_traf_data.extend(atom.pack())
 
         if tfhd:
@@ -675,7 +675,7 @@ class MP4Decrypter:
             if atom.atom_type == b"stsd":
                 new_stsd = self._process_stsd(atom)
                 new_stbl_data.extend(new_stsd.pack())
-            else:
+            elif atom.atom_type not in {b"sbgp", b"sgpd"}:
                 new_stbl_data.extend(atom.pack())
 
         return MP4Atom(b"stbl", len(new_stbl_data) + 8, new_stbl_data)
