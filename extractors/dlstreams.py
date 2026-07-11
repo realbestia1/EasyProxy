@@ -127,6 +127,7 @@ class DLStreamsExtractor:
                 logger.debug("DLStreams: GET stream page %s", candidate)
                 async with session.get(candidate, headers=headers, timeout=10) as resp:
                     if resp.status != 200:
+                        logger.debug("DLStreams: candidate %s returned status %s", candidate, resp.status)
                         continue
                     html = await resp.text()
                 
@@ -159,26 +160,32 @@ class DLStreamsExtractor:
                 
                 async with session.get(iframe_src, headers=iframe_headers, timeout=10) as resp:
                     if resp.status != 200:
+                        logger.debug("DLStreams: iframe %s returned status %s", iframe_src, resp.status)
                         continue
                     iframe_html = await resp.text()
                 
                 # Extract atob(...) Base64 encoded stream URL
                 atob_match = re.search(r"atob\(['\"](.*?)['\"]\)", iframe_html)
                 if not atob_match:
-                    logger.debug("DLStreams: atob parameter not found in iframe HTML")
-                    continue
-                
-                b64_url = atob_match.group(1)
-                stream_url = base64.b64decode(b64_url).decode('utf-8', errors='ignore')
-                logger.debug("DLStreams: decrypted stream URL: %s", stream_url)
+                    logger.debug("DLStreams: atob parameter not found in iframe HTML. Checking for direct source.")
+                    direct_match = re.search(r"source:\s*['\"](.*?)['\"]", iframe_html)
+                    if not direct_match:
+                        logger.debug("DLStreams: no direct source found either. Iframe HTML start: %s", iframe_html[:200])
+                        continue
+                    stream_url = direct_match.group(1)
+                    logger.debug("DLStreams: extracted direct stream URL: %s", stream_url)
+                else:
+                    b64_url = atob_match.group(1)
+                    stream_url = base64.b64decode(b64_url).decode('utf-8', errors='ignore')
+                    logger.debug("DLStreams: decrypted stream URL: %s", stream_url)
                 
                 # Format response payload
                 parsed_stream = urlparse(stream_url)
                 parsed_iframe = urlparse(iframe_src)
                 iframe_origin = f"{parsed_iframe.scheme}://{parsed_iframe.netloc}"
                 
-                # Use entry origin as the Referer/Origin for playback headers to pass CDN security checks
-                ref_origin = self.entry_origin.rstrip("/") if self.entry_origin else iframe_origin
+                # Use iframe origin as the Referer/Origin for playback headers to pass CDN security checks
+                ref_origin = iframe_origin
                 
                 playback_headers = {
                     "Referer": f"{ref_origin}/",
