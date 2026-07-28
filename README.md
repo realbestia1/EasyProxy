@@ -137,9 +137,9 @@ device file with `WIDEVINE_WVD_PATH` (`MEDIASET_WVD_PATH` and the legacy `WITTY_
 accepted), or mount it at `/data/cdm/widevine-device.wvd`, and
 set a non-empty `API_PASSWORD`, then create sessions server-to-server:
 
-With the included Compose volume, keep the private device file on the host at
-`./data/cdm/widevine-device.wvd`; this path is ignored by Git and appears inside the
-container as `/data/cdm/widevine-device.wvd`.
+With the included Compose volume, the device file at
+`./data/cdm/widevine-device.wvd` appears inside the container as
+`/data/cdm/widevine-device.wvd`.
 
 ```http
 POST /mediaset/session
