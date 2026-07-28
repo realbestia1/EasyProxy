@@ -13,3 +13,4 @@ curl_cffi
 cloudscraper
 brotli
 psutil
+pywidevine

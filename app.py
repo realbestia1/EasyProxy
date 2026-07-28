@@ -96,6 +96,26 @@ def create_app():
     # ✅ NUOVO: Route per licenze DRM (GET e POST)
     app.router.add_get('/license', proxy.handle_license_request)
     app.router.add_post('/license', proxy.handle_license_request)
+
+    # WittyTV opaque playback sessions. Only session creation/status require
+    # the API password; playback uses an unguessable, expiring bearer token.
+    app.router.add_get('/witty/status', proxy.handle_witty_status)
+    app.router.add_post('/witty/session', proxy.handle_witty_create_session)
+    app.router.add_get('/witty/play/{token}/manifest.mpd', proxy.handle_witty_manifest)
+    app.router.add_get('/witty/play/{token}/segment/{tail:.*}', proxy.handle_witty_segment)
+    # Generic Mediaset Infinity/WittyTV routes. Legacy /witty routes remain
+    # available for already configured addon instances.
+    app.router.add_get('/mediaset/status', proxy.handle_witty_status)
+    app.router.add_post('/mediaset/session', proxy.handle_witty_create_session)
+    app.router.add_get('/mediaset/play/{token}/manifest.mpd', proxy.handle_witty_manifest)
+    app.router.add_get('/mediaset/play/{token}/segment/{tail:.*}', proxy.handle_witty_segment)
+
+    # RaiPlay opaque Widevine sessions. Clear HLS remains direct; only protected
+    # DASH content traverses EasyProxy.
+    app.router.add_get('/raiplay/status', proxy.handle_raiplay_status)
+    app.router.add_post('/raiplay/session', proxy.handle_raiplay_create_session)
+    app.router.add_get('/raiplay/play/{token}/manifest.mpd', proxy.handle_raiplay_manifest)
+    app.router.add_get('/raiplay/play/{token}/segment/{tail:.*}', proxy.handle_raiplay_segment)
     
     # ✅ NUOVO: Endpoint per generazione URL (compatibilità MFP)
     app.router.add_post('/generate_urls', proxy.handle_generate_urls)

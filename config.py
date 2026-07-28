@@ -30,7 +30,7 @@ ALL_PROXY_ERRORS = (
 )
 
 
-APP_VERSION = "2.9.81"
+APP_VERSION = "2.9.82"
 
 
 def get_extractor_proxies(extractor_name: str) -> list:
@@ -1052,4 +1052,3 @@ def get_system_stats():
             "recv": round(net_recv, 1)
         }
     }
-

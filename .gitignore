@@ -13,4 +13,5 @@ config.json
 /downloaded_files
 /cache
 /tests
+/data/cdm/*.wvd
 /graphify-out
