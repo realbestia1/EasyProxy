@@ -31,7 +31,7 @@ class MPDToHLSConverter:
         
         header_params = []
         for param in params.split('&'):
-            if param.startswith('h_') or param.startswith('api_password=') or param.startswith('clearkey=') or param.startswith('ext=') or param.startswith('warp=') or param.startswith('proxy='):
+            if param.startswith('h_') or param.startswith('api_password=') or param.startswith('drm_token=') or param.startswith('clearkey=') or param.startswith('ext=') or param.startswith('warp=') or param.startswith('proxy='):
                 header_params.append(param)
         
         if header_params:
@@ -252,11 +252,34 @@ class MPDToHLSConverter:
                         # ma aggiungi flag per saltare la decrittazione vera e propria
                         logger.debug(f"🔓 Null key detected - using remux endpoint without decryption")
                         server_side_decryption = True
-                        decryption_params = f"&key={key_hex}&key_id={kid_hex}&skip_decrypt=1"
+                        drm_token = next(
+                            (
+                                item.split("=", 1)[1]
+                                for item in params.split("&")
+                                if item.startswith("drm_token=")
+                            ),
+                            "",
+                        )
+                        decryption_params = (
+                            f"&drm_token={drm_token}&skip_decrypt=1"
+                            if drm_token
+                            else f"&key={key_hex}&key_id={kid_hex}&skip_decrypt=1"
+                        )
                     else:
                         server_side_decryption = True
-                        # Passa chiavi multiple nel formato esistente (comma-separated)
-                        decryption_params = f"&key={key_hex}&key_id={kid_hex}"
+                        drm_token = next(
+                            (
+                                item.split("=", 1)[1]
+                                for item in params.split("&")
+                                if item.startswith("drm_token=")
+                            ),
+                            "",
+                        )
+                        decryption_params = (
+                            f"&drm_token={drm_token}"
+                            if drm_token
+                            else f"&key={key_hex}&key_id={kid_hex}"
+                        )
                         key_count = len(kids)
                         logger.debug(f"🔐 ClearKey enabled - {key_count} key pair(s) for server-side decryption")
                 except Exception as e:

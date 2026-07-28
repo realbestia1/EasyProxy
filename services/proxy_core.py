@@ -98,11 +98,6 @@ class HLSProxyCoreMixin:
                     self._renewed_cdn_token_atimes.pop(k, None)
                     logger.debug("🧹 Cleaned stale CDN token: %s", k[:8])
 
-                # Mediaset/WittyTV playback keys and manifests are memory-only and
-                # expire after a bounded idle/absolute lifetime.
-                self._cleanup_witty_sessions()
-                self._cleanup_raiplay_sessions()
-                
                 # 2. Clean up idle proxy sessions (>60s)
                 if hasattr(self, "_proxy_sessions") and hasattr(self, "_proxy_session_atimes"):
                     _warp_url = _shared.WARP_PROXY_URL

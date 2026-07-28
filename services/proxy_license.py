@@ -2,6 +2,7 @@ import aiohttp
 from services.proxy_shared import (
     logger,
     hex_to_b64url,
+    parse_clearkey_params,
     web,
 )
 
@@ -12,9 +13,9 @@ class HLSProxyLicenseHandlerMixin:
         """✅ NUOVO: Gestisce le richieste di licenza DRM (ClearKey e Proxy)"""
         try:
             # 1. Modalità ClearKey Statica
-            clearkey_param = request.query.get("clearkey")
+            clearkey_param = parse_clearkey_params(request)
             if clearkey_param:
-                logger.debug(f"🔐 Static ClearKey license request: {clearkey_param}")
+                logger.debug("🔐 Static ClearKey license request")
                 try:
                     # Support multiple keys separated by comma
                     # Format: KID1:KEY1,KID2:KEY2

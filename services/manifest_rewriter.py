@@ -3,6 +3,7 @@ import re
 import urllib.parse
 import xml.etree.ElementTree as ET
 from urllib.parse import urljoin
+from services.secure_state import seal_state
 
 logger = logging.getLogger(__name__)
 
@@ -112,9 +113,14 @@ class ManifestRewriter:
         bypass_warp: bool = False,
         bypass_proxies: bool = False,
         disable_ssl: bool = False,
+        drm_token: str = None,
     ) -> str:
         """Riscrive i manifest MPD (DASH) per passare attraverso il proxy."""
         try:
+            if clearkey_param and not drm_token:
+                drm_token = seal_state(
+                    {"clearkey": clearkey_param}, "clearkey"
+                )
             # Aggiungiamo il namespace di default se non presente, per ET
             if "xmlns" not in manifest_content:
                 manifest_content = manifest_content.replace(
@@ -143,6 +149,10 @@ class ManifestRewriter:
 
             if api_password:
                 header_params += f"&api_password={api_password}"
+            if drm_token:
+                header_params += (
+                    f"&drm_token={urllib.parse.quote(drm_token, safe='')}"
+                )
             
             if bypass_warp:
                 header_params += "&warp=off"
@@ -184,7 +194,10 @@ class ManifestRewriter:
                     cp_element.set("value", "ClearKey")
 
                     # Puntiamo al nostro endpoint /license
-                    license_url = f"{proxy_base}/license?clearkey={clearkey_param}"
+                    license_url = (
+                        f"{proxy_base}/license?drm_token="
+                        f"{urllib.parse.quote(drm_token, safe='')}"
+                    )
                     if api_password:
                         license_url += f"&api_password={api_password}"
 
@@ -740,4 +753,3 @@ class ManifestRewriter:
                 rewritten_lines.append(line)
 
         return ManifestRewriter._ensure_hls_version("\n".join(rewritten_lines))
-

@@ -15,6 +15,30 @@ from config import FLARESOLVERR_URL
 import asyncio
 import base64
 import urllib.parse
+from yarl import URL
+from services.proxy_shared import seal_clearkey
+
+
+def _protected_extractor_params(result: dict) -> dict[str, str]:
+    params = {
+        str(key): str(value)
+        for key, value in (result.get("query_params") or {}).items()
+        if value is not None
+    }
+    clearkey = params.pop("clearkey", "")
+    key_ids = params.pop("key_id", "")
+    keys = params.pop("key", "")
+    if not clearkey and key_ids and keys:
+        kid_values = [value.strip() for value in key_ids.split(",")]
+        key_values = [value.strip() for value in keys.split(",")]
+        clearkey = ",".join(
+            f"{kid}:{key}"
+            for kid, key in zip(kid_values, key_values)
+            if kid and key
+        )
+    if clearkey:
+        params["drm_token"] = seal_clearkey(clearkey)
+    return params
 
 
 class HLSProxyExtractorHandlerMixin:
@@ -24,8 +48,11 @@ class HLSProxyExtractorHandlerMixin:
         Endpoint compatibile con MediaFlow-Proxy per ottenere informazioni sullo stream.
         Supporta redirect_stream per ridirezionare direttamente al proxy.
         """
-        # Log request details for debugging
-        logger.debug(f"📥 Extractor Request: {request.url}")
+        logger.debug(
+            "📥 Extractor request: path=%s host=%s",
+            request.path,
+            request.query.get("host") or "auto",
+        )
 
         if not check_password(request):
             req_url = request.query.get("url") or request.query.get("d", "?")
@@ -46,6 +73,9 @@ class HLSProxyExtractorHandlerMixin:
                 selected_proxy = urllib.parse.unquote(selected_proxy)
         proxy_token = SELECTED_PROXY_CONTEXT.set(selected_proxy)
         strict_proxy_token = STRICT_PROXY_CONTEXT.set(bool(selected_proxy))
+        url = None
+        extractor = None
+        extractor_key = None
 
         try:
             # Supporta sia 'url' che 'd' come parametro
@@ -91,8 +121,11 @@ class HLSProxyExtractorHandlerMixin:
                         "vidmoly",
                         "vidoza",
                         "turbovidplay",
-                         "livetv",
-                         "f16px",
+                        "livetv",
+                        "f16px",
+                        "mediaset",
+                        "wittytv",
+                        "raiplay",
                     ],
                     "examples": [
                         f"{request.scheme}://{request.host}/extractor/video?d=https://vavoo.to/channel/123",
@@ -143,8 +176,6 @@ class HLSProxyExtractorHandlerMixin:
 
             logger.debug(f"Extractor Debug: Initial bypass_warp from query: {bypass_warp}")
 
-            extractor = None
-            extractor_key = None
             extractor = await self.get_extractor(
                 url, dict(request.headers), host=host_param, bypass_warp=bypass_warp
             )
@@ -186,6 +217,7 @@ class HLSProxyExtractorHandlerMixin:
             result = await asyncio.wait_for(
                 extractor.extract(url, **extractor_kwargs), timeout=timeout
             )
+            result_query_params = _protected_extractor_params(result)
             extractor_key = self._extractor_key_for_instance(extractor)
             stream_key = self._stream_key_for_url(request.query.get("orig_url") or url)
 
@@ -249,7 +281,11 @@ class HLSProxyExtractorHandlerMixin:
 
             if mediaflow_endpoint == "proxy_stream_endpoint" or is_direct_video:
                 endpoint = "/proxy/stream"
-            elif ".mpd" in path_lower or "manifest" in path_lower and "dash" in path_lower:
+            elif (
+                mediaflow_endpoint == "mpd_manifest_proxy"
+                or ".mpd" in path_lower
+                or "manifest" in path_lower and "dash" in path_lower
+            ):
                 endpoint = "/proxy/mpd/manifest.m3u8"
 
             encoded_url = urllib.parse.quote(stream_url, safe="")
@@ -283,6 +319,11 @@ class HLSProxyExtractorHandlerMixin:
                 header_params += f"&extractor_key={urllib.parse.quote(extractor_key, safe='')}"
             if stream_key:
                 header_params += f"&stream_key={urllib.parse.quote(stream_key, safe='')}"
+            for key, value in result_query_params.items():
+                header_params += (
+                    f"&{urllib.parse.quote(key, safe='')}="
+                    f"{urllib.parse.quote(value, safe='')}"
+                )
 
             if redirect_stream and captured_manifest and endpoint == "/proxy/hls/manifest.m3u8":
                 original_channel_url = request.query.get("orig_url") or request.query.get("url") or request.query.get("d", "")
@@ -319,6 +360,36 @@ class HLSProxyExtractorHandlerMixin:
                     },
                 )
 
+            if redirect_stream and endpoint == "/proxy/mpd/manifest.m3u8":
+                proxy_query = {
+                    "d": stream_url,
+                    **{
+                        f"h_{key}": value
+                        for key, value in stream_headers.items()
+                    },
+                    **result_query_params,
+                }
+                if api_password:
+                    proxy_query["api_password"] = api_password
+                if force_disable_ssl:
+                    proxy_query["disable_ssl"] = "1"
+                if bypass_warp:
+                    proxy_query["warp"] = "off"
+                if BYPASS_PROXIES_CONTEXT.get():
+                    proxy_query["proxy"] = "off"
+                elif selected_proxy:
+                    proxy_query["proxy"] = selected_proxy
+                if force_direct:
+                    proxy_query["direct"] = "1"
+                if extractor_key:
+                    proxy_query["extractor_key"] = extractor_key
+                if stream_key:
+                    proxy_query["stream_key"] = stream_key
+                proxy_request = request.clone(
+                    rel_url=URL(endpoint).with_query(proxy_query)
+                )
+                return await self.handle_proxy_request(proxy_request)
+
             # 1. URL COMPLETO (Solo per il redirect)
             full_proxy_url = f"{proxy_base}{endpoint}?d={encoded_url}{header_params}"
 
@@ -339,6 +410,7 @@ class HLSProxyExtractorHandlerMixin:
 
             # 2. URL PULITO (Per il JSON stile MediaFlow)
             q_params = {}
+            q_params.update(result_query_params)
             if api_password:
                 q_params["api_password"] = api_password
             if selected_proxy:

@@ -1,6 +1,3 @@
-import base64
-import hashlib
-import json
 import time
 import aiohttp
 from urllib.parse import urljoin
@@ -18,29 +15,24 @@ from services.proxy_shared import (
     fetch_browser_backed_key,
     binascii,
 )
+from services.secure_state import open_state, seal_state
 
 
 def _encode_dash_state(base_url: str, headers: dict, clearkey: str | None) -> str:
-    """Encode DASH routing state into a compact base64url string."""
-    payload = json.dumps({
+    """Seal DASH routing state into a stateless, authenticated token."""
+    return seal_state({
         "b": base_url,
         "h": headers,
         "k": clearkey,
-    }, separators=(",", ":"), ensure_ascii=False)
-    return base64.urlsafe_b64encode(payload.encode()).decode().rstrip("=")
+    }, "dash")
 
 
 def _decode_dash_state(token: str) -> tuple[str, dict, str | None] | None:
-    """Decode DASH routing state from base64url token."""
-    try:
-        padding = 4 - len(token) % 4
-        if padding != 4:
-            token += "=" * padding
-        payload = base64.urlsafe_b64decode(token).decode()
-        data = json.loads(payload)
-        return data.get("b", ""), data.get("h", {}), data.get("k")
-    except Exception:
+    """Open a stateless, authenticated DASH routing token."""
+    data = open_state(token, "dash")
+    if not data:
         return None
+    return data.get("b", ""), data.get("h", {}), data.get("k")
 
 
 class HLSProxyDashMixin:

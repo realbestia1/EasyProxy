@@ -250,6 +250,33 @@ async def resolve_extractor(self, url: str, request_headers: dict, host: str = N
                         request_headers, proxies=proxy_list
                     )
                 return self.extractors[key]
+            elif host in {"mediaset", "mediasetinfinity"}:
+                key = "mediaset_direct" if bypass_warp else "mediaset"
+                if MediasetExtractor is None:
+                    raise RuntimeError("MediasetExtractor module not available")
+                if key not in self.extractors:
+                    self.extractors[key] = MediasetExtractor(
+                        request_headers, proxies=proxy_list
+                    )
+                return self.extractors[key]
+            elif host in {"witty", "wittytv"}:
+                key = "wittytv_direct" if bypass_warp else "wittytv"
+                if WittyTVExtractor is None:
+                    raise RuntimeError("WittyTVExtractor module not available")
+                if key not in self.extractors:
+                    self.extractors[key] = WittyTVExtractor(
+                        request_headers, proxies=proxy_list
+                    )
+                return self.extractors[key]
+            elif host in {"rai", "raiplay"}:
+                key = "raiplay_direct" if bypass_warp else "raiplay"
+                if RaiPlayExtractor is None:
+                    raise RuntimeError("RaiPlayExtractor module not available")
+                if key not in self.extractors:
+                    self.extractors[key] = RaiPlayExtractor(
+                        request_headers, proxies=proxy_list
+                    )
+                return self.extractors[key]
 
         # 2. Auto-detection basata sull'URL
         # ✅ NUOVO: Salta estrattori specifici se l'URL sembra già un link diretto a un media
@@ -261,7 +288,43 @@ async def resolve_extractor(self, url: str, request_headers: dict, host: str = N
                 self.extractors[key] = GenericHLSExtractor(request_headers, proxies=_build_proxy_list(None, "generic"))
             return self.extractors[key]
 
-        if "vavoo.to" in url:
+        if any(
+            domain in url.lower()
+            for domain in (
+                "mediasetinfinity.mediaset.it/",
+                "wittytv.it/",
+            )
+        ):
+            extractor_name = (
+                "wittytv" if "wittytv.it/" in url.lower() else "mediaset"
+            )
+            key = f"{extractor_name}_direct" if bypass_warp else extractor_name
+            extractor_cls = (
+                WittyTVExtractor
+                if extractor_name == "wittytv"
+                else MediasetExtractor
+            )
+            proxy = get_proxy_for_url(url, bypass_warp=bypass_warp)
+            proxy_list = _build_proxy_list(proxy, extractor_name)
+            if extractor_cls is None:
+                raise RuntimeError(f"{extractor_name} extractor module not available")
+            if key not in self.extractors:
+                self.extractors[key] = extractor_cls(
+                    request_headers, proxies=proxy_list
+                )
+            return self.extractors[key]
+        elif "mediapolisvod.rai.it/relinker/" in url.lower():
+            key = "raiplay_direct" if bypass_warp else "raiplay"
+            proxy = get_proxy_for_url(url, bypass_warp=bypass_warp)
+            proxy_list = _build_proxy_list(proxy, "raiplay")
+            if RaiPlayExtractor is None:
+                raise RuntimeError("RaiPlayExtractor module not available")
+            if key not in self.extractors:
+                self.extractors[key] = RaiPlayExtractor(
+                    request_headers, proxies=proxy_list
+                )
+            return self.extractors[key]
+        elif "vavoo.to" in url:
             key = "vavoo_direct" if bypass_warp else "vavoo"
             proxy = get_proxy_for_url("vavoo.to", bypass_warp=bypass_warp)
             proxy_list = _build_proxy_list(proxy, "vavoo")

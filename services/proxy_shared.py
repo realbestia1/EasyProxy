@@ -63,6 +63,7 @@ from config import (
 from extractors.registry import *
 from extractors.provider_hooks import *
 from services.manifest_rewriter import ManifestRewriter
+from services.secure_state import open_state, seal_state
 
 # Global registry for domains already bypassed in WARP to avoid redundant os.system calls
 BYPASSED_WARP_DOMAINS = set()
@@ -105,6 +106,10 @@ def hex_to_b64url(hex_str: str) -> str:
     )
 
 def parse_clearkey_params(request) -> str | None:
+    drm_token = request.query.get("drm_token")
+    if drm_token:
+        state = open_state(drm_token, "clearkey")
+        return str((state or {}).get("clearkey") or "") or None
     clearkey = request.query.get("clearkey")
     if clearkey:
         return clearkey
@@ -127,6 +132,10 @@ def parse_clearkey_params(request) -> str | None:
     elif key_val_param:
         return key_val_param
     return None
+
+
+def seal_clearkey(clearkey: str) -> str:
+    return seal_state({"clearkey": clearkey}, "clearkey")
 
 def check_vavoo_request(headers: dict, request: web.Request, url: str) -> bool:
     return (

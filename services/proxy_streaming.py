@@ -27,6 +27,7 @@ from services.proxy_shared import (
     ManifestRewriter,
     MPDToHLSConverter,
     parse_clearkey_params,
+    seal_clearkey,
     decrypt_segment,
     check_password,
     prepare_curl_headers,
@@ -1018,6 +1019,9 @@ class HLSProxyStreamingMixin:
                     rep_id = request.query.get("rep_id")
 
                     api_password = request.query.get("api_password")
+                    drm_token = request.query.get("drm_token")
+                    if clearkey_param and not drm_token:
+                        drm_token = seal_clearkey(clearkey_param)
                     rewritten_manifest = ManifestRewriter.rewrite_mpd_manifest(
                         manifest_content,
                         stream_url,
@@ -1027,6 +1031,7 @@ class HLSProxyStreamingMixin:
                         api_password,
                         bypass_warp=bypass_warp,
                         bypass_proxies=bypass_proxies,
+                        drm_token=drm_token,
                     )
 
                     return web.Response(
@@ -1323,6 +1328,16 @@ class HLSProxyStreamingMixin:
         init_url = request.query.get("init_url")
         key = request.query.get("key")
         key_id = request.query.get("key_id")
+        protected_keys = parse_clearkey_params(request)
+        if protected_keys:
+            pairs = [
+                pair.split(":", 1)
+                for pair in protected_keys.split(",")
+                if ":" in pair
+            ]
+            if pairs:
+                key_id = ",".join(pair[0] for pair in pairs)
+                key = ",".join(pair[1] for pair in pairs)
 
         is_init = request.query.get("is_init") == "1"
         skip_init = request.query.get("skip_init") == "1"

@@ -43,6 +43,9 @@ StreamHGExtractor = None
 VidXgoExtractor = None
 EmbedStExtractor = None
 VidSonicExtractor = None
+MediasetExtractor = None
+WittyTVExtractor = None
+RaiPlayExtractor = None
 
 
 # Importazione condizionale degli estrattori
@@ -226,6 +229,21 @@ except Exception as e:
     logger.warning("⚠️ VidSonicExtractor failed to load: %s", e)
     VidSonicExtractor = None
 
+try:
+    from extractors.mediaset import MediasetExtractor, WittyTVExtractor
+    logger.info("✅ MediasetExtractor and WittyTVExtractor modules loaded.")
+except Exception as e:
+    logger.warning("⚠️ Mediaset/WittyTV extractors failed to load: %s", e)
+    MediasetExtractor = None
+    WittyTVExtractor = None
+
+try:
+    from extractors.raiplay import RaiPlayExtractor
+    logger.info("✅ RaiPlayExtractor module loaded.")
+except Exception as e:
+    logger.warning("⚠️ RaiPlayExtractor failed to load: %s", e)
+    RaiPlayExtractor = None
+
 
 __all__ = [
     "VavooExtractor",
@@ -257,4 +275,7 @@ __all__ = [
     "VidXgoExtractor",
     "EmbedStExtractor",
     "VidSonicExtractor",
+    "MediasetExtractor",
+    "WittyTVExtractor",
+    "RaiPlayExtractor",
 ]

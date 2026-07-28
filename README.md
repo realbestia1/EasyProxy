@@ -98,7 +98,6 @@ Only basic environment variables need to be set in your `.env` file or container
 | :--- | :--- | :--- |
 | `PORT` | Server port | `7860` |
 | `API_PASSWORD` | Password to protect the proxy API and admin panel | `ep` |
-| `WIDEVINE_WVD_PATH` | Private Widevine device file used for personal Mediaset/WittyTV/RaiPlay sessions | `/data/cdm/widevine-device.wvd` |
 
 ### 🛡️ Cloudflare WARP Integration
 The Docker image includes an integrated Cloudflare WARP client to bypass IP-based blocks.
@@ -129,42 +128,22 @@ http://localhost:7860/extractor/video?d=<URL>&redirect_stream=true
 ```
 *Tip: Open `http://localhost:7860/extractor` in your browser for a list of all parameters and supported hosts.*
 
-### Mediaset Infinity, WittyTV and RaiPlay playback sessions
+### Mediaset Infinity, WittyTV and RaiPlay extractors
 
-EasyProxy can resolve a Mediaset Infinity or WittyTV VOD, keep its temporary playback material only
-in server memory, and expose an opaque DASH URL. Configure a private Widevine
-device file with `WIDEVINE_WVD_PATH` (`MEDIASET_WVD_PATH` and the legacy `WITTY_WVD_PATH` are also
-accepted), or mount it at `/data/cdm/widevine-device.wvd`, and
-set a non-empty `API_PASSWORD`, then create sessions server-to-server:
+These providers use the same extractor, WARP, proxy-routing and Admin
+configuration flow as every other EasyProxy host. The bundled Widevine device is
+loaded automatically from `extractors/widevine-device.wvd`; no extra environment
+variables or provider-specific endpoints are required.
 
-With the included Compose volume, the device file at
-`./data/cdm/widevine-device.wvd` appears inside the container as
-`/data/cdm/widevine-device.wvd`.
-
-```http
-POST /mediaset/session
-X-API-Password: your-password
-Content-Type: application/json
-
-{"pageUrl":"https://mediasetinfinity.mediaset.it/movie/example/example_F000000000000000","guid":"F000000000000000"}
+```text
+/extractor/video.m3u8?host=mediaset&d=<mediaset-page-url>&redirect_stream=true&api_password=<password>
+/extractor/video.m3u8?host=wittytv&d=<wittytv-page-url>&redirect_stream=true&api_password=<password>
+/extractor/video.m3u8?host=raiplay&d=<rai-relinker-url>&redirect_stream=true&api_password=<password>
 ```
 
-The response URL contains only a random, expiring playback token. API passwords,
-Mediaset bearer tokens and content keys are never embedded in the manifest or
-segment URLs. This feature is intended for personal instances and content the
-user is authorized to access. Keep `WORKERS=1`, because sessions are memory-only.
-
-RaiPlay clear HLS streams should remain direct. For Widevine DASH, EasyProxy
-resolves the short-lived Rai relinker URL, obtains the authorized content keys
-and refreshes expired CDN tokens while the opaque session is active:
-
-```http
-POST /raiplay/session
-X-API-Password: your-password
-Content-Type: application/json
-
-{"contentId":"RaiPlay-relinker-content-id","title":"Example"}
-```
+Protected DASH is passed internally to `/proxy/mpd/manifest.m3u8`. Content keys
+travel in authenticated, expiring state tokens and are decrypted server-side.
+The flow is stateless and supports multiple workers.
 
 ### 📼 DVR & Recordings
 Manage your recordings via the `/recordings` web UI or API.

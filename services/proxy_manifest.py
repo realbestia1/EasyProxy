@@ -16,6 +16,7 @@ from services.proxy_shared import (
     check_vavoo_request,
     should_use_short_manifest_urls,
     parse_clearkey_params,
+    seal_clearkey,
     MPDToHLSConverter,
     get_ssl_setting_for_url,
     ALL_PROXY_ERRORS,
@@ -57,10 +58,10 @@ class HLSProxyManifestHandlerMixin:
         proxy_token = SELECTED_PROXY_CONTEXT.set(selected_proxy)
         strict_proxy_token = STRICT_PROXY_CONTEXT.set(bool(selected_proxy))
         force_direct = self._should_force_direct_from_query(request)
+        extractor = None
+        extractor_key = None
 
         try:
-            extractor = None
-
             # --- Gestione URL brevi (Shortened URLs, base64 only) ---
             url_id = request.query.get("hls_url_id")
             if url_id and not target_url:
@@ -480,7 +481,12 @@ class HLSProxyManifestHandlerMixin:
                 clearkey_param = parse_clearkey_params(request)
 
                 if clearkey_param:
-                    params += f"&clearkey={clearkey_param}"
+                    drm_token = request.query.get("drm_token") or seal_clearkey(
+                        clearkey_param
+                    )
+                    params += (
+                        f"&drm_token={urllib.parse.quote(drm_token, safe='')}"
+                    )
 
                 # Pass 'ext' param if present (e.g. ext=ts)
                 ext_param = request.query.get("ext")

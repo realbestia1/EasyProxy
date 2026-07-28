@@ -7,8 +7,6 @@ from services.proxy_dash import HLSProxyDashMixin
 from services.proxy_handlers import HLSProxyHandlersMixin
 from services.proxy_pages import HLSProxyPagesMixin
 from services.proxy_streaming import HLSProxyStreamingMixin
-from services.wittytv_proxy import WittyTVProxyMixin
-from services.raiplay_proxy import RaiPlayProxyMixin
 
 # ContextVars to isolate extractor state per request/asyncio task to avoid concurrent request interference
 _extractors_var = contextvars.ContextVar("extractors", default=None)
@@ -22,8 +20,6 @@ class HLSProxy(
     HLSProxyDashMixin,
     HLSProxyStreamingMixin,
     HLSProxyPagesMixin,
-    WittyTVProxyMixin,
-    RaiPlayProxyMixin,
 ):
     """Proxy HLS per stream, playlist, DASH e segmenti."""
 
@@ -89,9 +85,6 @@ class HLSProxy(
         # stream_key -> (old_base_dir, new_base_dir, new_query_string_with_leading_question_mark)
         self._renewed_cdn_tokens: dict[str, tuple[str, str, str]] = {}
         self._renewed_cdn_token_atimes: dict[str, float] = {}
-        self._init_witty_sessions()
-        self._init_raiplay_sessions()
-
         # Template cache (read once, serve many)
         self._template_cache = {}
         self._template_cache_dir = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "templates")
