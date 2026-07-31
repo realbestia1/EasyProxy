@@ -6,6 +6,7 @@ import asyncio
 import base64
 from urllib.parse import urlparse
 from typing import Dict, Any
+
 import aiohttp
 from aiohttp import ClientSession, ClientTimeout, TCPConnector
 
@@ -21,11 +22,15 @@ from config import (
 
 logger = logging.getLogger(__name__)
 
+
 class ExtractorError(Exception):
     pass
 
+
 class DLStreamsExtractor:
     """Extractor for daddy live / dlstreams streams."""
+
+    FOLDERS = ["stream", "cast", "watch", "plus", "casting", "player"]
 
     def __init__(self, request_headers: dict = None, proxies: list = None, bypass_warp: bool = False):
         self.request_headers = request_headers or {}
@@ -63,8 +68,8 @@ class DLStreamsExtractor:
         except Exception:
             pass
 
-    def _prioritize_player_urls(self, channel_id: str) -> list[str]:
-        return self._build_player_urls(channel_id)
+    def _prioritize_player_urls(self, channel_id: str, preferred_folder: str = "stream") -> list[str]:
+        return self._build_player_urls(channel_id, preferred_folder)
 
     @staticmethod
     def _origin_of(url: str) -> str:
@@ -100,37 +105,80 @@ class DLStreamsExtractor:
             channel_id = channel_id.replace("premium", "")
         return channel_id
 
-    def _build_player_urls(self, channel_id: str) -> list[str]:
+    @staticmethod
+    def _extract_folder(url: str) -> str:
+        """Detect which folder variant (stream/cast/watch/plus/casting/player) was requested."""
+        match = re.search(r"/(stream|cast|watch|plus|casting|player)/stream-\d+\.php", url)
+        return match.group(1) if match else "stream"
+
+    def _build_player_urls(self, channel_id: str, preferred_folder: str = "stream") -> list[str]:
+        """Build the list of candidate player URLs, prioritizing the requested folder first."""
         origin = self.entry_origin.rstrip("/")
-        return [
-            f"{origin}/stream/stream-{channel_id}.php",
-            f"{origin}/cast/stream-{channel_id}.php",
-            f"{origin}/watch/stream-{channel_id}.php",
-            f"{origin}/plus/stream-{channel_id}.php",
-            f"{origin}/casting/stream-{channel_id}.php",
-            f"{origin}/player/stream-{channel_id}.php",
-        ]
+        if preferred_folder not in self.FOLDERS:
+            preferred_folder = "stream"
+        ordered_folders = [preferred_folder] + [f for f in self.FOLDERS if f != preferred_folder]
+        return [f"{origin}/{folder}/stream-{channel_id}.php" for folder in ordered_folders]
+
+    @staticmethod
+    def _try_xor_decode_signed_url(html: str) -> str | None:
+        """
+        Fallback for pages using XOR-obfuscated eval() blobs instead of atob().
+        Looks for large numeric array literals (e.g. var _fd1=[241,241,...])
+        and brute-forces small key/offset combinations to recover a readable
+        SIGNED_URL / .m3u8 string.
+        """
+        array_matches = re.findall(r"\[(?:\s*\d+\s*,){20,}\s*\d+\s*\]", html)
+        if not array_matches:
+            return None
+
+        for arr_str in array_matches:
+            try:
+                byte_arr = [int(x) for x in re.findall(r"\d+", arr_str)]
+            except ValueError:
+                continue
+
+            for key in range(0, 256):
+                for offset in range(0, 128):
+                    try:
+                        decoded = "".join(
+                            chr(((b ^ key) - offset + 256) % 256) for b in byte_arr
+                        )
+                    except Exception:
+                        continue
+                    if "SIGNED_URL" in decoded or ".m3u8" in decoded:
+                        match = re.search(
+                            r"SIGNED_URL\s*=\s*[\"\']"
+                            r"(https?://[^\"\']+\.m3u8[^\"\']*)[\"\']",
+                            decoded,
+                        )
+                        if match:
+                            return match.group(1)
+                        match2 = re.search(r"(https?://[^\s\"\']+\.m3u8[^\s\"\']*)", decoded)
+                        if match2:
+                            return match2.group(1)
+        return None
 
     async def _extract_directly(self, url: str, channel_id: str) -> Dict[str, Any] | None:
         """Fast path direct HTTP M3U8 extraction without Playwright."""
         session = await self._get_session(url)
-        player_urls = self._prioritize_player_urls(channel_id)
-        
+        preferred_folder = self._extract_folder(url)
+        player_urls = self._prioritize_player_urls(channel_id, preferred_folder)
+
         for candidate in player_urls:
             try:
                 headers = {
                     "User-Agent": self.base_headers["User-Agent"],
                     "Referer": url,
-                    "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8"
+                    "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8",
                 }
-                
+
                 logger.debug("DLStreams: GET stream page %s", candidate)
                 async with session.get(candidate, headers=headers, timeout=10) as resp:
                     if resp.status != 200:
                         logger.debug("DLStreams: candidate %s returned status %s", candidate, resp.status)
                         continue
                     html = await resp.text()
-                
+
                 # Extract player iframe src
                 iframe_src = None
                 if BeautifulSoup:
@@ -141,52 +189,58 @@ class DLStreamsExtractor:
                             iframe_src = iframe_el.get("src")
                     except Exception as e:
                         logger.debug("DLStreams: bs4 parsing error: %s", e)
-                
+
                 if not iframe_src:
-                    match = re.search(r'<iframe\s+[^>]*src=["\'](https?://[^"\']+)["\']', html, re.I)
+                    match = re.search(r'<iframe[^>]*src=["\'](https?://[^"\']+)["\']', html, re.I)
                     if match:
                         iframe_src = match.group(1)
-                
+
                 if not iframe_src:
                     logger.debug("DLStreams: player iframe not found in HTML of %s", candidate)
                     continue
-                
+
                 logger.debug("DLStreams: found player iframe: %s", iframe_src)
-                
+
                 # Fetch iframe player page
                 iframe_headers = headers.copy()
                 iframe_headers["Referer"] = candidate
                 iframe_headers["Origin"] = self.entry_origin
-                
+
                 async with session.get(iframe_src, headers=iframe_headers, timeout=10) as resp:
                     if resp.status != 200:
                         logger.debug("DLStreams: iframe %s returned status %s", iframe_src, resp.status)
                         continue
                     iframe_html = await resp.text()
-                
+
                 # Extract atob(...) Base64 encoded stream URL
                 atob_match = re.search(r"atob\(['\"](.*?)['\"]\)", iframe_html)
                 if not atob_match:
                     logger.debug("DLStreams: atob parameter not found in iframe HTML. Checking for direct source.")
                     direct_match = re.search(r"source:\s*['\"](.*?)['\"]", iframe_html)
                     if not direct_match:
-                        logger.debug("DLStreams: no direct source found either. Iframe HTML start: %s", iframe_html[:200])
-                        continue
-                    stream_url = direct_match.group(1)
-                    logger.debug("DLStreams: extracted direct stream URL: %s", stream_url)
+                        logger.debug("DLStreams: no direct source found. Trying XOR-obfuscated eval blob.")
+                        xor_url = self._try_xor_decode_signed_url(iframe_html)
+                        if not xor_url:
+                            logger.debug("DLStreams: XOR decode also failed. Iframe HTML start: %s", iframe_html[:200])
+                            continue
+                        stream_url = xor_url
+                        logger.debug("DLStreams: extracted XOR-decoded SIGNED_URL: %s", stream_url)
+                    else:
+                        stream_url = direct_match.group(1)
+                        logger.debug("DLStreams: extracted direct stream URL: %s", stream_url)
                 else:
                     b64_url = atob_match.group(1)
                     stream_url = base64.b64decode(b64_url).decode('utf-8', errors='ignore')
                     logger.debug("DLStreams: decrypted stream URL: %s", stream_url)
-                
+
                 # Format response payload
                 parsed_stream = urlparse(stream_url)
                 parsed_iframe = urlparse(iframe_src)
                 iframe_origin = f"{parsed_iframe.scheme}://{parsed_iframe.netloc}"
-                
+
                 # Use iframe origin as the Referer/Origin for playback headers to pass CDN security checks
                 ref_origin = iframe_origin
-                
+
                 playback_headers = {
                     "Referer": f"{ref_origin}/",
                     "Origin": ref_origin,
@@ -196,15 +250,15 @@ class DLStreamsExtractor:
                     "Sec-Fetch-Mode": "cors",
                     "Sec-Fetch-Site": "cross-site",
                 }
-                
+
                 # Sync session cookies for playback/proxying
                 self.stream_origin = f"{parsed_stream.scheme}://{parsed_stream.netloc}"
-                
+
                 # Store cookies in session if needed
                 cookie_header = self._get_cookie_header_for_url(stream_url)
                 if cookie_header:
                     playback_headers["Cookie"] = cookie_header
-                
+
                 return {
                     "destination_url": stream_url,
                     "request_headers": playback_headers,
@@ -212,22 +266,20 @@ class DLStreamsExtractor:
                     "captured_manifest": None,
                     "captured_manifests": {stream_url: ""},
                 }
-                
+
             except Exception as e:
                 logger.debug("DLStreams: direct extraction candidate %s failed: %s", candidate, e)
                 continue
-                
-        return None
 
+        return None
 
     async def _get_session(self, url: str | None = None):
         # Determine the correct proxy for the current state
         target_url = url or self.stream_origin or self.entry_origin
         proxy_url = await get_preferred_proxy_for_url(target_url, "dlstreams", self.proxies, self.bypass_warp_active)
-        
+
         # If we have an existing session, check if its proxy matches what we need now
         if self.session and not self.session.closed:
-            # We store the proxy used for the current session in a custom attribute
             session_proxy = getattr(self, "_session_proxy", "NOT_SET")
             if session_proxy == proxy_url:
                 return self.session
@@ -245,7 +297,7 @@ class DLStreamsExtractor:
         else:
             connector = TCPConnector(limit=0, limit_per_host=0, family=socket.AF_INET)
             logger.debug("DLStreams: Using direct session (Real IP)")
-        
+
         timeout = ClientTimeout(total=30, connect=10)
         self.session = ClientSession(
             timeout=timeout,
@@ -253,7 +305,7 @@ class DLStreamsExtractor:
             headers=self.base_headers,
             cookie_jar=aiohttp.CookieJar(unsafe=True),
         )
-        self._session_proxy = proxy_url # Store for future comparison
+        self._session_proxy = proxy_url  # Store for future comparison
         return self.session
 
     async def extract(self, url: str, **kwargs) -> Dict[str, Any]:
