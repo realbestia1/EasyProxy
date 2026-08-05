@@ -3,7 +3,7 @@
 # EasyProxy Full - Termux One-Shot Setup (No WARP)
 # ============================================================
 # Usage: Open Termux, then run:
-#   curl -fsSL --retry 3 https://raw.githubusercontent.com/realbestia1/EasyProxy/main/termux_setup.sh | bash
+#   curl -fsSL --retry 3 https://raw.githubusercontent.com/DevGizmo86/EasyProxy/main/termux_setup.sh | bash
 #
 # Or copy this file and run:
 #   chmod +x termux_setup.sh && ./termux_setup.sh
@@ -30,7 +30,7 @@ trap 'err "Setup failed at line $LINENO: $BASH_COMMAND"' ERR
 DISTRO_NAME="ubuntu"
 DISTRO_IMAGE="ubuntu"
 EP_DIR="/root/EasyProxy"
-EP_REPO="https://github.com/realbestia1/EasyProxy.git"
+EP_REPO="https://github.com/DevGizmo86/EasyProxy.git"
 
 echo ""
 echo -e "${BLUE}==========================================${NC}"
@@ -98,7 +98,7 @@ proot-distro login "$DISTRO_NAME" -- bash -s <<'UBUNTU_SETUP'
     command -v chromedriver >/dev/null 2>&1
 
     EP_DIR="/root/EasyProxy"
-    EP_REPO="https://github.com/realbestia1/EasyProxy.git"
+    EP_REPO="https://github.com/DevGizmo86/EasyProxy.git"
 
     if [ -d "$EP_DIR/.git" ]; then
         echo "[WARN] EasyProxy already exists, pulling latest..."
@@ -316,7 +316,7 @@ set -Eeuo pipefail
 echo "Running full EasyProxy system update..."
 easyproxy-stop 2>/dev/null || true
 curl -fsSL --retry 3 --connect-timeout 20 \
-    "https://raw.githubusercontent.com/realbestia1/EasyProxy/main/termux_setup.sh?$(date +%s)" | bash
+    "https://raw.githubusercontent.com/DevGizmo86/EasyProxy/main/termux_setup.sh?$(date +%s)" | bash
 echo "EasyProxy system updated successfully!"
 easyproxy
 UPD_EOF

@@ -65,7 +65,7 @@ For Termux, full functionality requires a 64-bit Android device. On 32-bit devic
 1.  **Install Termux** from [F-Droid](https://f-droid.org/en/packages/com.termux/) (do NOT use Play Store version).
 2.  **Run the One-Shot Setup**:
     ```bash
-    curl -fsSL --retry 3 "https://raw.githubusercontent.com/realbestia1/EasyProxy/main/termux_setup.sh?$(date +%s)" | bash
+    curl -fsSL --retry 3 "https://raw.githubusercontent.com/DevGizmo86/EasyProxy/main/termux_setup.sh?$(date +%s)" | bash
     ```
 3.  **Prevent Termux from Sleeping**:
     - **Wake Lock**: Swipe down your notification bar and click **"Acquire wake-lock"** on the Termux notification.
