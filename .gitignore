@@ -1,4 +1,5 @@
 *.pyc
+/.venv/
 extractors/.dlhd_cache
 flaresolverr/
 byparr/
