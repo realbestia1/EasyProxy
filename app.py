@@ -17,6 +17,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from services.proxy import HLSProxy
 from config import PORT, RECORDINGS_DIR, APP_VERSION
 from services.recording_manager import RecordingManager
+from services.sidecar_manager import SidecarManager
 from routes.recordings import setup_recording_routes
 
 logger = logging.getLogger(__name__)
@@ -29,10 +30,13 @@ def _read_file(path):
 # --- Logica di Avvio ---
 def create_app():
     """Crea e configura l'applicazione aiohttp."""
-    proxy = HLSProxy()
+    sidecar_cache_dir = os.path.join(RECORDINGS_DIR, "sidecar_data")
+    sidecar_manager = SidecarManager(cache_dir=sidecar_cache_dir)
+    proxy = HLSProxy(sidecar_manager=sidecar_manager)
 
     app = web.Application()
     app['proxy'] = proxy
+    app['sidecar_manager'] = sidecar_manager
 
     # Initialize recording manager for DVR functionality
     recording_manager = RecordingManager(
@@ -105,6 +109,17 @@ def create_app():
     # ✅ Health check endpoint
     app.router.add_get('/health', lambda r: web.json_response({"status": "ok", "version": APP_VERSION}))
 
+    # Toastflix aiohttp sidecar, kept private and exposed through this process.
+    app.router.add_route('*', '/sidecar', proxy.handle_sidecar_request)
+    app.router.add_route('*', '/sidecar/{tail:.*}', proxy.handle_sidecar_request)
+
+    # Root aliases for Toastflix clients that append /session, /dual, etc.
+    # directly to the configured EasyProxy base URL.
+    app.router.add_route('*', '/session', proxy.handle_sidecar_root_request)
+    app.router.add_route('*', '/dual/{tail:.*}', proxy.handle_sidecar_root_request)
+    app.router.add_route('*', '/offset/{tail:.*}', proxy.handle_sidecar_root_request)
+    app.router.add_route('*', '/sync', proxy.handle_sidecar_root_request)
+
     # Admin Panel
     app.router.add_get('/admin', proxy.handle_admin)
     app.router.add_get('/admin/login', proxy.handle_admin_login)
@@ -129,12 +144,17 @@ def create_app():
     app.on_cleanup.append(cleanup_handler)
     
     async def on_startup(app):
+        # The sidecar is started lazily by the first /sidecar request and is
+        # stopped after 1 hour without activity.
         asyncio.create_task(proxy.start_tasks())
         asyncio.create_task(recording_manager.cleanup_loop())
     app.on_startup.append(on_startup)
 
     async def on_shutdown(app):
-        await recording_manager.shutdown()
+        try:
+            await recording_manager.shutdown()
+        finally:
+            await sidecar_manager.stop()
     app.on_shutdown.append(on_shutdown)
     
     return app
