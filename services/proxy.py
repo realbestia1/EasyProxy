@@ -7,6 +7,8 @@ from services.proxy_dash import HLSProxyDashMixin
 from services.proxy_handlers import HLSProxyHandlersMixin
 from services.proxy_pages import HLSProxyPagesMixin
 from services.proxy_streaming import HLSProxyStreamingMixin
+from services.proxy_sidecar import HLSProxySidecarMixin
+from services.sidecar_manager import SidecarManager
 
 # ContextVars to isolate extractor state per request/asyncio task to avoid concurrent request interference
 _extractors_var = contextvars.ContextVar("extractors", default=None)
@@ -15,6 +17,7 @@ _extractor_stream_atimes_var = contextvars.ContextVar("extractor_stream_atimes",
 
 
 class HLSProxy(
+    HLSProxySidecarMixin,
     HLSProxyCoreMixin,
     HLSProxyHandlersMixin,
     HLSProxyDashMixin,
@@ -59,7 +62,7 @@ class HLSProxy(
     def _extractor_stream_atimes(self, value):
         _extractor_stream_atimes_var.set(value)
 
-    def __init__(self):
+    def __init__(self, sidecar_manager: SidecarManager | None = None):
         # Note: self.extractors, self._extractor_atimes, and self._extractor_stream_atimes 
         # are lazily initialized per asyncio task context to prevent concurrent request race conditions.
 
@@ -72,7 +75,6 @@ class HLSProxy(
 
         # Prefetch queue for background downloading (kept for prefetch logic, no segment cache storage)
         self.prefetch_tasks = set()
-        self._background_tasks = set()
         self._prefetch_semaphore = asyncio.Semaphore(5)
         self._prefetch_lock = asyncio.Lock()
 
@@ -94,6 +96,9 @@ class HLSProxy(
         self.latest_version = "Checking..."
         self.warp_status = "Checking..."
         self._warp_ip = ""
+
+        if sidecar_manager is not None:
+            self._init_sidecar_proxy(sidecar_manager)
 
 
 
