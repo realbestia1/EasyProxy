@@ -26,7 +26,7 @@ AES_IV = b"8017d3a8f1400d2f"
 DEFAULT_DATA_API_BASE = "https://apis-data10.tcpwe138stya.ru"
 DEFAULT_PLAYER_REFERER = "https://nadia01eo.tn76degree12ec3out.cfd/"
 DEFAULT_STREAM_DIGIT = "seth"
-SITE_URL = "https://www.fctv33hd.rest"
+SITE_URL = os.getenv("FCTV_SITE_URL", "https://www.fctv33hd.vip").rstrip("/")
 
 # sport slug (event page path segment) -> sportType id (from site JS enum: ST_FOOTBALL=1 ...)
 SPORT_SLUG_MAP = {
