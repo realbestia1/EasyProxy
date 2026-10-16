@@ -25,7 +25,7 @@ _PING_URLS = [
 ]
 _VYPN_PACKAGE = "net.vypn.app"
 _VYPN_VERSION = "1.4.1"
-_BASE_SITES = ["https://vavoo.to", "https://kool.to"]
+_BASE_SITES = ["https://vavoo.net", "https://www.vavoo.net", "https://vavoo.to", "https://kool.to"]
 _LANGUAGE = "de"
 _REGION = "DE"
 
@@ -279,7 +279,7 @@ class VavooExtractor(BaseExtractor):
         if m:
             url = f"https://vavoo.to/vavoo-iptv/play/{m.group(1)}"
 
-        for attempt in range(2):
+        for attempt in range(len(_BASE_SITES)):
             if attempt > 0:
                 sig = await self._get_sig(force=True)
                 if not sig:
@@ -305,14 +305,11 @@ class VavooExtractor(BaseExtractor):
             body = {"language": _LANGUAGE, "region": _REGION, "url": url, "clientVersion": "3.0.2"}
             try:
                 async with session.post(self._resolve_url, json=body, headers=headers,
-                                        timeout=ClientTimeout(total=30), ssl=False) as resp:
-                    if resp.status in (451, 502) and attempt < 1:
-                        logger.warning(f"Vavoo resolve status {resp.status}, switching base site")
+                                        timeout=ClientTimeout(total=15), ssl=False) as resp:
+                    if resp.status != 200:
+                        logger.warning(f"Vavoo resolve returned status {resp.status} from {self._resolve_url}, switching base site")
                         self._switch_to_next_base()
                         continue
-                    if resp.status != 200:
-                        logger.warning(f"Vavoo resolve returned status {resp.status}")
-                        return None
                     data = await resp.json(content_type=None)
                     if isinstance(data, list) and data and data[0].get("url"):
                         return str(data[0]["url"])
@@ -321,15 +318,17 @@ class VavooExtractor(BaseExtractor):
                             return str(data["url"])
                         if data.get("data", {}).get("url"):
                             return str(data["data"]["url"])
-                    logger.warning("Vavoo resolve response missing URL")
-                    return None
+                    logger.warning(f"Vavoo resolve response missing URL from {self._resolve_url}")
+                    self._switch_to_next_base()
+                    continue
             except Exception as e:
-                logger.warning(f"Vavoo resolve exception: {e}")
-                return None
+                logger.warning(f"Vavoo resolve exception on {self._resolve_url}: {e}, switching base site")
+                self._switch_to_next_base()
+                continue
         return None
 
     async def extract(self, url: str, **kwargs) -> Dict[str, Any]:
-        if "vavoo.to" not in url:
+        if not any(d in url for d in ("vavoo.to", "vavoo.net", "vavoo.tv", "kool.to")):
             raise ExtractorError("Not a valid Vavoo URL")
 
         self._apply_routing_kwargs(url, kwargs)

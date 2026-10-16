@@ -113,7 +113,7 @@ def request_log_context(request=None, target_url: str | None = None, route: str 
     requested = query.get("orig_url") or query.get("original_channel_url") or query.get("url") or query.get("d")
     # Old/generated relay URLs may not carry extractor_key. Keep service logs
     # useful by inferring only the unambiguous provider URL we support here.
-    if extractor_fallback in {"unknown", "generic_hls"} and "vavoo.to" in str(requested or "").lower():
+    if extractor_fallback in {"unknown", "generic_hls"} and any(d in str(requested or "").lower() for d in ("vavoo.to", "vavoo.net", "vavoo.tv", "kool.to")):
         extractor_fallback = "vavoo"
     route_text = route or "unknown"
     return (

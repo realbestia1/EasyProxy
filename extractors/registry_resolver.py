@@ -477,9 +477,9 @@ async def resolve_extractor(self, url: str, request_headers: dict, host: str = N
                     request_headers, proxies=proxy_list
                 )
             return self.extractors[key]
-        elif "vavoo.to" in url:
+        elif any(d in url for d in ("vavoo.to", "vavoo.net", "vavoo.tv", "kool.to")):
             key = _cache_key("vavoo", bypass_warp)
-            proxy = get_proxy_for_url("vavoo.to", bypass_warp=bypass_warp)
+            proxy = get_proxy_for_url(urllib.parse.urlparse(url).netloc or "vavoo.net", bypass_warp=bypass_warp)
             proxy_list = _build_proxy_list(proxy, "vavoo")
             if key not in self.extractors:
                 self.extractors[key] = VavooExtractor(

@@ -110,7 +110,7 @@ class PlaylistBuilder:
                 
                 if 'pluto.tv' in logical_line:
                     processed_url_content = logical_line
-                elif 'vavoo.to' in logical_line:
+                elif any(d in logical_line for d in ('vavoo.to', 'vavoo.net', 'vavoo.tv', 'kool.to')):
                     encoded_url = urllib.parse.quote(logical_line, safe='')
                     processed_url_content = f"{base_url}/proxy/manifest.m3u8?url={encoded_url}"
                 elif 'livetv.sx' in logical_line or 'livetv' in logical_line:
