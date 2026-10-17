@@ -80,7 +80,7 @@ class RecordingManager:
 
         if '.mpd' in url_lower:
             return StreamType.MPD
-        elif 'vavoo.to' in url_lower:
+        elif any(d in url_lower for d in ('vavoo.to', 'kool.to', 'vavoo.net', 'kool.ws', 'huhu.to', 'oha.to', 'voltop.net')):
             return StreamType.VAVOO
         elif 'popcdn.day' in url_lower or 'freeshot' in url_lower:
             return StreamType.FREESHOT

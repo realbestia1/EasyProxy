@@ -1022,7 +1022,9 @@ def get_ssl_setting_for_url(url: str, transport_routes: list = None) -> bool:
     if "disable_ssl=1" in normalized_url:
         return True
 
-    vavoo_domains = ("vavoo.to", "vavoo.tv", "vavoo", "lokke.app", "mediahubmx", "vixsrc.to", "vix-content.net", "/sunshine/", "unitv.mom", "d2b.you", "vidxgo")
+    vavoo_domains = ("vavoo.to", "vavoo.tv", "vavoo", "lokke.app", "mediahubmx", "vixsrc.to", "vix-content.net", "/sunshine/", "unitv.mom", "d2b.you", "vidxgo",
+                       # Mirror frontend dello stesso backend mediahubmx (stesse tutele SSL).
+                       "kool.to", "kool.ws", "vavoo.net", "huhu.to", "oha.to", "voltop.net")
 
     if not url or not transport_routes:
         return any(domain in normalized_url for domain in vavoo_domains)

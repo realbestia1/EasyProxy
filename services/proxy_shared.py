@@ -113,7 +113,11 @@ def request_log_context(request=None, target_url: str | None = None, route: str 
     requested = query.get("orig_url") or query.get("original_channel_url") or query.get("url") or query.get("d")
     # Old/generated relay URLs may not carry extractor_key. Keep service logs
     # useful by inferring only the unambiguous provider URL we support here.
-    if extractor_fallback in {"unknown", "generic_hls"} and "vavoo.to" in str(requested or "").lower():
+    # (tutti i mirror frontend mediahubmx, non solo vavoo.to)
+    if extractor_fallback in {"unknown", "generic_hls"} and any(
+        d in str(requested or "").lower()
+        for d in ("vavoo.to", "kool.to", "vavoo.net", "kool.ws", "huhu.to", "oha.to", "voltop.net")
+    ):
         extractor_fallback = "vavoo"
     route_text = route or "unknown"
     return (
@@ -250,6 +254,8 @@ def check_vavoo_request(headers: dict, request: web.Request, url: str) -> bool:
         or "vavoo" in (headers.get("Origin") or "").lower()
         or "vavoo" in (request.headers.get("Referer") or "").lower()
         or "vavoo" in url.lower()
+        # Mirror frontend dello stesso backend (play URL senza "vavoo" dentro).
+        or any(d in url.lower() for d in ("kool.to", "kool.ws", "huhu.to", "oha.to", "voltop.net"))
         or any(x in url.lower() for x in ["/sunshine/", "lokke", "mediahubmx"])
     )
 
