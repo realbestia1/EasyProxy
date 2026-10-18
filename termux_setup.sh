@@ -46,7 +46,7 @@ termux-setup-storage 2>/dev/null || true
 # otherwise curl and its OpenSSL/ngtcp2 libraries can end up ABI-incompatible.
 apt-get update
 DEBIAN_FRONTEND=noninteractive apt-get full-upgrade -y
-pkg install -y proot-distro git curl pulseaudio wget screen
+pkg install -y proot-distro git curl wget screen
 log "Termux packages installed."
 
 info "Phase 2/6: Setting up Ubuntu environment..."
@@ -298,7 +298,7 @@ if command -v warp-register >/dev/null 2>&1 && command -v wireproxy >/dev/null 2
             echo "WARP registration failed; continuing without WARP."
         fi
     fi
-    if [ -s "$WARP_CONFIG_FILE" ] && bash "$EP_DIR/scripts/warp_userspace_ctl.sh" start; then
+    if [ -s "$WARP_CONFIG_FILE" ] && bash "$EP_DIR/scripts/wireproxy_ctl.sh" start; then
         # Wait for the SOCKS5 listener like entrypoint.sh does in Docker.
         for _ in {1..20}; do
             if (exec 3<>/dev/tcp/127.0.0.1/1080) 2>/dev/null; then

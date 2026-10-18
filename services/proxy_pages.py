@@ -4,18 +4,14 @@ import time
 import asyncio
 import shutil
 import urllib.parse
-import urllib.request
-import tarfile
 import threading
-import zipfile
-import tempfile
 import services.proxy_shared as _shared
 from services import wg_tunnels
 from services import tor_proxy
 from services.proxy_shared import (
-    logger, web, APP_VERSION,
+    logger, web, APP_VERSION, admin_guard,
     check_password, get_client_ip, PlaylistBuilder, ClientSession, ClientTimeout,
-    TCPConnector, get_connector_for_proxy, API_PASSWORD,
+    TCPConnector, API_PASSWORD,
     get_public_base_url,
 )
 from extractors.registry import *
@@ -25,8 +21,6 @@ from config import (
     reload_config,
     clear_proxy_affinity,
     get_system_stats,
-    get_memory_profile,
-    reset_memory_profiler,
 )
 
 # Background speedtest job state (single run at a time; polled by the panel).
@@ -164,13 +158,72 @@ class HLSProxyPagesMixin:
                 content_type="text/html",
             )
 
+    # API docs pages: one shell (templates/api_docs.html) + the engine block.
+    _API_DOCS_ENGINES = {
+        "docs": (
+            "EasyProxy API Docs",
+            '    <link rel="stylesheet" href="https://unpkg.com/swagger-ui-dist@5/swagger-ui.css">\n'
+            "    <style>\n"
+            "        html, body { margin: 0; background: #f4f7fb; }\n"
+            "        .topbar { display: none; }\n"
+            "        .swagger-ui .info .title { color: #0f172a; }\n"
+            "    </style>\n",
+            '    <div id="swagger-ui"></div>\n'
+            '    <script src="https://unpkg.com/swagger-ui-dist@5/swagger-ui-bundle.js"></script>\n'
+            "    <script>\n"
+            "        window.ui = SwaggerUIBundle({\n"
+            "            url: '/openapi.json',\n"
+            "            dom_id: '#swagger-ui',\n"
+            "            deepLinking: true,\n"
+            "            presets: [SwaggerUIBundle.presets.apis],\n"
+            "            layout: 'BaseLayout'\n"
+            "        });\n"
+            "    </script>\n",
+        ),
+        "redoc": (
+            "EasyProxy ReDoc",
+            "    <style>\n"
+            "        html, body { margin: 0; padding: 0; background: #f8fafc; font-family: Arial, sans-serif; }\n"
+            "        .fallback { display: none; max-width: 900px; margin: 48px auto; padding: 24px;\n"
+            "            background: white; border: 1px solid #e2e8f0; border-radius: 16px;\n"
+            "            box-shadow: 0 10px 30px rgba(15, 23, 42, 0.08); }\n"
+            "        .fallback h1 { margin-top: 0; color: #0f172a; }\n"
+            "        .fallback a { color: #0284c7; text-decoration: none; }\n"
+            "    </style>\n",
+            '    <redoc spec-url="/openapi.json"></redoc>\n\n'
+            '    <div id="fallback" class="fallback">\n'
+            "        <h1>ReDoc non disponibile</h1>\n"
+            "        <p>La vista ReDoc non si e caricata correttamente dal CDN.</p>\n"
+            '        <p>Puoi usare <a href="/docs">/docs</a> per Swagger UI oppure aprire '
+            '<a href="/openapi.json">/openapi.json</a>.</p>\n'
+            "    </div>\n\n"
+            "    <script>\n"
+            "        window.addEventListener('error', function (event) {\n"
+            "            if (event && event.target && event.target.tagName === 'SCRIPT') {\n"
+            "                document.getElementById('fallback').style.display = 'block';\n"
+            "            }\n"
+            "        }, true);\n"
+            "    </script>\n"
+            '    <script src="https://unpkg.com/redoc@2.1.3/bundles/redoc.standalone.js"></script>\n',
+        ),
+    }
+
+    def _render_api_docs(self, engine: str) -> web.Response:
+        title, head, body = self._API_DOCS_ENGINES[engine]
+        html_content = (
+            self._read_template("api_docs.html")
+            .replace("{{DOCS_TITLE}}", title)
+            .replace("{{DOCS_HEAD}}", head)
+            .replace("{{DOCS_BODY}}", body)
+        )
+        return web.Response(text=html_content, content_type="text/html")
+
     async def handle_docs(self, request):
         """Serve Swagger UI per la documentazione API."""
         try:
-            html_content = self._read_template("docs.html")
-            return web.Response(text=html_content, content_type="text/html")
+            return self._render_api_docs("docs")
         except Exception as e:
-            logger.error(f"Unable to load 'docs.html': {e}")
+            logger.error(f"Unable to load the API docs shell: {e}")
             return web.Response(
                 text="<h1>Error 500</h1><p>Unable to load API docs.</p>",
                 status=500,
@@ -180,10 +233,9 @@ class HLSProxyPagesMixin:
     async def handle_redoc(self, request):
         """Serve ReDoc per la documentazione API."""
         try:
-            html_content = self._read_template("redoc.html")
-            return web.Response(text=html_content, content_type="text/html")
+            return self._render_api_docs("redoc")
         except Exception as e:
-            logger.error(f"Unable to load 'redoc.html': {e}")
+            logger.error(f"Unable to load the API docs shell: {e}")
             return web.Response(
                 text="<h1>Error 500</h1><p>Unable to load ReDoc.</p>",
                 status=500,
@@ -351,8 +403,6 @@ class HLSProxyPagesMixin:
                 "/license": "Proxy licenze DRM (ClearKey/Widevine) - ?url=<URL> o ?clearkey=<id:key>",
                 "/info": "Pagina HTML con informazioni sul server",
                 "/api/info": "Endpoint JSON con informazioni sul server",
-                "/api/memory/profile": "Profiler tracemalloc: allocazioni Python e crescita dal boot",
-                "/api/memory/profile/reset": "POST: resetta il baseline del profiler",
                 "/api/dual/memory": "RAM used by the integrated DUAL service",
                 "/dual/manifest.m3u8": "DUAL HLS master with synchronized video + audio - ?d=<Base64 JSON>",
                 "/dual/sync/links": "DUAL JSON test for synchronizing video and audio",
@@ -376,25 +426,11 @@ class HLSProxyPagesMixin:
         }
         return web.json_response(info)
 
-    async def handle_memory_profile(self, request):
-        """Return top Python allocations and growth since the profiler baseline."""
-        if not check_password(request):
-            return web.Response(status=401, text="Unauthorized: Invalid API Password")
-        return web.json_response(get_memory_profile(request.query.get("limit", 30)))
-
-    async def handle_memory_profile_reset(self, request):
-        """Reset the tracemalloc baseline used by the memory profiler."""
-        if not check_password(request):
-            return web.Response(status=401, text="Unauthorized: Invalid API Password")
-        return web.json_response(reset_memory_profiler())
-
     # "__SECURITY__" nel JSON marca le operazioni che richiedono api_password.
     def _openapi_spec(self, request) -> dict:
         """Serve static/openapi.json, patching the per-request fields."""
         if self._openapi_text is None:
-            spec_path = os.path.join(
-                self._template_cache_dir, os.pardir, "static", "openapi.json"
-            )
+            spec_path = os.path.join(self._template_cache_dir, os.pardir, "static", "openapi.json")
             with open(spec_path, "r", encoding="utf-8") as f:
                 self._openapi_text = f.read()
         spec = json.loads(self._openapi_text)
@@ -515,10 +551,9 @@ class HLSProxyPagesMixin:
             logger.error(f"❌ Error generating URLs: {e}")
             return web.Response(text=str(e), status=500)
 
+    @admin_guard
     async def handle_proxy_ip(self, request):
         """Restituisce l'indirizzo IP pubblico reale del server (connessione diretta)."""
-        if not check_password(request):
-            return web.Response(status=401, text="Unauthorized: Invalid API Password")
 
         target_url = "https://api.ipify.org?format=json"
         try:
@@ -574,9 +609,8 @@ class HLSProxyPagesMixin:
         resp.del_cookie("admin_token", path="/")
         raise resp
 
+    @admin_guard
     async def handle_admin_api_get(self, request):
-        if not check_password(request):
-            return web.Response(status=401, text="Unauthorized")
         config = config_store.get_all()
         config["api_password_configured"] = bool(API_PASSWORD)
         config["app_version"] = APP_VERSION
@@ -599,9 +633,8 @@ class HLSProxyPagesMixin:
                     names.append(short)
         return sorted(names)
 
+    @admin_guard
     async def handle_admin_api_update(self, request):
-        if not check_password(request):
-            return web.Response(status=401, text="Unauthorized")
         try:
             data = await request.json()
         except Exception:
@@ -634,9 +667,8 @@ class HLSProxyPagesMixin:
 
         return web.json_response({"status": "ok", "updated": list(updates.keys())})
 
+    @admin_guard
     async def handle_admin_api_warp_toggle(self, request):
-        if not check_password(request):
-            return web.Response(status=401, text="Unauthorized")
         try:
             data = await request.json()
         except Exception:
@@ -664,16 +696,14 @@ class HLSProxyPagesMixin:
 
         return web.json_response({"status": "ok", "warp": "enabled" if enable else "disabled"})
 
+    @admin_guard
     async def handle_admin_api_warp_reconnect(self, request):
-        if not check_password(request):
-            return web.Response(status=401, text="Unauthorized")
         result = await self.reconnect_warp()
         status_code = 200 if result.get("status") == "ok" else 500
         return web.json_response(result, status=status_code)
 
+    @admin_guard
     async def handle_admin_api_extractor_proxy(self, request):
-        if not check_password(request):
-            return web.Response(status=401, text="Unauthorized")
         try:
             data = await request.json()
         except Exception:
@@ -702,9 +732,8 @@ class HLSProxyPagesMixin:
 
         return web.json_response({"status": "ok", "extractor": extractor, "proxy": proxy or None})
 
+    @admin_guard
     async def handle_admin_api_download(self, request):
-        if not check_password(request):
-            return web.Response(status=401, text="Unauthorized")
         data = config_store.get_all()
         json_str = json.dumps(data, indent=2)
         return web.Response(
@@ -715,9 +744,8 @@ class HLSProxyPagesMixin:
             }
         )
 
+    @admin_guard
     async def handle_admin_api_upload(self, request):
-        if not check_password(request):
-            return web.Response(status=401, text="Unauthorized")
         try:
             reader = await request.multipart()
             field = await reader.next()
@@ -738,24 +766,22 @@ class HLSProxyPagesMixin:
             logger.error(f"Config upload failed: {e}")
             return web.Response(status=500, text=f"Upload failed: {e}")
 
+    @admin_guard
     async def handle_admin_api_speedtest(self, request):
         """Start the speedtest as a background job.
 
-        A full run (one Ookla test per route) can take minutes; serving it in
+        A full run (one throughput test per route) can take minutes; serving it in
         one request makes gateways (Cloudflare, HF, nginx) time out and answer
         with an HTML error page, which the panel renders as a JSON parse error.
         """
-        if not check_password(request):
-            return web.Response(status=401, text="Unauthorized")
         if _SPEEDTEST_STATE["running"]:
             return web.json_response({"status": "running"})
         _SPEEDTEST_STATE.update(running=True, results=None, error=None)
         asyncio.create_task(self._run_speedtest_job())
         return web.json_response({"status": "started"})
 
+    @admin_guard
     async def handle_admin_api_speedtest_status(self, request):
-        if not check_password(request):
-            return web.Response(status=401, text="Unauthorized")
         if _SPEEDTEST_STATE["running"]:
             return web.json_response({"status": "running"})
         return web.json_response({
@@ -797,7 +823,7 @@ class HLSProxyPagesMixin:
                 deduped.append(route)
             routes = deduped
             output = []
-            # Run routes one at a time. Concurrent Ookla tests compete for the
+            # Run routes one at a time. Concurrent tests compete for the
             # same uplink/downlink and make the displayed comparison invalid.
             for route in routes:
                 try:
@@ -814,19 +840,17 @@ class HLSProxyPagesMixin:
         finally:
             _SPEEDTEST_STATE["running"] = False
 
+    @admin_guard
     async def handle_admin_api_test_extractors(self, request):
         """Start the extractor test as a background job (a full run takes minutes)."""
-        if not check_password(request):
-            return web.Response(status=401, text="Unauthorized")
         if _EXTRACTOR_TEST_STATE["running"]:
             return web.json_response({"status": "running"})
         _EXTRACTOR_TEST_STATE.update(running=True, results=None, skipped=None, error=None)
         asyncio.create_task(self._run_extractor_test_job(dict(request.headers)))
         return web.json_response({"status": "started"})
 
+    @admin_guard
     async def handle_admin_api_test_extractors_status(self, request):
-        if not check_password(request):
-            return web.Response(status=401, text="Unauthorized")
         if _EXTRACTOR_TEST_STATE["running"]:
             return web.json_response({"status": "running"})
         return web.json_response({
@@ -893,116 +917,24 @@ class HLSProxyPagesMixin:
         finally:
             _EXTRACTOR_TEST_STATE["running"] = False
 
-    def _ensure_speedtest_exe(self):
-        import os as _os
-        import platform as _platform
-        home = _os.path.expanduser("~")
-        auto_install_paths = [
-            _os.path.join(_os.environ.get("LOCALAPPDATA", home), "OoklaSpeedtest", "speedtest.exe"),
-            _os.path.join(home, ".local", "share", "easyproxy", "bin", "speedtest"),
-        ]
-        system_paths = [
-            "/usr/local/bin/speedtest",
-            "/usr/bin/speedtest",
-            "speedtest.exe",
-            "speedtest",
-        ]
-        for p in auto_install_paths + system_paths:
-            if _os.path.exists(p):
-                return p
-        found = shutil.which("speedtest")
-        if found:
-            return found
-
-        # Auto-download Ookla Speedtest CLI
-        system = _platform.system().lower()
-        machine = _platform.machine().lower()
-        version = "1.2.0"
-        try:
-            if system in ("windows", "win32"):
-                url = f"https://install.speedtest.net/app/cli/ookla-speedtest-{version}-win64.zip"
-                install_dir = _os.path.dirname(auto_install_paths[0])
-                target = auto_install_paths[0]
-                member = "speedtest.exe"
-                archive_cls = zipfile.ZipFile
-                archive_mode = "r"
-            elif system == "linux":
-                arch_map = {"x86_64": "x86_64", "amd64": "x86_64", "aarch64": "aarch64", "arm64": "aarch64"}
-                arch = arch_map.get(machine)
-                if not arch:
-                    raise RuntimeError(f"Unsupported Linux architecture: {machine}")
-                url = f"https://install.speedtest.net/app/cli/ookla-speedtest-{version}-linux-{arch}.tgz"
-                install_dir = _os.path.dirname(auto_install_paths[1])
-                target = auto_install_paths[1]
-                member = "speedtest"
-                archive_cls = tarfile.open
-                archive_mode = "r:gz"
-            else:
-                raise RuntimeError(f"Auto-install not supported on {system}. Please install Ookla Speedtest CLI manually.")
-
-            _os.makedirs(install_dir, exist_ok=True)
-            suffix = ".zip" if system in ("windows", "win32") else ".tgz"
-            fd, tmp_path = tempfile.mkstemp(suffix=suffix)
-            _os.close(fd)
-            try:
-                urllib.request.urlretrieve(url, tmp_path)
-                with archive_cls(tmp_path, archive_mode) as archive:
-                    archive.extract(member, install_dir)
-                _os.chmod(target, 0o755)
-            finally:
-                if _os.path.exists(tmp_path):
-                    _os.remove(tmp_path)
-            return target
-        except Exception as e:
-            raise RuntimeError(
-                f"Failed to auto-install Speedtest CLI: {e}.\n"
-                "Install it manually:\n"
-                "  Windows: https://www.speedtest.net/apps/cli\n"
-                "  Linux: sudo apt install speedtest\n"
-                "  Docker: see Dockerfile"
-            )
-
     def _run_speedtest(self, proxy_url=None):
-        import subprocess
-        import os as _os
-        if proxy_url:
-            return self._run_proxy_speedtest(proxy_url)
+        """Measure real TCP throughput with curl for the direct and proxied routes.
 
-        exe = self._ensure_speedtest_exe()
-        command = [exe, "--format", "json", "--accept-license", "--accept-gdpr"]
-
-        # DIRECT must not inherit a proxy from the container/VPS shell.
-        env = _os.environ.copy()
-        for key in _PROXY_ENV_KEYS:
-            env.pop(key, None)
-        try:
-            result = subprocess.run(
-                command,
-                capture_output=True, text=True, timeout=60, env=env
-            )
-            if result.returncode != 0:
-                err = result.stderr
-                if "Network is unreachable" in err or "Cannot retrieve configuration" in err:
-                    raise RuntimeError("No internet connection. Check your network.")
-                raise RuntimeError(f"Speedtest failed: {err.split('[')[-1].rstrip(']') if '[' in err else err[:100]}")
-            data = json.loads(result.stdout)
-            return {
-                "server": {
-                    "sponsor": data.get("server", {}).get("sponsor", "Unknown"),
-                    "name": data.get("server", {}).get("name", "Unknown"),
-                    "location": data.get("server", {}).get("location", "Unknown")
-                },
-                "download_mbps": round(data.get("download", {}).get("bandwidth", 0) * 8 / 1_000_000, 1),
-                "upload_mbps": round(data.get("upload", {}).get("bandwidth", 0) * 8 / 1_000_000, 1),
-                "ping_ms": round(data.get("ping", {}).get("latency", 0), 1)
-            }
-        except subprocess.TimeoutExpired:
-            raise RuntimeError("Speedtest timed out after 60 seconds")
-        except json.JSONDecodeError:
-            raise RuntimeError("Failed to parse speedtest output")
+        Ookla's static binary ignores proxies, so curl (which can be pointed at
+        any route) is the single measurement path for every row of the panel.
+        """
+        for attempt in range(2):
+            try:
+                return self._measure_speedtest(proxy_url)
+            except RuntimeError as exc:
+                # A stalled circuit (common on Tor) can drop one leg of the test.
+                if "no payload" not in str(exc) or attempt:
+                    raise
 
     def _proxy_curl_args(self, proxy_url):
         """Return curl arguments that force DNS and TCP through one proxy."""
+        if not proxy_url:
+            return []
         parsed = urllib.parse.urlparse(proxy_url)
         scheme = (parsed.scheme or "").lower()
         if scheme in ("socks5", "socks5h"):
@@ -1032,11 +964,11 @@ class HLSProxyPagesMixin:
             args.extend(["--proxy-user", f"{username}:{password}"])
         return args
 
-    def _run_proxy_curl(self, proxy_url, url, write_out, extra=None, timeout=60, allow_timeout=False):
+    def _run_curl(self, proxy_url, url, write_out, extra=None, timeout=60, allow_timeout=False):
         import subprocess
         curl = shutil.which("curl") or shutil.which("curl.exe")
         if not curl:
-            raise RuntimeError("Proxy speedtest unavailable: curl is not installed")
+            raise RuntimeError("Speedtest unavailable: curl is not installed")
 
         env = os.environ.copy()
         for key in _PROXY_ENV_KEYS:
@@ -1053,18 +985,18 @@ class HLSProxyPagesMixin:
         try:
             result = subprocess.run(command, capture_output=True, text=True, timeout=timeout + 10, env=env)
         except subprocess.TimeoutExpired:
-            raise RuntimeError(f"Proxy test timed out: {proxy_url}")
+            raise RuntimeError("Speedtest timed out")
         if result.returncode != 0 and not (allow_timeout and result.returncode == 28):
-            message = (result.stderr or "proxy connection failed").strip()
-            raise RuntimeError(f"Proxy test failed: {message[:180]}")
+            message = (result.stderr or "connection failed").strip()
+            raise RuntimeError(f"Speedtest failed: {message[:180]}")
         return result.stdout.strip()
 
-    def _run_proxy_stream_upload(self, proxy_url, url, duration=10):
-        """Stream zeroes for a fixed time through a proxy and return curl metrics."""
+    def _run_curl_upload(self, proxy_url, url, duration=10):
+        """Stream zeroes for a fixed time through a route and return curl metrics."""
         import subprocess
         curl = shutil.which("curl") or shutil.which("curl.exe")
         if not curl:
-            raise RuntimeError("Proxy speedtest unavailable: curl is not installed")
+            raise RuntimeError("Speedtest unavailable: curl is not installed")
 
         env = os.environ.copy()
         for key in _PROXY_ENV_KEYS:
@@ -1112,32 +1044,23 @@ class HLSProxyPagesMixin:
         except subprocess.TimeoutExpired:
             process.kill()
             stdout, stderr = process.communicate()
-            raise RuntimeError(f"Proxy upload test timed out: {proxy_url}")
+            raise RuntimeError("Speedtest upload timed out")
         feeder.join(timeout=2)
         if process.returncode not in (0, 28):
-            message = stderr.decode(errors="replace").strip() or "proxy connection failed"
-            raise RuntimeError(f"Proxy upload test failed: {message[:180]}")
+            message = stderr.decode(errors="replace").strip() or "connection failed"
+            raise RuntimeError(f"Speedtest upload failed: {message[:180]}")
         return stdout.decode(errors="replace").strip()
 
-    def _run_proxy_speedtest(self, proxy_url):
-        for attempt in range(2):
-            try:
-                return self._measure_proxy_speedtest(proxy_url)
-            except RuntimeError as exc:
-                # A stalled circuit (common on Tor) can drop one leg of the test.
-                if "no payload" not in str(exc) or attempt:
-                    raise
-
-    def _measure_proxy_speedtest(self, proxy_url):
-        """Measure real proxied TCP throughput; Ookla's static binary ignores proxies."""
+    def _measure_speedtest(self, proxy_url=None):
+        """Measure real TCP throughput for one route (direct when proxy_url is empty)."""
         devnull = os.devnull
-        ip = self._run_proxy_curl(
+        ip = self._run_curl(
             proxy_url,
             "https://api.ipify.org",
             "",
             extra=["--output", "-"],
         )
-        ping_ms = float(self._run_proxy_curl(
+        ping_ms = float(self._run_curl(
             proxy_url,
             "https://api.ipify.org",
             "%{time_total}",
@@ -1152,7 +1075,7 @@ class HLSProxyPagesMixin:
             "https://ash-speed.hetzner.com/100MB.bin",
         ):
             try:
-                metrics = self._run_proxy_curl(
+                metrics = self._run_curl(
                     proxy_url,
                     endpoint,
                     "%{size_download}\\t%{speed_download}\\t%{time_total}",
@@ -1168,7 +1091,7 @@ class HLSProxyPagesMixin:
                 download = (download_bytes, download_speed, download_time)
                 break
         if download is None:
-            raise last_error or RuntimeError(f"Proxy test returned no payload: {proxy_url}")
+            raise last_error or RuntimeError("Speedtest returned no payload")
         download_bytes, download_speed, download_time = download
 
         upload, last_error = None, None
@@ -1177,7 +1100,7 @@ class HLSProxyPagesMixin:
             "https://librespeed.org/backend/empty.php",
         ):
             try:
-                metrics = self._run_proxy_stream_upload(proxy_url, endpoint, duration=10)
+                metrics = self._run_curl_upload(proxy_url, endpoint, duration=10)
             except RuntimeError as exc:
                 last_error = exc
                 continue
@@ -1186,14 +1109,14 @@ class HLSProxyPagesMixin:
                 upload = (upload_bytes, upload_speed, upload_time)
                 break
         if upload is None:
-            raise last_error or RuntimeError(f"Proxy test returned no payload: {proxy_url}")
+            raise last_error or RuntimeError("Speedtest returned no payload")
         upload_bytes, upload_speed, upload_time = upload
 
         return {
             "server": {
-                "sponsor": "Proxy throughput",
+                "sponsor": "Proxy throughput" if proxy_url else "Direct throughput",
                 "name": "proof.ovh.net + speed.cloudflare.com",
-                "location": "via proxy",
+                "location": "via proxy" if proxy_url else "direct",
             },
             "proxy_used": proxy_url,
             "external_ip": ip,

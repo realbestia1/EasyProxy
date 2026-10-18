@@ -7,7 +7,7 @@
     <link rel="icon" type="image/x-icon" href="/favicon.ico">
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&display=swap" rel="stylesheet">
     <link rel="stylesheet" href="/static/wg-panel.css">
-    <link rel="stylesheet" href="/static/ep-ui.css">
+    <link rel="stylesheet" href="/static/ep-ui.css?v={{APP_VERSION}}">
 </head>
 <body>
 <div class="bg-glow"></div>
@@ -38,16 +38,11 @@
         <p class="hint">Tor is TCP-only. Streaming may be slow; use it for privacy/specific routes, not as default for all traffic.</p>
     </div>
 </div>
+    <script src="/static/ep-ui.js?v={{APP_VERSION}}"></script>
 <script>
 const params = new URLSearchParams(window.location.search);
-const apiPassword = params.get('api_password');
-const checkStorageKey = 'easyproxy:last-check:torproxy';
-function toast(message, kind) { const el = document.getElementById('toast'); el.textContent = message; el.className = 'toast show ' + (kind || ''); setTimeout(() => el.className = 'toast ' + (kind || ''), 3500); }
-async function api(path, options) { const url = path + (apiPassword ? (path.includes('?') ? '&' : '?') + 'api_password=' + encodeURIComponent(apiPassword) : ''); const response = await fetch(url, options); if (response.status === 401) { window.location.href = '/admin/login'; throw new Error('unauthorized'); } const data = await response.json().catch(() => ({})); if (!response.ok) throw new Error(data.error || ('HTTP ' + response.status)); return data; }
-function setText(id, value) { document.getElementById(id).textContent = value || '-'; }
-function persistCheckResult(value) { const target = document.getElementById('check-result'); target.textContent = value || '-'; target.title = 'Last check: ' + new Date().toLocaleString(); try { localStorage.setItem(checkStorageKey, JSON.stringify({value, at: Date.now()})); } catch (_) {} }
-function restoreCheckResult() { try { const saved = JSON.parse(localStorage.getItem(checkStorageKey) || 'null'); if (saved && saved.value) { const target = document.getElementById('check-result'); target.textContent = saved.value; target.title = saved.at ? 'Last check: ' + new Date(saved.at).toLocaleString() : ''; } } catch (_) {} }
-function render(state) { const pill = document.getElementById('status-pill'); const waiting = state.running && state.bootstrap !== null && state.bootstrap !== undefined && state.bootstrap < 100; pill.className = (state.running && !waiting) ? 'status connected' : (state.enabled ? 'status disconnected' : 'status'); pill.textContent = !state.available ? 'Unavailable' : (waiting ? ('Bootstrapping ' + state.bootstrap + '%') : (state.running ? 'Connected' : (state.enabled ? 'Stopped' : 'Disabled'))); const input = document.getElementById('bind'); if (document.activeElement !== input) input.value = state.bind || ''; syncExitSelect(state.exit_nodes, state.exit_country); document.getElementById('usage').textContent = 'socks5h://' + (state.bind || '127.0.0.1:9050'); if (state.probe_ip) setText('egress', state.probe_ip); setText('exit-pin', state.exit_nodes ? ('🔒 ' + state.exit_nodes) : 'not pinned'); setText('pid', state.pid ? ('tor pid ' + state.pid) : 'not running'); }
+window.EP_API_PASSWORD = params.get('api_password') || '';
+window.EP_CHECK_STORAGE_KEY = 'easyproxy:last-check:torproxy';function render(state) { const pill = document.getElementById('status-pill'); const waiting = state.running && state.bootstrap !== null && state.bootstrap !== undefined && state.bootstrap < 100; pill.className = (state.running && !waiting) ? 'status connected' : (state.enabled ? 'status disconnected' : 'status'); pill.textContent = !state.available ? 'Unavailable' : (waiting ? ('Bootstrapping ' + state.bootstrap + '%') : (state.running ? 'Connected' : (state.enabled ? 'Stopped' : 'Disabled'))); const input = document.getElementById('bind'); if (document.activeElement !== input) input.value = state.bind || ''; syncExitSelect(state.exit_nodes, state.exit_country); document.getElementById('usage').textContent = 'socks5h://' + (state.bind || '127.0.0.1:9050'); if (state.probe_ip) setText('egress', state.probe_ip); setText('exit-pin', state.exit_nodes ? ('🔒 ' + state.exit_nodes) : 'not pinned'); setText('pid', state.pid ? ('tor pid ' + state.pid) : 'not running'); }
 async function refresh() { try { render(await api('/api/admin/tor/status')); } catch (error) { if (error.message !== 'unauthorized') toast(error.message, 'error'); } }
 async function command(name) { try { const data = await api('/api/admin/tor/' + name, {method: 'POST'}); toast(name === 'stop' ? 'Tor stopped' : 'Tor ready', 'success'); if (data.tor) render(data.tor); else refresh(); } catch (error) { toast(error.message, 'error'); } }
 function startTor() { command('start'); } function restartTor() { command('restart'); } function stopTor() { command('stop'); }

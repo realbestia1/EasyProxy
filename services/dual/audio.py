@@ -187,11 +187,6 @@ class AudioStore:
     def key_bytes(self, hid: str) -> bytes:
         return self._track(hid)["key"]
 
-    def find_cached(self, media_key: str, language: str):
-        # Persistent audio reuse is intentionally disabled. Clients will
-        # call /dual/aprep again and receive a fresh in-memory track.
-        return None
-
     def cache_status(self, media_key: str, language: str) -> dict:
         """Report active state without pretending in-memory tracks are cache."""
         aliases = {

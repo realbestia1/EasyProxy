@@ -5,18 +5,16 @@ uses the site's decoder in ``scripts/vidfast_runner.mjs``; it does not open a
 visible browser window.
 """
 
-import asyncio
-import json
 import logging
 import os
 import re
-import shutil
 from typing import Any
 from urllib.parse import urlparse
 
 from config import get_preferred_proxy_for_url
 import config as _cfg
 from extractors.base import ExtractorError
+from extractors.node_runner import run_node_runner
 from services.socks_bridge import get_http_bridge_for_proxy
 
 logger = logging.getLogger(__name__)
@@ -44,10 +42,6 @@ class VidFastExtractor:
         self.last_used_proxy = None
 
     @staticmethod
-    def _node_bin() -> str | None:
-        return shutil.which("node")
-
-    @staticmethod
     def _validate_url(url: str) -> None:
         parsed = urlparse(url)
         host = (parsed.hostname or "").lower()
@@ -58,11 +52,6 @@ class VidFastExtractor:
 
     async def extract(self, url: str, **kwargs) -> dict[str, Any]:
         self._validate_url(url)
-        node = self._node_bin()
-        if not node:
-            raise ExtractorError("VidFast: Node.js is required for headless extraction")
-        if not os.path.exists(_RUNNER):
-            raise ExtractorError(f"VidFast: runner script not found at {_RUNNER}")
 
         if self.bypass_warp_active != getattr(self, "_last_computed_bypass_warp", self._init_bypass_warp):
             self._init_bypass_warp = bool(self.bypass_warp_active)
@@ -145,51 +134,8 @@ class VidFastExtractor:
         if kwargs.get("background_refresh") or kwargs.get("force_refresh"):
             env["VIDFAST_DEBUG"] = "1"
 
-        proc = None
-        try:
-            proc = await asyncio.create_subprocess_exec(
-                node,
-                _RUNNER,
-                url,
-                stdout=asyncio.subprocess.PIPE,
-                stderr=asyncio.subprocess.PIPE,
-                env=env,
-                start_new_session=os.name != "nt",
-            )
-            stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=120)
-        except FileNotFoundError as exc:
-            raise ExtractorError(f"VidFast: failed to start Node.js: {exc}") from exc
-        except asyncio.TimeoutError as exc:
-            raise ExtractorError("VidFast: resolver timed out after 120 seconds") from exc
-        finally:
-            if proc and proc.returncode is None:
-                try:
-                    if os.name != "nt":
-                        import signal
-                        os.killpg(proc.pid, signal.SIGKILL)
-                    else:
-                        proc.kill()
-                    await asyncio.wait_for(proc.wait(), timeout=2)
-                except BaseException:
-                    pass
-
-        raw = stdout.decode("utf-8", errors="replace").strip() if stdout else ""
-        payload = None
-        for line in reversed(raw.splitlines()):
-            try:
-                candidate = json.loads(line)
-            except json.JSONDecodeError:
-                continue
-            if isinstance(candidate, dict):
-                payload = candidate
-                break
-
-        if not payload:
-            detail = stderr.decode("utf-8", errors="replace")[-800:] if stderr else raw[-800:]
-            raise ExtractorError(f"VidFast: resolver returned no JSON ({detail or proc.returncode})")
-        if proc.returncode != 0 or payload.get("error"):
-            error = str(payload.get("error") or "resolver failed")
-            raise ExtractorError(f"VidFast: {error}")
+        payload = await run_node_runner(_RUNNER, [url], env,
+                                      timeout=120, label="VidFast")
 
         stream_url = str(payload.get("url") or "").strip()
         if not stream_url.startswith(("http://", "https://")):

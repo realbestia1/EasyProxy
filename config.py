@@ -44,92 +44,7 @@ _SOCKET_CHECK_EXECUTOR = ThreadPoolExecutor(
 )
 
 
-APP_VERSION = "2.13.52"
-
-_MEMORY_PROFILE_FRAMES = 15
-_memory_profile_baseline = None
-_memory_profile_baseline_at = None
-
-
-def start_memory_profiler() -> dict:
-    """Start tracemalloc and save one baseline for leak investigation."""
-    global _memory_profile_baseline, _memory_profile_baseline_at
-    if not tracemalloc.is_tracing():
-        tracemalloc.start(_MEMORY_PROFILE_FRAMES)
-    if _memory_profile_baseline is None:
-        _memory_profile_baseline = tracemalloc.take_snapshot()
-        _memory_profile_baseline_at = time.time()
-    current, peak = tracemalloc.get_traced_memory()
-    return {
-        "enabled": True,
-        "frames": _MEMORY_PROFILE_FRAMES,
-        "baseline_at": _memory_profile_baseline_at,
-        "current": current,
-        "peak": peak,
-    }
-
-
-def reset_memory_profiler() -> dict:
-    """Replace the profiler baseline with the current live allocations."""
-    global _memory_profile_baseline, _memory_profile_baseline_at
-    if not tracemalloc.is_tracing():
-        tracemalloc.start(_MEMORY_PROFILE_FRAMES)
-    _memory_profile_baseline = tracemalloc.take_snapshot()
-    _memory_profile_baseline_at = time.time()
-    tracemalloc.reset_peak()
-    current, peak = tracemalloc.get_traced_memory()
-    return {
-        "enabled": True,
-        "frames": _MEMORY_PROFILE_FRAMES,
-        "baseline_at": _memory_profile_baseline_at,
-        "current": current,
-        "peak": peak,
-    }
-
-
-def _memory_profile_stat(stat) -> dict:
-    traceback = stat.traceback
-    frame = traceback[-1] if traceback else None
-    filename = frame.filename if frame else None
-    line = frame.lineno if frame else None
-    return {
-        "location": f"{filename}:{line}" if filename and line else "unknown",
-        "file": filename,
-        "line": line,
-        "size": stat.size,
-        "size_mb": round(stat.size / (1024 * 1024), 3),
-        "count": stat.count,
-        "traceback": traceback.format()[-5:],
-    }
-
-
-def get_memory_profile(limit: int = 30) -> dict:
-    """Return top Python allocations and growth since the startup baseline."""
-    try:
-        limit = int(limit)
-    except (TypeError, ValueError):
-        limit = 30
-    limit = max(1, min(limit, 100))
-
-    start_memory_profiler()
-    current_snapshot = tracemalloc.take_snapshot()
-    current, peak = tracemalloc.get_traced_memory()
-    baseline = _memory_profile_baseline
-    growth = current_snapshot.compare_to(baseline, "lineno") if baseline else []
-
-    return {
-        "enabled": True,
-        "frames": _MEMORY_PROFILE_FRAMES,
-        "baseline_at": _memory_profile_baseline_at,
-        "baseline_age_seconds": round(time.time() - _memory_profile_baseline_at, 1) if _memory_profile_baseline_at else None,
-        "current": current,
-        "current_mb": round(current / (1024 * 1024), 3),
-        "peak": peak,
-        "peak_mb": round(peak / (1024 * 1024), 3),
-        "top_current": [_memory_profile_stat(stat) for stat in current_snapshot.statistics("lineno")[:limit]],
-        "top_growth": [_memory_profile_stat(stat) for stat in growth[:limit]],
-        "note": "tracemalloc misura solo allocazioni Python; RSS nativo e processi figli sono in /api/info.",
-    }
+APP_VERSION = "2.13.53"
 
 
 def get_extractor_proxies(extractor_name: str) -> list:
@@ -900,7 +815,9 @@ def get_ssl_setting_for_url(url: str, transport_routes: list = None) -> bool:
     if "disable_ssl=1" in normalized_url:
         return True
 
-    vavoo_domains = ("vavoo.to", "vavoo.tv", "vavoo", "lokke.app", "mediahubmx", "vixsrc.to", "vix-content.net", "/sunshine/", "unitv.mom", "d2b.you", "vidxgo")
+    vavoo_domains = ("vavoo.to", "vavoo.tv", "vavoo", "lokke.app", "mediahubmx", "vixsrc.to", "vix-content.net", "/sunshine/", "unitv.mom", "d2b.you", "vidxgo",
+                       # Mirror frontend dello stesso backend mediahubmx (stesse tutele SSL).
+                       "kool.to", "kool.ws", "vavoo.net", "huhu.to", "oha.to", "voltop.net")
 
     if not url or not transport_routes:
         return any(domain in normalized_url for domain in vavoo_domains)

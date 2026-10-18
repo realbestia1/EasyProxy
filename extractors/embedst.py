@@ -1,16 +1,13 @@
-import asyncio
-import json
 import logging
 import os
-import shutil
 from typing import Any
 
 import config as _cfg
 from extractors.base import BaseExtractor, ExtractorError
+from extractors.node_runner import run_node_runner
 from services.socks_bridge import get_http_bridge_for_proxy
 logger = logging.getLogger(__name__)
 
-EMBEDST_ORIGIN = "https://embed.st"
 
 # Absolute path to the Node.js headless runner (no browser).
 _RUNNER = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "scripts", "embedst_runner.mjs")
@@ -37,14 +34,7 @@ class EmbedStExtractor(BaseExtractor):
         self.mediaflow_endpoint = "hls_manifest_proxy"
         self._curl_session = None
 
-    @staticmethod
-    def _node_bin() -> str | None:
-        return shutil.which("node")
-
     async def extract(self, url: str, **kwargs) -> dict[str, Any]:
-        node = self._node_bin()
-        if not node:
-            raise ExtractorError("EmbedSt: node binary not found on PATH (required for headless WASM extraction)")
 
         # Apply per-request routing before resolving streamed.pk/watch/ iframe URL
         # so the pre-resolve fetch honors ?proxy=, warp=off, or direct=1.
@@ -53,9 +43,6 @@ class EmbedStExtractor(BaseExtractor):
 
         if "embed.st/embed/" not in url.lower() and "embedsports.top/embed/" not in url.lower():
             raise ExtractorError("EmbedSt: invalid embed URL (expected embed.st/embed/...)")
-
-        if not os.path.exists(_RUNNER):
-            raise ExtractorError(f"EmbedSt: runner script not found at {_RUNNER}")
 
         self._apply_routing_kwargs(url, kwargs)
         proxy = await self._resolve_proxy(url)
@@ -73,49 +60,10 @@ class EmbedStExtractor(BaseExtractor):
         if kwargs.get("background_refresh") or kwargs.get("force_refresh"):
             env["EMBEDST_DEBUG"] = "1"
 
-        proc = None
-        try:
-            proc = await asyncio.create_subprocess_exec(
-                node, "--experimental-vm-modules", _RUNNER, url,
-                stdout=asyncio.subprocess.PIPE,
-                stderr=asyncio.subprocess.PIPE,
-                env=env,
-            )
-            stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=60)
-        except FileNotFoundError as exc:
-            raise ExtractorError(f"EmbedSt: failed to spawn node: {exc}") from exc
-        except asyncio.TimeoutError:
-            raise ExtractorError("EmbedSt: node runner timed out")
-        finally:
-            # ponytail: ensure subprocess and its pipe FDs are reaped and closed on timeout/cancel
-            if proc and proc.returncode is None:
-                try:
-                    proc.kill()
-                    await proc.wait()
-                except Exception:
-                    pass
-
-        out = stdout.decode("utf-8", errors="ignore").strip() if stdout else ""
-        if proc.returncode != 0 or not out:
-            err_msg = ""
-            if out:
-                try:
-                    data = json.loads(out)
-                    err_msg = data.get("error", "")
-                except Exception:
-                    pass
-            if not err_msg:
-                err_msg = stderr.decode("utf-8", errors="ignore")[-800:] if stderr else f"Exit code {proc.returncode}"
-            
-            if "no m3u8 captured" in err_msg.lower():
-                raise ExtractorError("EmbedSt: video not found (no m3u8 captured)")
-            raise ExtractorError(f"EmbedSt: runner failed: {err_msg}")
-
-        try:
-            data = json.loads(out)
-        except json.JSONDecodeError as exc:
-            raise ExtractorError(f"EmbedSt: invalid runner output: {exc}") from exc
-
+        data = await run_node_runner(
+            _RUNNER, [url], env, timeout=60, label="EmbedSt",
+            node_flags=("--experimental-vm-modules",),
+        )
         m3u8 = data.get("m3u8")
         if not m3u8:
             raise ExtractorError("EmbedSt: video not found (no m3u8 captured)")

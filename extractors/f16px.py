@@ -1,13 +1,9 @@
 import re
 import base64
 import json
-import time
 import asyncio
-import os
-import multiprocessing
 import shutil
 import subprocess
-from concurrent.futures import ProcessPoolExecutor, as_completed
 from pathlib import Path
 from urllib.parse import urlparse
 
@@ -19,135 +15,7 @@ from Crypto.Signature import DSS
 from extractors.base import BaseExtractor, ExtractorError
 
 
-# ──────────────────────────────────────────────────────────────────────
-# Proof-of-Work hash (reverse-engineered from pow--*.js).
-# Labelled "sha256-leading-zero-bits" but is a custom 512-word mixing hash.
-# Input = nonce + ":" + counter ; find counter with >= difficulty leading
-# zero bits over the 8x uint32 output.
-# ──────────────────────────────────────────────────────────────────────
-_MASK = 0xFFFFFFFF
-_BE, _LT, _DR, _LR, _HR = 512, 511, 2, 2654435761, 2246822519
-_POW_STOP_EVENT = None
-
-
-def _init_pow_worker(stop_event):
-    global _POW_STOP_EVENT
-    _POW_STOP_EVENT = stop_event
-
-
-def _pow_hash(data: bytes):
-    e0, e1, e2, e3 = 1779033703, 3144134277, 1013904242, 2773480762
-    M = _MASK
-    for b in data:
-        e0 = (e0 + b) & M
-        e0 = ((e0 << 7) | (e0 >> 25)) & M
-        e0 = (e0 + e1) & M; x = e3 ^ e0; e3 = ((x << 16) | (x >> 16)) & M
-        e2 = (e2 + e3) & M; x = e1 ^ e2; e1 = ((x << 12) | (x >> 20)) & M
-        e0 = (e0 + e1) & M; x = e3 ^ e0; e3 = ((x << 8) | (x >> 24)) & M
-        e2 = (e2 + e3) & M; x = e1 ^ e2; e1 = ((x << 7) | (x >> 25)) & M
-    for _ in range(8):
-        e0 = (e0 + e1) & M; x = e3 ^ e0; e3 = ((x << 16) | (x >> 16)) & M
-        e2 = (e2 + e3) & M; x = e1 ^ e2; e1 = ((x << 12) | (x >> 20)) & M
-        e0 = (e0 + e1) & M; x = e3 ^ e0; e3 = ((x << 8) | (x >> 24)) & M
-        e2 = (e2 + e3) & M; x = e1 ^ e2; e1 = ((x << 7) | (x >> 25)) & M
-    r = [0] * _BE
-    for i in range(_BE):
-        e0 = (e0 + e1) & M; x = e3 ^ e0; e3 = ((x << 16) | (x >> 16)) & M
-        e2 = (e2 + e3) & M; x = e1 ^ e2; e1 = ((x << 12) | (x >> 20)) & M
-        e0 = (e0 + e1) & M; x = e3 ^ e0; e3 = ((x << 8) | (x >> 24)) & M
-        e2 = (e2 + e3) & M; x = e1 ^ e2; e1 = ((x << 7) | (x >> 25)) & M
-        r[i] = (e0 ^ e2) & M
-    for _ in range(_DR):
-        for s in range(_BE):
-            a = r[s] & _LT
-            c = (r[s] + r[a]) & M
-            c = ((c << 13) | (c >> 19)) & M
-            c = (c ^ ((r[(s + 1) & _LT] * _LR) & M)) & M
-            r[s] = c
-            e0 = (e0 ^ c) & M
-            e0 = (e0 + e1) & M; x = e3 ^ e0; e3 = ((x << 16) | (x >> 16)) & M
-            e2 = (e2 + e3) & M; x = e1 ^ e2; e1 = ((x << 12) | (x >> 20)) & M
-            e0 = (e0 + e1) & M; x = e3 ^ e0; e3 = ((x << 8) | (x >> 24)) & M
-            e2 = (e2 + e3) & M; x = e1 ^ e2; e1 = ((x << 7) | (x >> 25)) & M
-    n = [0] * 8
-    o = _BE // 8
-    for i in range(8):
-        e0 = (e0 + e1) & M; x = e3 ^ e0; e3 = ((x << 16) | (x >> 16)) & M
-        e2 = (e2 + e3) & M; x = e1 ^ e2; e1 = ((x << 12) | (x >> 20)) & M
-        e0 = (e0 + e1) & M; x = e3 ^ e0; e3 = ((x << 8) | (x >> 24)) & M
-        e2 = (e2 + e3) & M; x = e1 ^ e2; e1 = ((x << 7) | (x >> 25)) & M
-        s = e0
-        a = i * o
-        for cc in range(o):
-            d = r[a + cc]
-            s = (s + d) & M
-            s = ((s << 5) | (s >> 27)) & M
-            s = (s ^ ((d * _HR) & M)) & M
-        n[i] = (s ^ e2) & M
-    return n
-
-
-def _lz_bits(words) -> int:
-    for index, n in enumerate(words):
-        if n:
-            return index * 32 + 32 - n.bit_length()
-    return len(words) * 32
-
-
-def _solve_pow_worker(nonce: str, difficulty: int, start: int, step: int,
-                      timeout: float = 60.0):
-    if difficulty <= 0:
-        return "0"
-
-    prefix = nonce + ":"
-    started = time.time()
-    s = start
-    iterations = 0
-
-    while time.time() - started < timeout:
-        if (iterations & 0x3F) == 0 and _POW_STOP_EVENT is not None and _POW_STOP_EVENT.is_set():
-            return None
-        if _lz_bits(_pow_hash((prefix + str(s)).encode("latin-1"))) >= difficulty:
-            return str(s)
-        s += step
-        iterations += 1
-
-    return None
-
-
-def _solve_pow_parallel(
-    nonce: str, difficulty: int, timeout: float = 60.0, max_workers: int = None
-):
-    if difficulty <= 0:
-        return "0"
-
-    worker_cap = max_workers or 4
-    workers = max(2, min(os.cpu_count() or 2, worker_cap))
-    context = multiprocessing.get_context()
-    stop_event = context.Event()
-    try:
-        with ProcessPoolExecutor(
-            max_workers=workers,
-            mp_context=context,
-            initializer=_init_pow_worker,
-            initargs=(stop_event,),
-        ) as executor:
-            futures = [
-                executor.submit(_solve_pow_worker, nonce, difficulty, i, workers, timeout)
-                for i in range(workers)
-            ]
-            for future in as_completed(futures):
-                result = future.result()
-                if result is not None:
-                    stop_event.set()
-                    for pending in futures:
-                        pending.cancel()
-                    return result
-    finally:
-        stop_event.set()
-    return None
-
-
+# The site's PoW hash is solved by scripts/pow_solver.js (Node/V8).
 def _solve_pow_node(nonce: str, difficulty: int, timeout: float):
     """Use the site's native-style JS hash when Node.js is available."""
     node = shutil.which("node")
@@ -175,7 +43,6 @@ class F16PxExtractor(BaseExtractor):
     # Covers the sequential API calls, a slower PoW solve, and playback.
     REQUEST_TIMEOUT_TOTAL = 180
     POW_TIMEOUT_SECONDS = 120
-    POW_MAX_WORKERS = 4  # fallback only; Node/V8 is the primary solver
     ERROR_PREFIX = "F16PX"
 
     def __init__(self, request_headers: dict, proxies: list = None, bypass_warp: bool = False):
@@ -363,15 +230,6 @@ class F16PxExtractor(BaseExtractor):
                 self.POW_TIMEOUT_SECONDS,
             )
             if solution is None:
-                solution = await loop.run_in_executor(
-                    None,
-                    _solve_pow_parallel,
-                    pow_nonce,
-                    pow_difficulty,
-                    self.POW_TIMEOUT_SECONDS,
-                    self.POW_MAX_WORKERS,
-                )
-            if solution is None:
                 raise self._error("PoW solve timed out")
 
             verify_resp = await self._make_request(
@@ -408,14 +266,7 @@ class F16PxExtractor(BaseExtractor):
 
         # Case 1: plain sources
         if data.get("sources"):
-            return {
-                "destination_url": self._pick_best(data["sources"]),
-                "request_headers": out_headers,
-                "mediaflow_endpoint": self.mediaflow_endpoint,
-                "selected_proxy": self.last_used_proxy,
-                "force_direct": self._force_direct,
-                "bypass_warp": self.bypass_warp_active,
-            }
+            return self._result(self._pick_best(data["sources"]), out_headers)
 
         # Case 2: encrypted playback
         pb = data.get("playback")
@@ -428,12 +279,5 @@ class F16PxExtractor(BaseExtractor):
         if not sources:
             raise self._error("No sources after decryption")
 
-        return {
-            "destination_url": self._pick_best(sources),
-            "request_headers": out_headers,
-            "mediaflow_endpoint": self.mediaflow_endpoint,
-            "selected_proxy": self.last_used_proxy,
-            "force_direct": self._force_direct,
-            "bypass_warp": self.bypass_warp_active,
-        }
+        return self._result(self._pick_best(sources), out_headers)
 

@@ -17,7 +17,6 @@
             --text-primary: #ffffff;
             --text-secondary: #a1a1aa;
             --text-muted: #6b6b80;
-            --font-family: 'Inter', -apple-system, sans-serif;
         }
 
         * { margin: 0; padding: 0; box-sizing: border-box; }
@@ -697,14 +696,13 @@
             .recording-item { flex-direction: column; align-items: flex-start; }
             .recording-actions { width: 100%; justify-content: flex-end; }
             .page-header { flex-direction: column; }
-            .page-nav { align-self: flex-end; }
         }
 
         @media (max-width: 480px) {
             .stats-grid { grid-template-columns: 1fr 1fr; }
         }
     </style>
-    <link rel="stylesheet" href="/static/ep-ui.css">
+    <link rel="stylesheet" href="/static/ep-ui.css?v={{APP_VERSION}}">
 </head>
 
 <body>
@@ -933,6 +931,7 @@
         </div>
     </div>
 
+    <script src="/static/ep-ui.js?v={{APP_VERSION}}"></script>
     <script>
         const API_PASSWORD = new URLSearchParams(window.location.search).get('api_password') || '';
         let deleteRecordingId = null;
@@ -958,15 +957,6 @@
             document.body.appendChild(toast);
             setTimeout(() => toast.remove(), 3000);
         }
-
-        function formatBytes(bytes) {
-            if (!bytes) return '0 B';
-            const k = 1024;
-            const sizes = ['B', 'KB', 'MB', 'GB'];
-            const i = Math.floor(Math.log(bytes) / Math.log(k));
-            return parseFloat((bytes / Math.pow(k, i)).toFixed(2)) + ' ' + sizes[i];
-        }
-
         function formatDuration(seconds) {
             if (!seconds && seconds !== 0) return '-';
             const h = Math.floor(seconds / 3600);
@@ -982,11 +972,6 @@
             const date = new Date(isoString);
             return date.toLocaleString();
         }
-
-        function escHtml(s) {
-            return String(s ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
-        }
-
         function getStatusBadge(status, isActive) {
             if (isActive) {
                 return '<span class="status-badge status-recording">Recording</span>';

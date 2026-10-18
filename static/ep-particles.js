@@ -3,7 +3,7 @@
 (() => {
     const canvas = document.getElementById('particles-canvas')
         || document.getElementById('particles');
-    if (!canvas || !canvas.getContext) return;
+    if (!canvas) return;
     const ctx = canvas.getContext('2d');
     let particles = [];
     function resize() { canvas.width = window.innerWidth; canvas.height = window.innerHeight; }

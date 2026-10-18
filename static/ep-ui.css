@@ -6,16 +6,10 @@
 :where(:root) {
     --ep-nav-h: 52px;
 
-    --ep-duration-micro: 80ms;
     --ep-duration-quick: 150ms;
     --ep-duration-fast: 250ms;
-    --ep-duration-medium: 350ms;
-    --ep-duration-slow: 400ms;
-    --ep-duration-very-slow: 500ms;
 
     --ep-ease-smooth-out: cubic-bezier(0.22, 1, 0.36, 1);
-    --ep-ease-out: ease-out;
-    --ep-ease-linear: linear;
 
     /* Palette shared by every panel (hoisted from the per-page :root blocks). */
     --surface: rgba(255, 255, 255, 0.03);
@@ -23,10 +17,8 @@
     --surface-glass: rgba(255, 255, 255, 0.06);
     --primary-gradient: linear-gradient(135deg, #6366f1 0%, #a855f7 50%, #ec4899 100%);
     --secondary-gradient: linear-gradient(135deg, #06b6d4 0%, #3b82f6 100%);
-    --accent-gradient: linear-gradient(135deg, #10b981 0%, #059669 100%);
     --neon-gradient: linear-gradient(90deg, #06b6d4, #a855f7, #ec4899, #a855f7, #06b6d4);
     --accent-primary: #6366f1;
-    --accent-secondary: #a855f7;
     --accent-success: #10b981;
     --accent-warning: #f59e0b;
     --accent-error: #ef4444;
@@ -37,12 +29,9 @@
     --border-primary: rgba(255, 255, 255, 0.08);
     --glow-primary: 0 0 30px rgba(99, 102, 241, 0.25);
     --glow-secondary: 0 0 40px rgba(168, 85, 247, 0.3);
-    --glow-success: 0 0 30px rgba(16, 185, 129, 0.25);
     --shadow-dark: 0 25px 60px -15px rgba(0, 0, 0, 0.8);
-    --shadow-glow: 0 0 80px rgba(99, 102, 241, 0.1);
     --transition-fast: all 0.15s cubic-bezier(0.4, 0, 0.2, 1);
     --transition-normal: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
-    --transition-slow: all 0.6s cubic-bezier(0.4, 0, 0.2, 1);
     --border-radius: 16px;
     --border-radius-large: 24px;
 }
@@ -156,19 +145,4 @@
     :where(.card, .glass-card):hover {
         transform: translateY(-2px);
     }
-}
-
-/* ponytail: no sticky <thead> here — it needs per-page background/offset checks.
-   Add when a panel with long tables asks for it. */
-
-:where(.sr-only) {
-    position: absolute;
-    width: 1px;
-    height: 1px;
-    padding: 0;
-    margin: -1px;
-    overflow: hidden;
-    clip-path: inset(50%);
-    white-space: nowrap;
-    border: 0;
 }

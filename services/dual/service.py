@@ -200,24 +200,30 @@ async def prepare_audio(request: web.Request) -> web.Response:
     return _json(await prepare_audio_data(body, request))
 
 
-async def cached_audio(request: web.Request) -> web.Response:
-    body = await _json_body(request)
-    token = _require_session(request, body)
-    hid = audio.find_cached(str(body.get("mediaKey") or ""), str(body.get("lang") or "").lower())
-    if not hid:
-        raise DualServiceError(404, "valid cached audio track not found")
-    metadata = audio.metadata(hid)
-    return _json({
-        "url": _audio_url(request, hid, token),
-        "cached": True,
-        "hid": hid,
-        "audio_fingerprint": metadata.get("source_fingerprint", ""),
-    })
 
 
 async def cache_status(request: web.Request) -> web.Response:
-    """Return real remote cache state for Toast Stream's manifest labels."""
+    """Return remote cache state for Toast Stream's manifest labels.
+
+    Sending the dual descriptor (``d=``, the same one the manifest call uses)
+    makes the answer exact: the video/audio identity is resolved and looked up,
+    so ``cached`` means the stored measurement is really reusable.  Without it
+    the check stays video-level (any stored audio) and reports ``exact=false``.
+    """
     body = await _json_body(request)
+    descriptor = str(request.query.get("d") or body.get("d") or "").strip()
+    proxy = request.app.get("proxy") if request.app is not None else None
+    if descriptor and proxy is not None:
+        result = await proxy.dual_cache_status({**body, "d": descriptor})
+        return _json({
+            "offset": {
+                "cached": bool(result.get("cached")),
+                "status": result.get("status"),
+                "updated_at": result.get("updated_at"),
+            },
+            "exact": bool(result.get("exact")),
+        })
+
     media_key = str(body.get("mediaKey") or body.get("media_key") or "")
     try:
         resolution = int(body.get("resolution") or 0)
@@ -238,11 +244,7 @@ async def cache_status(request: web.Request) -> web.Response:
             "status": offset.get("status") if offset else None,
             "updated_at": offset.get("updated_at") if offset else None,
         },
-        "video": {
-            "cached": False,
-            "persistent": False,
-            "mode": "direct",
-        },
+        "exact": False,
     })
 
 

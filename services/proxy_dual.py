@@ -8,6 +8,7 @@ import hashlib
 import json
 import re
 import secrets
+import time
 import urllib.parse
 from typing import Any
 from urllib.parse import urljoin
@@ -30,6 +31,7 @@ from services.proxy_shared import (
 from services.dual import service as dual_service
 from services.dual.security import resolves_publicly, valid_public_url
 from services.dual.video import video_track_id
+from utils.hls_master import attributes, is_master, master_entries
 
 
 class DualLinksError(Exception):
@@ -83,16 +85,6 @@ def _normalise_language(value: Any) -> str:
     return raw
 
 
-def _attrs(line: str) -> dict[str, str]:
-    """Parse the comma-separated HLS attribute list, preserving quoted commas."""
-    result: dict[str, str] = {}
-    for match in re.finditer(r'([A-Z0-9-]+)="([^"]*)"|([A-Z0-9-]+)=([^,]*)', line):
-        key = match.group(1) or match.group(3)
-        value = match.group(2) if match.group(1) else match.group(4)
-        result[key] = value.strip()
-    return result
-
-
 def _safe_headers(value: Any) -> dict[str, str]:
     if value is None:
         return {}
@@ -108,10 +100,6 @@ def _safe_headers(value: Any) -> dict[str, str]:
             raise DualLinksError(400, "source header is too long")
         headers[name] = value
     return headers
-
-
-def _is_master(text: str) -> bool:
-    return "#EXT-X-STREAM-INF:" in text or "#EXT-X-MEDIA:" in text
 
 
 def _playlist_durations(text: str) -> list[float]:
@@ -149,60 +137,38 @@ def _same_audio_timeline(left: str, right: str) -> bool:
 def _master_entries(text: str, base_url: str) -> tuple[list[dict], list[dict]]:
     variants: list[dict] = []
     audios: list[dict] = []
-    pending_variant: dict | None = None
-    for raw in text.splitlines():
-        line = raw.strip()
-        if line.startswith("#EXT-X-MEDIA:"):
-            attributes = _attrs(line.split(":", 1)[1])
-            if attributes.get("TYPE", "").upper() == "AUDIO":
-                uri = attributes.get("URI")
-                if uri:
-                    attributes["url"] = urljoin(base_url, uri)
-                    audios.append(attributes)
-        elif line.startswith("#EXT-X-STREAM-INF:"):
-            attributes = _attrs(line.split(":", 1)[1])
-            width, height = 0, 0
-            resolution = attributes.get("RESOLUTION", "")
-            if "x" in resolution.lower():
-                try:
-                    width, height = (int(item) for item in re.split("x", resolution, flags=re.I))
-                except ValueError:
-                    pass
-            pending_variant = {
-                "attributes": attributes,
-                "width": width,
-                "height": height,
-            }
-        elif pending_variant is not None and line and not line.startswith("#"):
-            pending_variant["url"] = urljoin(base_url, line)
-            variants.append(pending_variant)
-            pending_variant = None
+    for entry in master_entries(text.splitlines(), base_url):
+        if entry.kind == "variant":
+            width, height = entry.resolution
+            variants.append(
+                {
+                    "attributes": entry.attributes,
+                    "width": width,
+                    "height": height,
+                    "url": entry.url,
+                }
+            )
+        elif entry.type == "AUDIO" and entry.url:
+            audios.append({**entry.attributes, "url": entry.url})
     return variants, audios
 
 
 def _subtitle_entries(text: str, base_url: str, limit: int = 12) -> list[dict]:
     """Collect #EXT-X-MEDIA TYPE=SUBTITLES renditions from a master playlist."""
     entries: list[dict] = []
-    for raw in text.splitlines():
-        line = raw.strip()
-        if not line.startswith("#EXT-X-MEDIA:"):
-            continue
-        attributes = _attrs(line.split(":", 1)[1])
-        if attributes.get("TYPE", "").upper() != "SUBTITLES":
-            continue
-        uri = attributes.get("URI")
-        if not uri:
+    for entry in master_entries(text.splitlines(), base_url):
+        if entry.kind != "media" or entry.type != "SUBTITLES" or not entry.url:
             continue
         if len(entries) >= limit:
             break
-        language = attributes.get("LANGUAGE") or attributes.get("NAME") or ""
+        language = entry.attributes.get("LANGUAGE") or entry.attributes.get("NAME") or ""
         entries.append({
-            "url": urljoin(base_url, uri),
+            "url": entry.url,
             "language": language,
-            "name": attributes.get("NAME") or language,
-            "default": attributes.get("DEFAULT", "NO").strip().upper() == "YES",
-            "autoselect": attributes.get("AUTOSELECT", "YES").strip().upper() != "NO",
-            "forced": attributes.get("FORCED", "NO").strip().upper() == "YES",
+            "name": entry.attributes.get("NAME") or language,
+            "default": entry.attributes.get("DEFAULT", "NO").strip().upper() == "YES",
+            "autoselect": entry.attributes.get("AUTOSELECT", "YES").strip().upper() != "NO",
+            "forced": entry.attributes.get("FORCED", "NO").strip().upper() == "YES",
         })
     return entries
 
@@ -227,6 +193,11 @@ def _audio_quality(item: dict) -> tuple[int, int, int, int]:
     surround = 1 if channels >= 6 or any(value in name for value in ("5.1", "7.1", "surround")) else 0
     codec = 2 if any(value in name for value in ("eac3", "dd+", "dolby", "atmos")) else 1 if "ac-3" in name else 0
     return surround, codec, channels, len(name)
+
+
+# The exact badge resolves sources (a few seconds), so its answer is reused for
+# a short window; set to 0 for always-fresh checks.
+DUAL_BADGE_CACHE_SECONDS = 30.0
 
 
 class HLSProxyDualMixin:
@@ -505,7 +476,7 @@ class HLSProxyDualMixin:
         requested_alias: str = "",
         bypass_language: bool = False,
     ) -> tuple[str, dict]:
-        if not _is_master(text):
+        if not is_master(text):
             return base_url, {"manifest": text, "base_url": base_url}
         variants, audios = _master_entries(text, base_url)
         requested_alias = str(requested_alias or "").strip().lower()
@@ -574,7 +545,7 @@ class HLSProxyDualMixin:
             line = raw.strip()
             if not line.startswith("#EXT-X-KEY:"):
                 continue
-            attrs = _attrs(line.split(":", 1)[1])
+            attrs = attributes(line)
             method = attrs.get("METHOD", "").upper()
             if method == "NONE":
                 return ""
@@ -612,6 +583,133 @@ class HLSProxyDualMixin:
         ):
             return None
         return {"status": "ok", "cached": True, **details, "cache_key": cache_key}
+
+    async def dual_cache_status(self, body: dict) -> dict:
+        """Exact cache state for /dual/cache/status when the caller sends ``d``.
+
+        Resolves the same identity the manifest flow uses (selected video
+        variant + selected and parsed audio playlist) so ``cached`` is only true
+        when the stored measurement is reusable for this exact pair.  Without a
+        usable descriptor it answers ``exact=False`` and never guesses.
+
+        The identity resolution costs a few seconds (same work the play does), so
+        the answer is remembered for DUAL_BADGE_CACHE_SECONDS: within that window
+        an audio change is not noticed yet.  Set it to 0 for always-fresh answers.
+        """
+        descriptor = str(body.get("d") or "").strip()
+        cache_key_id = hashlib.sha1(descriptor.encode()).hexdigest()
+        now = time.monotonic()
+        cache = getattr(self, "_dual_badge_cache", None)
+        if cache is None:
+            cache = self._dual_badge_cache = {}
+        cached_entry = cache.get(cache_key_id)
+        if cached_entry is not None and now - cached_entry[0] < DUAL_BADGE_CACHE_SECONDS:
+            return cached_entry[1]
+
+        result = await self._dual_cache_status_uncached(body)
+        if DUAL_BADGE_CACHE_SECONDS > 0:
+            cache[cache_key_id] = (now, result)
+            while len(cache) > 256:
+                cache.pop(next(iter(cache)))
+        return result
+
+    async def _dual_cache_status_uncached(self, body: dict) -> dict:
+        try:
+            payload = HLSProxyDualMixin._decode_dual_descriptor(body.get("d"))
+        except Exception as exc:  # noqa: BLE001 - unreadable descriptor
+            logger.debug("[DUAL] cache status: descriptor not usable: %s", exc)
+            return {"cached": False, "status": None, "updated_at": None, "exact": False}
+
+        requested_audio_lang = str(
+            payload.get("audio_lang") or payload.get("audioLanguage") or ""
+        ).strip()
+        bypass_audio_language = payload.get(
+            "bypass_audio_language", payload.get("audio_language_bypass", False)
+        )
+        bypass_audio_language = (
+            bypass_audio_language is True
+            or str(bypass_audio_language).strip().lower() in {"1", "true", "yes", "on"}
+        )
+        audio_lang = _normalise_language(requested_audio_lang)
+        video_spec = payload.get("video") or payload.get("video_url")
+        audio_spec = payload.get("audio") or payload.get("audio_url")
+        if audio_lang not in _LANGUAGE_ALIASES or not audio_spec:
+            return {"cached": False, "status": None, "updated_at": None, "exact": False}
+
+        media_key = str(payload.get("media_key") or payload.get("mediaKey") or "").strip()
+        video_fingerprint = str(payload.get("video_fingerprint") or "").strip()
+        try:
+            resolution = int(payload.get("resolution") or 0)
+        except (TypeError, ValueError):
+            resolution = 0
+        # The caller already sends the selected variant height and the video
+        # fingerprint (easystreams does): trusting them skips the slow video
+        # resolution and still checks the audio — the part the caller cannot
+        # know — exactly. A wrong client height can only cause a false negative.
+        client_identity = bool(resolution and media_key and video_fingerprint)
+        if not client_identity and not video_spec:
+            return {"cached": False, "status": None, "updated_at": None, "exact": False}
+
+        try:
+            if client_identity:
+                audio = await self._resolve_dual_spec_coalesced(audio_spec)
+                audio_text, audio_base = await self._manifest(audio)
+            else:
+                requested_resolution = resolution or 2160
+                if requested_resolution >= 2160:
+                    video_coro = self._resolve_dual_spec_coalesced(
+                        video_spec, required_resolution=2160)
+                else:
+                    video_coro = self._resolve_dual_spec_coalesced(video_spec)
+                video, audio = await self._gather_dual_pair(
+                    video_coro, self._resolve_dual_spec_coalesced(audio_spec))
+                (video_text, video_base), (audio_text, audio_base) = await self._gather_dual_pair(
+                    self._manifest(video), self._manifest(audio))
+                _video_url, resolution, _auto_ref, _muxed_ref = self._pick_video(
+                    video_text, video_base, requested_resolution)
+
+            selected_audio_url, _audio_meta = HLSProxyDualMixin._pick_audio(
+                audio_text, audio_base, audio_lang, requested_audio_lang,
+                bypass_audio_language)
+            audio_media = dict(audio)
+            audio_media["url"] = selected_audio_url
+            audio_media["manifest"] = ""
+            audio_playlist, audio_playlist_base = await self._manifest(audio_media)
+            segments, _parts, _crypto = dual_service.audio._parse_playlist(
+                audio_playlist, audio_playlist_base)
+            audio_fingerprint = dual_service.audio.source_fingerprint(segments)
+        except Exception as exc:  # noqa: BLE001 - sources not resolvable right now
+            logger.info(
+                "[DUAL] cache status: sources not resolvable (%s), reporting not-exact",
+                type(exc).__name__,
+            )
+            return {"cached": False, "status": None, "updated_at": None, "exact": False}
+
+        if video_spec:
+            if not media_key:
+                media_key = hashlib.sha1(
+                    self._stable_spec_id(video_spec).encode()).hexdigest()[:24]
+            if not video_fingerprint:
+                video_fingerprint = hashlib.sha1(
+                    f"video|{self._stable_spec_id(video_spec)}".encode()).hexdigest()[:20]
+        if not (media_key and video_fingerprint and resolution and audio_fingerprint):
+            return {"cached": False, "status": None, "updated_at": None, "exact": False}
+
+        cache_key = dual_service.offsets.key(
+            media_key, resolution, video_fingerprint, audio_fingerprint)
+        entry = await dual_service.offsets.lookup({
+            "cache_key": cache_key,
+            "media_key": media_key,
+            "resolution": resolution,
+            "video_fingerprint": video_fingerprint,
+            "audio_fingerprint": audio_fingerprint,
+        })
+        return {
+            "cached": bool(entry and str(entry.get("status") or "").lower() == "ok"),
+            "status": (entry or {}).get("status"),
+            "updated_at": (entry or {}).get("updated_at"),
+            "exact": True,
+        }
 
     async def _prepare_dual_audio(
         self,

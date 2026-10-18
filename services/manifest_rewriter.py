@@ -4,6 +4,7 @@ import urllib.parse
 import xml.etree.ElementTree as ET
 from urllib.parse import urljoin
 from services.secure_state import seal_state
+from utils.hls_master import attributes, master_entries, replace_uri, tag_uri
 
 logger = logging.getLogger(__name__)
 
@@ -415,33 +416,27 @@ class ManifestRewriter:
         by default, with ABR left intact.
         """
         audio_groups = set()
-        variant_indexes = []
-        for i, line in enumerate(lines):
-            stripped = line.strip()
-            if stripped.startswith("#EXT-X-MEDIA:") and 'URI="' in stripped:
-                if re.search(r"TYPE=AUDIO", stripped):
-                    group_match = re.search(r'GROUP-ID="([^"]+)"', stripped)
-                    if group_match:
-                        audio_groups.add(group_match.group(1))
-            elif stripped.startswith("#EXT-X-STREAM-INF:") and i + 1 < len(lines):
-                variant_indexes.append(i)
-        if len(variant_indexes) < 2 or not audio_groups:
+        variant_entries = []
+        for entry in master_entries(lines):
+            if entry.kind == "variant":
+                if entry.url:
+                    variant_entries.append(entry)
+            elif entry.type == "AUDIO" and entry.url and entry.attributes.get("GROUP-ID"):
+                audio_groups.add(entry.attributes["GROUP-ID"])
+        if len(variant_entries) < 2 or not audio_groups:
             return lines
 
         variants = []
         group_uses = {}
-        for i in variant_indexes:
-            inf = lines[i].strip()
-            group_match = re.search(r'AUDIO="([^"]+)"', inf)
-            group = group_match.group(1) if group_match else ""
+        for entry in variant_entries:
+            group = entry.attributes.get("AUDIO", "")
             if group in audio_groups:
                 group_uses[group] = group_uses.get(group, 0) + 1
-            bandwidth_match = re.search(r"BANDWIDTH=(\d+)", inf)
             variants.append(
                 {
-                    "inf": lines[i],
-                    "url": lines[i + 1],
-                    "bandwidth": int(bandwidth_match.group(1)) if bandwidth_match else 0,
+                    "inf": lines[entry.line_index],
+                    "url": lines[entry.uri_index],
+                    "bandwidth": entry.bandwidth,
                 }
             )
         if not any(count > 1 for count in group_uses.values()):
@@ -451,6 +446,7 @@ class ManifestRewriter:
         if order == list(range(len(variants))):
             return lines
 
+        variant_indexes = [entry.line_index for entry in variant_entries]
         position = {index: n for n, index in enumerate(variant_indexes)}
         ordered = [variants[n] for n in order]
         reordered = []
@@ -497,16 +493,15 @@ class ManifestRewriter:
         # max_res=true: keep only the highest-bandwidth video variant.
         # Default: keep every variant so the player can adapt (ABR).
         generic_streams = []
-        for i, line in enumerate(lines):
-            if line.startswith("#EXT-X-STREAM-INF:") and i + 1 < len(lines):
-                bandwidth_match = re.search(r"BANDWIDTH=(\d+)", line)
-                bandwidth = int(bandwidth_match.group(1)) if bandwidth_match else 0
+        for entry in master_entries(lines):
+            if entry.kind == "variant" and entry.url:
                 generic_streams.append(
                     {
-                        "index": i,
-                        "bandwidth": bandwidth,
-                        "inf": line,
-                        "url": lines[i + 1],
+                        "index": entry.line_index,
+                        "bandwidth": entry.bandwidth,
+                        "inf": lines[entry.line_index],
+                        "url": lines[entry.uri_index],
+                        "entry": entry,
                     }
                 )
 
@@ -520,10 +515,7 @@ class ManifestRewriter:
             # by an explicit CODECS= video entry or by a RESOLUTION= attribute (many CDNs
             # omit CODECS while still serving video, so RESOLUTION is enough evidence).
             _selected_inf = highest_quality_stream["inf"]
-            _has_video_codec = any(
-                vc in _selected_inf for vc in ("avc1", "hvc1", "dvh1", "hev1", "vp9", "av01")
-            ) or re.search(r"RESOLUTION=\d+x\d+", _selected_inf) is not None
-            if not _has_video_codec:
+            if not highest_quality_stream["entry"].has_video_codec:
                 logger.warning(
                     "HLS master manifest has no video codec in selected variant (CDN may be serving audio-only). "
                     "STREAM-INF: %s", _selected_inf
@@ -587,30 +579,21 @@ class ManifestRewriter:
             for line in lines:
                 if not line.startswith("#EXT-X-MEDIA:"):
                     continue
-                if 'URI="' not in line:
-                    # Media without URI (e.g. closed-captions=NONE): keep as-is and track group
-                    group_match = re.search(r'GROUP-ID="([^"]+)"', line)
-                    if group_match:
-                        surviving_group_ids.add(group_match.group(1))
-                    proxied_media_lines.append(line.strip())
-                    continue
-
-                uri_start = line.find('URI="') + 5
-                uri_end = line.find('"', uri_start)
-                if uri_start <= 4 or uri_end <= uri_start:
-                    group_match = re.search(r'GROUP-ID="([^"]+)"', line)
-                    if group_match:
-                        surviving_group_ids.add(group_match.group(1))
-                    proxied_media_lines.append(line.strip())
-                    continue
+                original_uri = tag_uri(line)
                 # Filter out unsigned/broken media tracks for DLStreams/premium streams.
                 # Tracks without explicit query parameters (e.g. ?md5=...) always return 403 Forbidden.
-                original_uri = line[uri_start:uri_end]
-                if is_dlstreams_or_premium and "?" not in original_uri:
+                if original_uri and is_dlstreams_or_premium and "?" not in original_uri:
+                    continue
+                group_id = attributes(line).get("GROUP-ID")
+                if group_id:
+                    surviving_group_ids.add(group_id)
+                if not original_uri:
+                    # Media without URI (e.g. closed-captions=NONE): keep as-is.
+                    proxied_media_lines.append(line.strip())
                     continue
 
                 media_url = ManifestRewriter._inherit_query_if_missing(
-                    urljoin(base_url, line[uri_start:uri_end]),
+                    urljoin(base_url, original_uri),
                     base_query,
                 )
                 if shorten_url_func:
@@ -621,27 +604,24 @@ class ManifestRewriter:
                     proxy_media_url = (
                         f"{proxy_base}/proxy/hls/manifest.m3u8?d={encoded_media_url}{header_params}"
                     )
-                proxied_media_lines.append(line[:uri_start] + proxy_media_url + line[uri_end:])
-                group_match = re.search(r'GROUP-ID="([^"]+)"', line)
-                if group_match:
-                    surviving_group_ids.add(group_match.group(1))
+                proxied_media_lines.append(replace_uri(line, proxy_media_url))
 
             def _strip_empty_group_refs(inf_line: str, surviving: set) -> str:
                 """Remove SUBTITLES/AUDIO/CLOSED-CAPTIONS attributes that reference
                 group-ids which were completely filtered out. This prevents player
                 confusion (e.g. PotPlayer refusing video) when a STREAM-INF references
                 a group that has no matching EXT-X-MEDIA entries."""
-                for attr in ("SUBTITLES", "AUDIO", "CLOSED-CAPTIONS"):
-                    match = re.search(rf'{attr}="([^"]+)"', inf_line)
-                    if match and match.group(1) not in surviving:
-                        # Remove the attribute and any surrounding comma
-                        inf_line = re.sub(
-                            rf',?\s*{attr}="[^"]+"', "", inf_line
-                        ).strip().rstrip(",")
-                        logger.debug(
-                            "Stripped dangling %s group ref '%s' from STREAM-INF",
-                            attr, match.group(1),
-                        )
+                for attr, group in attributes(inf_line).items():
+                    if attr not in ("SUBTITLES", "AUDIO", "CLOSED-CAPTIONS") or group in surviving:
+                        continue
+                    # Remove the attribute and any surrounding comma
+                    inf_line = re.sub(
+                        rf',?\s*{attr}="[^"]+"', "", inf_line
+                    ).strip().rstrip(",")
+                    logger.debug(
+                        "Stripped dangling %s group ref '%s' from STREAM-INF",
+                        attr, group,
+                    )
                 return inf_line
 
             rewritten_lines.append("#EXTM3U")
@@ -723,11 +703,9 @@ class ManifestRewriter:
             # 1. GESTIONE CHIAVI AES-128
             if line.startswith("#EXT-X-KEY:") and 'URI=' in line:
                 next_uri_is_manifest = False
-                uri_start = line.find('URI="') + 5
-                uri_end = line.find('"', uri_start)
+                original_key_url = tag_uri(line)
 
-                if uri_start > 4 and uri_end > uri_start:
-                    original_key_url = line[uri_start:uri_end]
+                if original_key_url:
                     absolute_key_url = ManifestRewriter._inherit_query_if_missing(
                         urljoin(base_url, original_key_url),
                         base_query,
@@ -770,19 +748,16 @@ class ManifestRewriter:
                     if stream_key:
                         proxy_key_url += f"&stream_key={urllib.parse.quote(stream_key, safe='')}"
 
-                    new_line = line[:uri_start] + proxy_key_url + line[uri_end:]
-                    rewritten_lines.append(new_line)
+                    rewritten_lines.append(replace_uri(line, proxy_key_url))
                 else:
                     rewritten_lines.append(line)
 
             # 2. GESTIONE MEDIA (Sottotitoli, Audio secondario)
             elif line.startswith("#EXT-X-MEDIA:") and 'URI=' in line:
                 next_uri_is_manifest = False
-                uri_start = line.find('URI="') + 5
-                uri_end = line.find('"', uri_start)
+                original_media_url = tag_uri(line)
 
-                if uri_start > 4 and uri_end > uri_start:
-                    original_media_url = line[uri_start:uri_end]
+                if original_media_url:
                     absolute_media_url = ManifestRewriter._inherit_query_if_missing(
                         urljoin(base_url, original_media_url),
                         base_query,
@@ -797,19 +772,16 @@ class ManifestRewriter:
                         proxy_media_url = (
                             f"{proxy_base}/proxy/hls/manifest.m3u8?d={encoded_media_url}{header_params}"
                         )
-                    new_line = line[:uri_start] + proxy_media_url + line[uri_end:]
-                    rewritten_lines.append(new_line)
+                    rewritten_lines.append(replace_uri(line, proxy_media_url))
                 else:
                     rewritten_lines.append(line)
 
             # 2b. GESTIONE I-FRAME STREAMS
             elif line.startswith("#EXT-X-I-FRAME-STREAM-INF:") and 'URI=' in line:
                 next_uri_is_manifest = False
-                uri_start = line.find('URI="') + 5
-                uri_end = line.find('"', uri_start)
+                original_iframe_url = tag_uri(line)
 
-                if uri_start > 4 and uri_end > uri_start:
-                    original_iframe_url = line[uri_start:uri_end]
+                if original_iframe_url:
                     absolute_iframe_url = ManifestRewriter._inherit_query_if_missing(
                         urljoin(base_url, original_iframe_url),
                         base_query,
@@ -824,19 +796,16 @@ class ManifestRewriter:
                         proxy_iframe_url = (
                             f"{proxy_base}/proxy/hls/manifest.m3u8?d={encoded_iframe_url}{header_params}"
                         )
-                    new_line = line[:uri_start] + proxy_iframe_url + line[uri_end:]
-                    rewritten_lines.append(new_line)
+                    rewritten_lines.append(replace_uri(line, proxy_iframe_url))
                 else:
                     rewritten_lines.append(line)
 
             # 2c. GESTIONE SESSION-KEY
             elif line.startswith("#EXT-X-SESSION-KEY:") and 'URI=' in line:
                 next_uri_is_manifest = False
-                uri_start = line.find('URI="') + 5
-                uri_end = line.find('"', uri_start)
+                original_key_url = tag_uri(line)
 
-                if uri_start > 4 and uri_end > uri_start:
-                    original_key_url = line[uri_start:uri_end]
+                if original_key_url:
                     absolute_key_url = ManifestRewriter._inherit_query_if_missing(
                         urljoin(base_url, original_key_url),
                         base_query,
@@ -849,19 +818,16 @@ class ManifestRewriter:
                         proxy_key_url += f"&h_Referer={urllib.parse.quote(base_url, safe='')}"
                     proxy_key_url += header_params
 
-                    new_line = line[:uri_start] + proxy_key_url + line[uri_end:]
-                    rewritten_lines.append(new_line)
+                    rewritten_lines.append(replace_uri(line, proxy_key_url))
                 else:
                     rewritten_lines.append(line)
 
             # 3. GESTIONE MAP (Init Segment per fMP4)
             elif line.startswith("#EXT-X-MAP:") and 'URI=' in line:
                 next_uri_is_manifest = False
-                uri_start = line.find('URI="') + 5
-                uri_end = line.find('"', uri_start)
+                original_map_url = tag_uri(line)
 
-                if uri_start > 4 and uri_end > uri_start:
-                    original_map_url = line[uri_start:uri_end]
+                if original_map_url:
                     absolute_map_url = ManifestRewriter._inherit_query_if_missing(
                         urljoin(base_url, original_map_url),
                         base_query,
@@ -873,8 +839,7 @@ class ManifestRewriter:
                         f"{proxy_base}/proxy/hls/segment.mp4?d={encoded_map_url}{header_params}"
                     )
 
-                    new_line = line[:uri_start] + proxy_map_url + line[uri_end:]
-                    rewritten_lines.append(new_line)
+                    rewritten_lines.append(replace_uri(line, proxy_map_url))
                 else:
                     rewritten_lines.append(line)
 

@@ -9,7 +9,6 @@ from datetime import datetime, timezone
 from email.utils import parsedate_to_datetime
 from urllib.parse import urlparse, urljoin
 from typing import Dict, Any
-import random
 import aiohttp
 from aiohttp import ClientSession, ClientTimeout, TCPConnector
 from aiohttp.client_exceptions import ClientOSError
@@ -530,14 +529,7 @@ class SportsonlineExtractor(BaseExtractor):
                         m3u8_url,
                     )
 
-                    return {
-                        "destination_url": m3u8_url,
-                        "request_headers": playback_headers,
-                        "mediaflow_endpoint": self.mediaflow_endpoint,
-                        "selected_proxy": self.last_used_proxy,
-                        "force_direct": self._force_direct,
-                        "bypass_warp": self.bypass_warp_active,
-                    }
+                    return self._result(m3u8_url, playback_headers)
                 else:
                     raise ExtractorError(
                         "No packed blocks, inline M3U8, or _econfig stream URL found"
@@ -592,14 +584,7 @@ class SportsonlineExtractor(BaseExtractor):
             logger.info(f"Successfully extracted m3u8 URL: {m3u8_url}")
 
             # Return stream configuration
-            return {
-                "destination_url": m3u8_url,
-                "request_headers": playback_headers,
-                "mediaflow_endpoint": self.mediaflow_endpoint,
-                "selected_proxy": self.last_used_proxy,
-                "force_direct": self._force_direct,
-                "bypass_warp": self.bypass_warp_active,
-            }
+            return self._result(m3u8_url, playback_headers)
 
         except ExtractorError:
             raise

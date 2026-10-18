@@ -39,11 +39,4 @@ class OrionExtractor(BaseExtractor):
             if h.lower() in ["cookie", "authorization", "user-agent", "referer", "accept", "accept-language", "range"]:
                 headers[h] = v
 
-        return {
-            "destination_url": url,
-            "request_headers": headers,
-            "mediaflow_endpoint": "hls_proxy",
-            "selected_proxy": self.last_used_proxy,
-            "force_direct": self._force_direct,
-            "bypass_warp": self.bypass_warp_active,
-        }
+        return self._result(url, headers, mediaflow_endpoint="hls_proxy")

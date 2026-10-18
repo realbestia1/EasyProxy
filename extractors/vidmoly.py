@@ -52,12 +52,5 @@ class VidmolyExtractor(BaseExtractor):
         except ExtractorError as e:
             raise ExtractorError(f"VIDMOLY: Stream unavailable or timed out: {e}")
 
-        return {
-            "destination_url": master_url,
-            "request_headers": headers,
-            "mediaflow_endpoint": self.mediaflow_endpoint,
-            "selected_proxy": self.last_used_proxy,
-            "force_direct": self._force_direct,
-            "bypass_warp": self.bypass_warp_active,
-        }
+        return self._result(master_url, headers)
 

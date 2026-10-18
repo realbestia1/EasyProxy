@@ -76,28 +76,14 @@ class Sports99Extractor(BaseExtractor):
                         stream_url = "".join(_b64url_decode_urlsafe(vars_dict.get(vn, "")) for vn in var_names)
                         if "playlist.m3u8" in stream_url:
                             logger.info(f"[Sports99] Extracted stream URL via base64 concatenation: {stream_url}")
-                            return {
-                                "destination_url": stream_url,
-                                "request_headers": stream_headers,
-                                "mediaflow_endpoint": self.mediaflow_endpoint,
-                                "selected_proxy": self.last_used_proxy,
-                                "force_direct": self._force_direct,
-                                "bypass_warp": self.bypass_warp_active,
-                            }
+                            return self._result(stream_url, stream_headers)
 
                 # Fallback 2: check if already unpacked in HTML
                 if "playlist.m3u8" in html:
                     m3u8_match = re.search(r'["\'](https?://[^"\']+\.m3u8[^"\']*)["\']', html)
                     if m3u8_match:
                         logger.info("[Sports99] Found direct URL in HTML")
-                        return {
-                            "destination_url": m3u8_match.group(1),
-                            "request_headers": stream_headers,
-                            "mediaflow_endpoint": self.mediaflow_endpoint,
-                            "selected_proxy": self.last_used_proxy,
-                            "force_direct": self._force_direct,
-                            "bypass_warp": self.bypass_warp_active,
-                        }
+                        return self._result(m3u8_match.group(1), stream_headers)
                 raise ExtractorError("SPORTS99: Packed script not found")
 
             h_str, u, n_str, t, e, _ = match.groups()
@@ -118,14 +104,7 @@ class Sports99Extractor(BaseExtractor):
 
             logger.info(f"[Sports99] Successfully extracted: {stream_url}")
             
-            return {
-                "destination_url": stream_url,
-                "request_headers": stream_headers,
-                "mediaflow_endpoint": self.mediaflow_endpoint,
-                "selected_proxy": self.last_used_proxy,
-                "force_direct": self._force_direct,
-                "bypass_warp": self.bypass_warp_active,
-            }
+            return self._result(stream_url, stream_headers)
 
         except Exception as err:
             logger.error(f"[Sports99] Extraction error: {err}")

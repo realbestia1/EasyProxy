@@ -5,7 +5,6 @@ import logging
 import os
 import random
 import re
-import tempfile
 import threading
 import time
 from typing import Any, Dict
@@ -28,7 +27,6 @@ _VIXSRC_DATA_DIR = os.path.dirname(DEFAULT_RECORDINGS_DIR)
 _VIXSRC_COOKIE_FILE = os.getenv("VIXSRC_COOKIE_FILE") or os.path.join(
     _VIXSRC_DATA_DIR, "cookies", "vixsrc.json"
 )
-_VIXSRC_LEGACY_COOKIE_FILE = os.path.join(_VIXSRC_DATA_DIR, "vixsrc_cookies.json")
 try:
     _VIXSRC_COOKIE_TTL = max(300, int(os.getenv("VIXSRC_COOKIE_TTL", "7200")))
 except (TypeError, ValueError):
@@ -236,11 +234,8 @@ class VixSrcExtractor:
 
     @staticmethod
     def _read_cookie_cache() -> dict:
-        cache_path = _VIXSRC_COOKIE_FILE
-        if not os.path.exists(cache_path) and os.path.exists(_VIXSRC_LEGACY_COOKIE_FILE):
-            cache_path = _VIXSRC_LEGACY_COOKIE_FILE
         try:
-            with open(cache_path, "r", encoding="utf-8") as cache_file:
+            with open(_VIXSRC_COOKIE_FILE, "r", encoding="utf-8") as cache_file:
                 payload = json.load(cache_file)
             domains = payload.get("domains", {}) if isinstance(payload, dict) else {}
             return domains if isinstance(domains, dict) else {}
@@ -252,27 +247,9 @@ class VixSrcExtractor:
 
     @staticmethod
     def _write_cookie_cache(domains: dict) -> None:
-        directory = os.path.dirname(_VIXSRC_COOKIE_FILE) or "."
-        os.makedirs(directory, exist_ok=True)
-        fd, temporary_file = tempfile.mkstemp(
-            dir=directory,
-            prefix=".vixsrc_cookies.",
-            suffix=".tmp",
-        )
-        try:
-            with os.fdopen(fd, "w", encoding="utf-8") as cache_file:
-                json.dump({"version": 1, "domains": domains}, cache_file, ensure_ascii=False)
-            try:
-                os.chmod(temporary_file, 0o600)
-            except OSError:
-                pass
-            os.replace(temporary_file, _VIXSRC_COOKIE_FILE)
-        finally:
-            if os.path.exists(temporary_file):
-                try:
-                    os.unlink(temporary_file)
-                except OSError:
-                    pass
+        os.makedirs(os.path.dirname(_VIXSRC_COOKIE_FILE) or ".", exist_ok=True)
+        with open(_VIXSRC_COOKIE_FILE, "w", encoding="utf-8") as cache_file:
+            json.dump({"domains": domains}, cache_file, ensure_ascii=False)
 
     def _load_cached_solver_state(self, url: str) -> None:
         domain = self._cookie_cache_domain(url)
@@ -341,7 +318,6 @@ class VixSrcExtractor:
             domains[domain] = {
                 "cookies": list(merged.values()),
                 "user_agent": user_agent,
-                "saved_at": now,
                 "expires_at": expires_at,
             }
             try:

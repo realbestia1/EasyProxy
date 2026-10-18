@@ -20,8 +20,6 @@ from services.socks_bridge import close_socks_bridges
 import services.proxy_shared as _shared
 from services.proxy_shared import (
     logger,
-    SELECTED_PROXY_CONTEXT,
-    STRICT_PROXY_CONTEXT,
     get_proxy_for_url,
     get_connector_for_proxy,
     get_extractor_proxies,
@@ -40,7 +38,7 @@ from services.proxy_shared import (
 # /bin/sh (git checkouts do not carry the executable bit).
 _PROJECT_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 WARP_CTL_SCRIPT = os.environ.get("WARP_CTL_SCRIPT") or os.path.join(
-    _PROJECT_DIR, "scripts", "warp_userspace_ctl.sh"
+    _PROJECT_DIR, "scripts", "wireproxy_ctl.sh"
 )
 
 

@@ -73,14 +73,7 @@ class StreamHGExtractor(BaseExtractor):
                     continue
 
                 logger.info(f"Successfully extracted StreamHG URL: {stream_url[:80]}...")
-                return {
-                    "destination_url": stream_url,
-                    "request_headers": {},
-                    "mediaflow_endpoint": self.mediaflow_endpoint,
-                    "selected_proxy": self.last_used_proxy,
-                    "force_direct": self._force_direct,
-                    "bypass_warp": self.bypass_warp_active,
-                }
+                return self._result(stream_url, {})
             except Exception as e:
                 logger.debug(f"StreamHG candidate failed {candidate}: {e}")
                 continue

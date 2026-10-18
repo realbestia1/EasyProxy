@@ -127,9 +127,7 @@ def _create_client_handler(upstream_socks_url: str):
         finally:
             # Both directions are drained by now (or the bridge is aborting), so
             # a full close no longer truncates peer data.
-            for stream in (up_writer, client_writer):
-                if stream is None:
-                    continue
+            for stream in filter(None, (up_writer, client_writer)):
                 try:
                     stream.close()
                     await stream.wait_closed()

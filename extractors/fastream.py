@@ -42,12 +42,5 @@ class FastreamExtractor(BaseExtractor):
         self.base_headers["Accept-Language"] = "en-US,en;q=0.5"
         self.base_headers["Accept"] = "*/*"
 
-        return {
-            "destination_url": final_url,
-            "request_headers": self.base_headers,
-            "mediaflow_endpoint": self.mediaflow_endpoint,
-            "selected_proxy": self.last_used_proxy,
-            "force_direct": self._force_direct,
-            "bypass_warp": self.bypass_warp_active,
-        }
+        return self._result(final_url, self.base_headers)
 

@@ -28,14 +28,7 @@ class VoeExtractor(BaseExtractor):
     def _build_result(self, final_url: str, referer_url: str) -> dict:
         headers = dict(self.base_headers)
         headers["referer"] = referer_url
-        return {
-            "destination_url": final_url,
-            "request_headers": headers,
-            "mediaflow_endpoint": "hls_proxy",
-            "selected_proxy": self.last_used_proxy,
-            "force_direct": self._force_direct,
-            "bypass_warp": self.bypass_warp_active,
-        }
+        return self._result(final_url, headers, mediaflow_endpoint="hls_proxy")
 
     async def _try_extract_from_texts(self, url: str, texts: list[str]) -> dict | None:
         for combined_text in texts:

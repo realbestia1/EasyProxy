@@ -7,7 +7,7 @@
     <link rel="icon" type="image/x-icon" href="/favicon.ico">
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&display=swap" rel="stylesheet">
     <link rel="stylesheet" href="/static/wg-panel.css">
-    <link rel="stylesheet" href="/static/ep-ui.css">
+    <link rel="stylesheet" href="/static/ep-ui.css?v={{APP_VERSION}}">
 </head>
 <body>
 <div class="bg-glow"></div>
@@ -100,51 +100,13 @@
     </div>
 </div>
 
+    <script src="/static/ep-ui.js?v={{APP_VERSION}}"></script>
 <script>
 const params = new URLSearchParams(window.location.search);
-const apiPassword = params.get('api_password');
+window.EP_API_PASSWORD = params.get('api_password') || '';
 let probeTick = 0;
 let serversLoaded = false;
-const checkStorageKey = 'easyproxy:last-check:nordvpn';
-
-function toast(message, kind) {
-    const el = document.getElementById('toast');
-    el.textContent = message;
-    el.className = 'toast show ' + (kind || '');
-    setTimeout(() => { el.className = 'toast ' + (kind || ''); }, 3500);
-}
-
-async function api(path, options) {
-    const url = path + (apiPassword ? (path.includes('?') ? '&' : '?') + 'api_password=' + encodeURIComponent(apiPassword) : '');
-    const response = await fetch(url, options);
-    if (response.status === 401) { window.location.href = '/admin/login'; throw new Error('unauthorized'); }
-    const data = await response.json().catch(() => ({}));
-    if (!response.ok) throw new Error(data.error || ('HTTP ' + response.status));
-    return data;
-}
-
-function setText(id, value) {
-    document.getElementById(id).textContent = value || '-';
-}
-
-function persistCheckResult(value) {
-    const target = document.getElementById('check-result');
-    target.textContent = value || '-';
-    target.title = 'Last check: ' + new Date().toLocaleString();
-    try { localStorage.setItem(checkStorageKey, JSON.stringify({value, at: Date.now()})); } catch (_) {}
-}
-
-function restoreCheckResult() {
-    try {
-        const saved = JSON.parse(localStorage.getItem(checkStorageKey) || 'null');
-        if (saved && saved.value) {
-            document.getElementById('check-result').textContent = saved.value;
-            document.getElementById('check-result').title = saved.at ? 'Last check: ' + new Date(saved.at).toLocaleString() : '';
-        }
-    } catch (_) {}
-}
-
-function renderStatus(state) {
+window.EP_CHECK_STORAGE_KEY = 'easyproxy:last-check:nordvpn';function renderStatus(state) {
     const slot = state.slots.nordvpn;
     const pill = document.getElementById('status-pill');
     if (!state.available) {
@@ -281,10 +243,6 @@ async function saveToken() {
         button.disabled = false;
         button.textContent = 'Save & verify';
     }
-}
-
-function escHtml(s) {
-    return String(s ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 }
 
 async function loadCountries() {

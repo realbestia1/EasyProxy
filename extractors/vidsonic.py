@@ -113,12 +113,5 @@ class VidSonicExtractor(BaseExtractor):
             raise ExtractorError(f"VidSonic: decoded value is not a media URL: {stream_url[:80]}")
 
         logger.info(f"VidSonic: extracted -> {stream_url[:80]}...")
-        return {
-            "destination_url": stream_url,
-            "request_headers": {},
-            "mediaflow_endpoint": self.mediaflow_endpoint,
-            "selected_proxy": self.last_used_proxy,
-            "force_direct": self._force_direct,
-            "bypass_warp": self.bypass_warp_active,
-        }
+        return self._result(stream_url, {})
 

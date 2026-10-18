@@ -7,7 +7,7 @@ WARP_PROXY_PORT="1080"
 WARP_DIR="/tmp/easyproxy-warp"
 WARP_CONFIG_FILE="${WARP_CONFIG_FILE:-/data/warp.conf}"
 WARP_GENERATOR="/usr/local/bin/warp-register"
-WARPCTL="/app/scripts/warp_userspace_ctl.sh"
+WARPCTL="/app/scripts/wireproxy_ctl.sh"
 export WARP_CONFIG_FILE
 
 start_userspace_warp() {

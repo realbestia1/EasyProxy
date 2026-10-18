@@ -1,6 +1,6 @@
 from urllib.parse import urlparse
 import yarl
-from extractors.base import BaseExtractor, ExtractorError
+from extractors.base import BaseExtractor
 
 class GenericHLSExtractor(BaseExtractor):
     def __init__(self, request_headers, proxies=None, bypass_warp: bool = False):

@@ -116,10 +116,6 @@ class VidLinkExtractor(BaseExtractor):
 
         return f"{_RELAY_ORIGIN}/{relay_path}{parsed.path}?{urlencode(query)}"
 
-    @staticmethod
-    def _normalize_proxy_url(proxy_url: str) -> str:
-        return normalize_socks_proxy_url(proxy_url)
-
     async def extract(self, url: str, **kwargs) -> dict:
         path = urlparse(url).path
         movie_match = _MOVIE_PATH_RE.fullmatch(path)
@@ -151,7 +147,7 @@ class VidLinkExtractor(BaseExtractor):
             )
         request_kwargs = {}
         if proxy:
-            proxy = self._normalize_proxy_url(proxy)
+            proxy = normalize_socks_proxy_url(proxy)
             request_kwargs["proxies"] = {"http": proxy, "https": proxy}
 
         try:

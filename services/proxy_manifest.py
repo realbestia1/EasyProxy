@@ -15,7 +15,6 @@ from services.proxy_shared import (
     STRICT_PROXY_CONTEXT,
     ManifestRewriter,
     check_vavoo_request,
-    should_use_short_manifest_urls,
     parse_clearkey_params,
     seal_clearkey,
     MPDToHLSConverter,

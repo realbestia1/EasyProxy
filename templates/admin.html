@@ -295,7 +295,6 @@
         .toast.show { transform: translateY(0); opacity: 1; }
         .toast-success { background: rgba(16,185,129,0.9); color: #fff; }
         .toast-error { background: rgba(239,68,68,0.9); color: #fff; }
-        .toast-info { background: rgba(99,102,241,0.9); color: #fff; }
         .grid-2 { display: grid; grid-template-columns: 1fr 1fr; gap: 1.25rem; }
         @media (max-width: 700px) {
             .grid-2 { grid-template-columns: 1fr; }
@@ -318,40 +317,9 @@
             border-radius: 20px; border: 1px solid var(--border-primary);
             margin-top: 0.75rem;
         }
-        
-        
-        
-        .modal-box h3 { margin-bottom: 1rem; font-size: 1.1rem; }
-        
-        .modal-list .item {
-            display: flex; align-items: center; justify-content: space-between;
-            padding: 6px 10px; margin-bottom: 4px;
-            background: var(--bg-tertiary); border-radius: 8px;
-            font-size: 0.8rem;
-        }
-        .modal-list .item .remove {
-            cursor: pointer; color: var(--accent-error); font-weight: 700;
-            padding: 2px 8px; border-radius: 4px;
-        }
-        .modal-list .item .remove:hover { background: rgba(239,68,68,0.15); }
-        
-        .modal-add-row input { flex: 1; }
-        
-        .add-form input, .add-form select { flex: 1; min-width: 120px; }
-        .ll-item {
-            display: flex; align-items: center; justify-content: space-between;
-            padding: 6px 10px; margin-bottom: 4px;
-            background: var(--bg-tertiary); border-radius: 8px; font-size: 0.8rem;
-        }
-        .ll-item .ll-name { font-weight: 500; color: var(--text-primary); }
-        .ll-item .ll-level { color: var(--text-secondary); padding: 0 8px; }
-        .ll-item .ll-remove {
-            cursor: pointer; color: var(--accent-error); font-weight: 700;
-            padding: 2px 8px; border-radius: 4px;
-        }
-        .ll-item .ll-remove:hover { background: rgba(239,68,68,0.15); }
+
     </style>
-    <link rel="stylesheet" href="/static/ep-ui.css">
+    <link rel="stylesheet" href="/static/ep-ui.css?v={{APP_VERSION}}">
 </head>
 <body>
 <canvas id="particles-canvas"></canvas>
@@ -621,21 +589,12 @@
     </div>
 </div>
 
+    <script src="/static/ep-ui.js?v={{APP_VERSION}}"></script>
 <script>
 let config = {};
 let extractorProxies = {};
 let sslOff = false;
 let extractorProxyMode = 'proxy';
-
-function formatBytes(bytes, decimals = 2) {
-    if (!bytes || bytes === 0) return '0 B';
-    const k = 1024;
-    const dm = decimals < 0 ? 0 : decimals;
-    const sizes = ['B', 'KB', 'MB', 'GB', 'TB'];
-    const i = Math.floor(Math.log(bytes) / Math.log(k));
-    return parseFloat((bytes / Math.pow(k, i)).toFixed(dm)) + ' ' + sizes[i];
-}
-
 function formatSpeed(bytesPerSec) {
     if (!bytesPerSec || bytesPerSec <= 0) return '0 B/s';
     const k = 1024;
@@ -676,13 +635,6 @@ function withAdminQuery(path) {
     const pw = new URLSearchParams(window.location.search).get('api_password');
     return path + (pw ? '?api_password=' + encodeURIComponent(pw) : '');
 }
-
-function escHtml(s) {
-    return String(s ?? '').replace(/[&<>"']/g, function(c) {
-        return {'&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;'}[c];
-    });
-}
-
 async function pollAdminJob(url, resultEl, busyText) {
     const deadline = Date.now() + 15 * 60 * 1000;
     let data = null;
@@ -836,14 +788,6 @@ function renderActiveStreams(streams) {
             <td colspan="3" style="padding:24px;text-align:center;color:var(--text-muted)">No active streams</td>
         </tr>`;
     }
-}
-
-
-function toast(msg, type='success') {
-    const t = document.getElementById('toast');
-    t.textContent = msg;
-    t.className = 'toast toast-' + type + ' show';
-    setTimeout(() => t.classList.remove('show'), 2500);
 }
 
 function setToggle(id, value) {

@@ -2,7 +2,6 @@ import asyncio
 import uuid
 import logging
 import os
-import re
 import time
 from dataclasses import dataclass
 from datetime import datetime, timezone
@@ -14,6 +13,7 @@ import aiohttp
 import config_store
 from services.recording_db import RecordingDB
 from config import PORT, API_PASSWORD
+from utils.hls_master import master_entries
 
 logger = logging.getLogger(__name__)
 
@@ -80,7 +80,7 @@ class RecordingManager:
 
         if '.mpd' in url_lower:
             return StreamType.MPD
-        elif 'vavoo.to' in url_lower:
+        elif any(d in url_lower for d in ('vavoo.to', 'kool.to', 'vavoo.net', 'kool.ws', 'huhu.to', 'oha.to', 'voltop.net')):
             return StreamType.VAVOO
         elif 'popcdn.day' in url_lower or 'freeshot' in url_lower:
             return StreamType.FREESHOT
@@ -233,30 +233,21 @@ class RecordingManager:
                         logger.error(f"Failed to fetch master playlist: {resp.status}")
                         return None, None
                     content = await resp.text()
-
-            video_url = None
-            audio_url = None
-
-            lines = content.strip().split('\n')
-            for i, line in enumerate(lines):
-                # Parse EXT-X-MEDIA for separate audio track
-                if line.startswith('#EXT-X-MEDIA:') and 'TYPE=AUDIO' in line:
-                    uri_match = re.search(r'URI="([^"]+)"', line)
-                    if uri_match and (audio_url is None or 'DEFAULT=YES' in line):
-                        audio_url = uri_match.group(1)
-
-                # Parse EXT-X-STREAM-INF for video variant
-                elif line.startswith('#EXT-X-STREAM-INF:'):
-                    if i + 1 < len(lines):
-                        next_line = lines[i + 1].strip()
-                        if next_line and not next_line.startswith('#'):
-                            video_url = next_line
-
-            return video_url, audio_url
-
         except Exception as e:
             logger.error(f"Error parsing master playlist: {e}")
             return None, None
+
+        video_url = None
+        audio_url = None
+        for entry in master_entries(content.splitlines(), master_url):
+            if entry.kind == "variant":
+                video_url = entry.url or video_url
+            elif entry.type == "AUDIO" and entry.url and (
+                audio_url is None or entry.attributes.get("DEFAULT", "").strip().upper() == "YES"
+            ):
+                audio_url = entry.url
+
+        return video_url, audio_url
 
     # =========================================================================
     # FFmpeg Command Building

@@ -2,12 +2,12 @@
 
 import functools
 import logging
-import os
 
 from aiohttp import web
 
 import config_store
-from config import APP_VERSION, check_password
+from config import check_password
+from services.proxy_shared import admin_guard as admin, json_response
 from services import wg_tunnels
 from services.proxy_shared import read_template
 
@@ -17,14 +17,6 @@ PAGES = {
     "nordvpn": ("/admin/nordvpn", "nordvpn.html"),
     "custom": ("/admin/wireguard", "wireguard.html"),
 }
-
-
-def _json(payload, status=200):
-    return web.json_response(payload, status=status)
-
-
-def _unauthorized():
-    return _json({"error": "Unauthorized: Invalid API Password"}, status=401)
 
 
 async def _payload(request) -> dict:
@@ -47,42 +39,38 @@ def setup_wg_tunnel_routes(app: web.Application) -> None:
         except FileNotFoundError:
             return web.Response(text=f"{template} not found", status=404)
 
+    @admin
     async def handle_status(request):
-        if not check_password(request):
-            return _unauthorized()
         with_probe = request.query.get("probe") in ("1", "true", "yes")
-        return _json(await wg_tunnels.status_all(with_probe=with_probe))
+        return json_response(await wg_tunnels.status_all(with_probe=with_probe))
 
+    @admin
     async def handle_save_token(request):
-        if not check_password(request):
-            return _unauthorized()
         token = str((await _payload(request)).get("token", "")).strip()
         if not token:
             config_store.set("nordvpn_token", "")
-            return _json({"status": "cleared"})
+            return json_response({"status": "cleared"})
         try:
             private_key = await wg_tunnels.fetch_nordlynx_private_key(token)
             servers = await wg_tunnels.fetch_servers(force=True)
         except wg_tunnels.TunnelError as exc:
-            return _json({"error": str(exc)}, status=400)
+            return json_response({"error": str(exc)}, status=400)
         config_store.set("nordvpn_token", token)
-        return _json({
+        return json_response({
             "status": "ok",
             "private_key": private_key[:6] + "..." if private_key else "",
             "servers": len(servers),
         })
 
+    @admin
     async def handle_countries(request):
-        if not check_password(request):
-            return _unauthorized()
         try:
-            return _json({"countries": await wg_tunnels.country_list()})
+            return json_response({"countries": await wg_tunnels.country_list()})
         except wg_tunnels.TunnelError as exc:
-            return _json({"error": str(exc)}, status=502)
+            return json_response({"error": str(exc)}, status=502)
 
+    @admin
     async def handle_servers(request):
-        if not check_password(request):
-            return _unauthorized()
         country = (request.query.get("country") or "").strip().upper()
         needle = (request.query.get("q") or "").strip().lower()
         try:
@@ -92,7 +80,7 @@ def setup_wg_tunnel_routes(app: web.Application) -> None:
         try:
             servers = await wg_tunnels.fetch_servers()
         except wg_tunnels.TunnelError as exc:
-            return _json({"error": str(exc)}, status=502)
+            return json_response({"error": str(exc)}, status=502)
 
         matches = [
             server for server in servers
@@ -101,58 +89,53 @@ def setup_wg_tunnel_routes(app: web.Application) -> None:
                  or needle in server["city"].lower())
         ]
         matches.sort(key=lambda item: (item["load"], item["hostname"]))
-        return _json({"total": len(matches), "servers": matches[:limit]})
+        return json_response({"total": len(matches), "servers": matches[:limit]})
 
+    @admin
     async def handle_connect(request):
-        if not check_password(request):
-            return _unauthorized()
         hostname = str((await _payload(request)).get("server", "")).strip()
         try:
             server = await wg_tunnels.connect_nordvpn(hostname)
         except wg_tunnels.TunnelError as exc:
-            return _json({"error": str(exc)}, status=400)
-        return _json({
+            return json_response({"error": str(exc)}, status=400)
+        return json_response({
             "status": "connected",
             "server": server["hostname"],
             "tunnel": await wg_tunnels.slot_status("nordvpn", with_probe=True),
         })
 
+    @admin
     async def handle_custom(request):
-        if not check_password(request):
-            return _unauthorized()
         text = str((await _payload(request)).get("config", ""))
         try:
             summary = await wg_tunnels.apply_custom_profile(text)
         except wg_tunnels.TunnelError as exc:
-            return _json({"error": str(exc)}, status=400)
-        return _json({
+            return json_response({"error": str(exc)}, status=400)
+        return json_response({
             "status": "connected",
             "profile": summary,
             "tunnel": await wg_tunnels.slot_status("custom", with_probe=True),
         })
 
+    @admin
     async def handle_custom_clear(request):
-        if not check_password(request):
-            return _unauthorized()
         try:
             await wg_tunnels.clear_custom_profile()
         except wg_tunnels.TunnelError as exc:
-            return _json({"error": str(exc)}, status=400)
-        return _json({
+            return json_response({"error": str(exc)}, status=400)
+        return json_response({
             "status": "cleared",
             "tunnel": await wg_tunnels.slot_status("custom"),
         })
 
+    @admin
     async def handle_disconnect(request):
-        if not check_password(request):
-            return _unauthorized()
         slot = request.match_info["slot"]
         await wg_tunnels.disconnect(slot)
-        return _json({"status": "disconnected", "tunnel": await wg_tunnels.slot_status(slot)})
+        return json_response({"status": "disconnected", "tunnel": await wg_tunnels.slot_status(slot)})
 
+    @admin
     async def handle_reconnect(request):
-        if not check_password(request):
-            return _unauthorized()
         slot = request.match_info["slot"]
         # Reconnect means "keep it running": without the flag a later restart
         # would leave the tunnel off.
@@ -160,12 +143,11 @@ def setup_wg_tunnel_routes(app: web.Application) -> None:
         try:
             await wg_tunnels.restart(slot)
         except wg_tunnels.TunnelError as exc:
-            return _json({"error": str(exc)}, status=400)
-        return _json({"status": "connected", "tunnel": await wg_tunnels.slot_status(slot, with_probe=True)})
+            return json_response({"error": str(exc)}, status=400)
+        return json_response({"status": "connected", "tunnel": await wg_tunnels.slot_status(slot, with_probe=True)})
 
+    @admin
     async def handle_bind(request):
-        if not check_password(request):
-            return _unauthorized()
         slot = request.match_info["slot"]
         bind = str((await _payload(request)).get("bind", ""))
         try:
@@ -173,19 +155,17 @@ def setup_wg_tunnel_routes(app: web.Application) -> None:
             if wg_tunnels.is_enabled(slot):
                 await wg_tunnels.restart(slot)
         except wg_tunnels.TunnelError as exc:
-            return _json({"error": str(exc)}, status=400)
-        return _json({"status": "ok", "tunnel": await wg_tunnels.slot_status(slot)})
+            return json_response({"error": str(exc)}, status=400)
+        return json_response({"status": "ok", "tunnel": await wg_tunnels.slot_status(slot)})
 
+    @admin
     async def handle_logs(request, slot: str):
-        if not check_password(request):
-            return _unauthorized()
-        return _json({"logs": await wg_tunnels.logs(slot)})
+        return json_response({"logs": await wg_tunnels.logs(slot)})
 
+    @admin
     async def handle_check(request):
-        if not check_password(request):
-            return _unauthorized()
         slot = request.match_info["slot"]
-        return _json(await wg_tunnels.check(slot))
+        return json_response(await wg_tunnels.check(slot))
 
     for slot, (path, _) in PAGES.items():
         app.router.add_get(path, functools.partial(handle_page, slot=slot))

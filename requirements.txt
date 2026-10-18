@@ -9,6 +9,5 @@ cryptography
 PyNaCl
 Pillow
 curl_cffi
-brotli
 psutil
 pywidevine

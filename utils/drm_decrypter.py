@@ -1,6 +1,4 @@
-import argparse
 import struct
-import sys
 from typing import Optional, Union
 
 from Crypto.Cipher import AES
@@ -130,45 +128,7 @@ class MP4Parser:
         atom_data = self.data[pos : pos + size - 8]
         return MP4Atom(atom_type, size, atom_data)
 
-    def print_atoms_structure(self, indent: int = 0):
-        """
-        Prints the structure of all atoms in the data.
 
-        Args:
-            indent (int): The indentation level for printing.
-        """
-        pos = 0
-        end = len(self.data)
-        while pos + 8 <= end:
-            atom = self._read_atom_at(pos, end)
-            if not atom:
-                break
-            self.print_single_atom_structure(atom, pos, indent)
-            pos += atom.size
-
-    def print_single_atom_structure(self, atom: MP4Atom, parent_position: int, indent: int):
-        """
-        Prints the structure of a single atom.
-
-        Args:
-            atom (MP4Atom): The atom to print.
-            parent_position (int): The position of the parent atom.
-            indent (int): The indentation level for printing.
-        """
-        try:
-            atom_type = atom.atom_type.decode("utf-8")
-        except UnicodeDecodeError:
-            atom_type = repr(atom.atom_type)
-        print(" " * indent + f"Type: {atom_type}, Size: {atom.size}")
-
-        child_pos = 0
-        child_end = len(atom.data)
-        while child_pos + 8 <= child_end:
-            child_atom = self._read_atom_at(parent_position + 8 + child_pos, parent_position + 8 + child_end)
-            if not child_atom:
-                break
-            self.print_single_atom_structure(child_atom, parent_position, indent + 2)
-            child_pos += child_atom.size
 
 
 class MP4Decrypter:
@@ -956,44 +916,5 @@ def decrypt_segment(init_segment: bytes, segment_content: bytes, key_id: str, ke
     return decrypted_content
 
 
-def cli():
-    """
-    Command line interface for decrypting a CENC encrypted MP4 segment.
-    """
-    init_segment = b""
-
-    if args.init and args.segment:
-        with open(args.init, "rb") as f:
-            init_segment = f.read()
-        with open(args.segment, "rb") as f:
-            segment_content = f.read()
-    elif args.combined_segment:
-        with open(args.combined_segment, "rb") as f:
-            segment_content = f.read()
-    else:
-        print("Usage: python mp4decrypt.py --help")
-        sys.exit(1)
-
-    try:
-        decrypted_segment = decrypt_segment(init_segment, segment_content, args.key_id, args.key)
-        print(f"Decrypted content size is {len(decrypted_segment)} bytes")
-        with open(args.output, "wb") as f:
-            f.write(decrypted_segment)
-        print(f"Decrypted segment written to {args.output}")
-    except Exception as e:
-        print(f"Error: {e}")
-        sys.exit(1)
 
 
-if __name__ == "__main__":
-    arg_parser = argparse.ArgumentParser(description="Decrypts a MP4 init and media segment using CENC encryption.")
-    arg_parser.add_argument("--init", help="Path to the init segment file", required=False)
-    arg_parser.add_argument("--segment", help="Path to the media segment file", required=False)
-    arg_parser.add_argument(
-        "--combined_segment", help="Path to the combined init and media segment file", required=False
-    )
-    arg_parser.add_argument("--key_id", help="Key ID in hexadecimal format", required=True)
-    arg_parser.add_argument("--key", help="Key in hexadecimal format", required=True)
-    arg_parser.add_argument("--output", help="Path to the output file", required=True)
-    args = arg_parser.parse_args()
-    cli()

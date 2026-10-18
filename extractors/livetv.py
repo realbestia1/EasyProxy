@@ -157,26 +157,12 @@ class LiveTVExtractor(BaseExtractor):
                 final_m3u8 = m3u8_match.group(1).replace("\n", "").replace("\r", "").strip()
                 if final_m3u8.startswith("//"):
                     final_m3u8 = "https:" + final_m3u8
-                return {
-                    "destination_url": final_m3u8,
-                    "request_headers": {"User-Agent": self.base_headers["User-Agent"], "Referer": emb_url},
-                    "mediaflow_endpoint": "hls_proxy",
-                    "selected_proxy": self.last_used_proxy,
-                    "force_direct": self._force_direct,
-                    "bypass_warp": self.bypass_warp_active,
-                }
+                return self._result(final_m3u8, {"User-Agent": self.base_headers["User-Agent"], "Referer": emb_url}, mediaflow_endpoint="hls_proxy")
 
         # 3. Direct m3u8 in html
         any_m3u8 = re.search(r'["\'](https?://[^\s"\'<>]+\.m3u8[^\s"\'<>]*)["\']', wp_html)
         if any_m3u8:
-            return {
-                "destination_url": any_m3u8.group(1),
-                "request_headers": self.base_headers,
-                "mediaflow_endpoint": "hls_proxy",
-                "selected_proxy": self.last_used_proxy,
-                "force_direct": self._force_direct,
-                "bypass_warp": self.bypass_warp_active,
-            }
+            return self._result(any_m3u8.group(1), self.base_headers, mediaflow_endpoint="hls_proxy")
 
         # 4. Check other player iframes
         player_iframes = re.findall(r'<iframe[^>]+src=["\']([^"\']+)["\']', wp_html, re.I)
@@ -192,14 +178,7 @@ class LiveTVExtractor(BaseExtractor):
                 resp_sub = await self._make_request(ifr_clean, ssl=False, headers={"Referer": url})
                 sub_m3u8 = re.search(r'["\'](https?://[^\s"\'<>]+\.m3u8[^\s"\'<>]*)["\']', resp_sub.text)
                 if sub_m3u8:
-                    return {
-                        "destination_url": sub_m3u8.group(1),
-                        "request_headers": {"User-Agent": self.base_headers["User-Agent"], "Referer": ifr_clean},
-                        "mediaflow_endpoint": "hls_proxy",
-                        "selected_proxy": self.last_used_proxy,
-                        "force_direct": self._force_direct,
-                        "bypass_warp": self.bypass_warp_active,
-                    }
+                    return self._result(sub_m3u8.group(1), {"User-Agent": self.base_headers["User-Agent"], "Referer": ifr_clean}, mediaflow_endpoint="hls_proxy")
             except Exception:
                 pass
 

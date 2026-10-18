@@ -29,6 +29,7 @@ from services.proxy_shared import (
     ManifestRewriter,
     MPDToHLSConverter,
     parse_clearkey_params,
+    ProxyDeadRetryError,
     seal_clearkey,
     decrypt_segment,
     check_password,
@@ -36,7 +37,6 @@ from services.proxy_shared import (
     final_curl_request_url,
     should_use_curl_cffi,
     is_special_cdn_stream,
-    ProxyDeadRetryError,
     get_public_base_url,
     get_extractor_routing_overrides,
     request_log_context,
@@ -2083,7 +2083,6 @@ class HLSProxyStreamingMixin:
     ):
         """Re-extract the source on 403 to refresh signed CDN tokens, then retry the segment."""
         import urllib.parse as _up
-        from services.proxy_shared import ProxyDeadRetryError
 
         orig_url = request.query.get("orig_url")
         if not orig_url:

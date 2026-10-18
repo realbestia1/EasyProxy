@@ -35,10 +35,6 @@ class DoodStreamExtractor(BaseExtractor):
     async def _get_proxy(self, url: str, bypass_warp: bool = None) -> str | None:
         return await get_preferred_proxy_for_url(url, "doodstream", self.proxies, bypass_warp)
 
-    @staticmethod
-    def _normalize_proxy_url(proxy_url: str) -> str:
-        return normalize_socks_proxy_url(proxy_url)
-
     def _extract_pass_path(self, html: str) -> str | None:
         patterns = [
             r"['\"](/pass_md5/[^'\"]+)['\"]",
@@ -107,7 +103,7 @@ class DoodStreamExtractor(BaseExtractor):
         proxy_url: str | None,
         bypass_warp: bool = False,
     ) -> dict | None:
-        normalized_proxy = self._normalize_proxy_url(proxy_url) if proxy_url else None
+        normalized_proxy = normalize_socks_proxy_url(proxy_url) if proxy_url else None
         if normalized_proxy is None and not self._force_direct and not _cfg.is_direct_connection_allowed(bypass_warp):
             raise ExtractorError(
                 "DoodStream: direct fallback disabled; no proxy route available"
@@ -211,12 +207,5 @@ class DoodStreamExtractor(BaseExtractor):
         final_url = f"{base_stream}{rand_str}?token={token}&expiry={expiry}"
 
         logger.info(f"DoodStream successful sniffed extraction: {final_url[:60]}...")
-        return {
-            "destination_url": final_url,
-            "request_headers": {"User-Agent": ua, "Referer": f"{base_url}/", "Accept": "*/*"},
-            "mediaflow_endpoint": self.mediaflow_endpoint,
-            "selected_proxy": self.last_used_proxy,
-            "force_direct": self._force_direct,
-            "bypass_warp": self.bypass_warp_active,
-        }
+        return self._result(final_url, {"User-Agent": ua, "Referer": f"{base_url}/", "Accept": "*/*"})
 

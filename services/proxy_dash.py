@@ -9,7 +9,6 @@ from services.proxy_shared import (
     check_password,
     get_ssl_setting_for_url,
     get_proxy_for_url,
-    mark_proxy_dead,
     decrypt_segment,
     is_browser_key_request,
     fetch_browser_backed_key,

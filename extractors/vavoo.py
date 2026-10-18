@@ -16,7 +16,6 @@ from extractors.base import BaseExtractor, ExtractorError
 logger = logging.getLogger(__name__)
 
 # Tokens expire every 10 minutes (see vavoo_proxy.py TOKEN_ADDON_SIG)
-_TOKEN_MAX_AGE = 600
 _TOKEN_REFRESH_AGE = 480
 _PING_URLS = [
     "https://www.vavoo.tv/api/app/ping",
@@ -24,13 +23,29 @@ _PING_URLS = [
 ]
 _VYPN_PACKAGE = "net.vypn.app"
 _VYPN_VERSION = "1.4.1"
-_BASE_SITES = ["https://vavoo.to", "https://kool.to"]
+# Mirror frontend dello stesso backend mediahubmx (verificato ott 2026:
+# stessa firma dai ping, stesso catalogo, resolve cross-compatibile tra
+# domini). Il gate di extract() e l'auto-detect accettano tutti questi
+# domini; le basi di resolve/catalogo restano le 4 con fallback (huhu.to /
+# oha.to / voltop.net esclusi dalle basi: verificati giu' insieme a
+# vavoo.to / kool.to, stessa infra).
+VAVOO_MIRROR_DOMAINS = (
+    "vavoo.to",
+    "kool.to",
+    "vavoo.net",
+    "kool.ws",
+    "huhu.to",
+    "oha.to",
+    "voltop.net",
+)
+_BASE_SITES = ["https://vavoo.to", "https://kool.to", "https://vavoo.net", "https://kool.ws"]
 _LANGUAGE = "de"
 _REGION = "DE"
 
 
 class VavooExtractor(BaseExtractor):
-    """Vavoo URL extractor — resolves vavoo.to play URLs to clean HLS via lokke.app auth."""
+    """Vavoo URL extractor — resolves vavoo play URLs (all mirror frontends)
+    to clean HLS via lokke.app auth."""
 
     def __init__(self, request_headers: dict, proxies: list = None, bypass_warp: bool = False):
         super().__init__(request_headers, proxies, extractor_name="vavoo", bypass_warp=bypass_warp)
@@ -270,21 +285,21 @@ class VavooExtractor(BaseExtractor):
             if live_id:
                 url = f"https://vavoo.to/vavoo-iptv/play/{live_id}"
 
-        # Normalize /play/X to /vavoo-iptv/play/X
+        # Normalize /play/X to /vavoo-iptv/play/X (il play-ID e' lo stesso su
+        # tutti i mirror, e il resolve e' cross-compatibile: la forma
+        # canonica vavoo.to si risolve da qualsiasi base).
         m = re.search(r'/play/([^/?#]+)', url)
         if m:
             url = f"https://vavoo.to/vavoo-iptv/play/{m.group(1)}"
 
-        for attempt in range(2):
-            if attempt > 0:
-                sig = await self._get_sig(force=True)
-                if not sig:
-                    return None
-            else:
-                sig = await self._get_sig()
-                if not sig:
-                    logger.warning("Vavoo no addonSig available, resolving without signature")
-
+        # Prova ogni base a turno: con un frontend giu' (connection refused,
+        # come osservato su vavoo.to/kool.to) si passa alla successiva invece
+        # di fallire subito. Firma rinnovata ad ogni cambio base.
+        last_err = None
+        sig = await self._get_sig()
+        if not sig:
+            logger.warning("Vavoo no addonSig available, resolving without signature")
+        for _ in range(len(_BASE_SITES)):
             # _get_sig() may rebuild session when proxy bypass is active.
             session = await self._get_session()
 
@@ -301,10 +316,18 @@ class VavooExtractor(BaseExtractor):
             body = {"language": _LANGUAGE, "region": _REGION, "url": url, "clientVersion": "3.0.2"}
             try:
                 async with session.post(self._resolve_url, json=body, headers=headers,
-                                        timeout=ClientTimeout(total=30), ssl=False) as resp:
-                    if resp.status in (451, 500, 502) and attempt < 1:
+                                        timeout=ClientTimeout(total=15), ssl=False) as resp:
+                    # Switch di base solo su errori potenzialmente legati alla
+                    # singola base (gateway/backend): gli altri 4xx (400/401/
+                    # 403/404/429) dipendono dalla richiesta, riprovarli
+                    # altrove spreca solo tentativi/ping (il 429 peggiora).
+                    if resp.status in (451, 502, 500, 503, 504):
+                        last_err = f"HTTP {resp.status} on {_BASE_SITES[self.base_index]}"
                         logger.warning(f"Vavoo resolve status {resp.status}, switching base site")
                         self._switch_to_next_base()
+                        sig = await self._get_sig(force=True)
+                        if not sig:
+                            return None
                         continue
                     if resp.status != 200:
                         logger.warning(f"Vavoo resolve returned status {resp.status}")
@@ -320,12 +343,19 @@ class VavooExtractor(BaseExtractor):
                     logger.warning("Vavoo resolve response missing URL")
                     return None
             except Exception as e:
-                logger.warning(f"Vavoo resolve exception: {e}")
-                return None
+                last_err = e
+                logger.warning(f"Vavoo resolve exception on {_BASE_SITES[self.base_index]}, "
+                               f"switching base site: {e}")
+                self._switch_to_next_base()
+                sig = await self._get_sig(force=True)
+                if not sig:
+                    return None
+                continue
+        logger.warning(f"Vavoo resolve failed on all base sites, last error: {last_err}")
         return None
 
     async def extract(self, url: str, **kwargs) -> Dict[str, Any]:
-        if "vavoo.to" not in url:
+        if not any(d in url.lower() for d in VAVOO_MIRROR_DOMAINS):
             raise ExtractorError("Not a valid Vavoo URL")
 
         self._apply_routing_kwargs(url, kwargs)

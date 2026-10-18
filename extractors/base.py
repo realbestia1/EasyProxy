@@ -132,9 +132,14 @@ class BaseExtractor:
         self.last_used_proxy = proxy
         return proxy
 
-    def _routing_result_fields(self) -> dict:
-        """MANDATORY result fields: downstream uses them for segments."""
+    def _result(self, destination_url: str, request_headers: dict,
+                mediaflow_endpoint: str | None = None) -> dict:
+        """Standard extractor result. The routing fields are mandatory: the
+        segment/playlist paths reuse them to keep the same route."""
         return {
+            "destination_url": destination_url,
+            "request_headers": request_headers,
+            "mediaflow_endpoint": mediaflow_endpoint or self.mediaflow_endpoint,
             "selected_proxy": self.last_used_proxy,
             "force_direct": self._force_direct,
             "bypass_warp": self.bypass_warp_active,

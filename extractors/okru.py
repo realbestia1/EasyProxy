@@ -33,14 +33,7 @@ class OkruExtractor(BaseExtractor):
                 raise ExtractorError("Failed to extract stream URL from metadata")
             
             self.base_headers["referer"] = url
-            return {
-                "destination_url": final_url,
-                "request_headers": self.base_headers,
-                "mediaflow_endpoint": self.mediaflow_endpoint,
-                "selected_proxy": self.last_used_proxy,
-                "force_direct": self._force_direct,
-                "bypass_warp": self.bypass_warp_active,
-            }
+            return self._result(final_url, self.base_headers)
         
         raise ExtractorError("Failed to parse OK.ru page")
 

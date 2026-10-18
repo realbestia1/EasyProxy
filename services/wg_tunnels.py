@@ -1,7 +1,7 @@
 """Secondary userspace WireGuard tunnels exposed as local SOCKS5 proxies.
 
 Cloudflare WARP keeps its own relay on 127.0.0.1:1080 through
-``scripts/warp_userspace_ctl.sh``. This module manages two extra, independent
+``scripts/wireproxy_ctl.sh``. This module manages two extra, independent
 wireproxy slots, each with its own profile, port, pid file and log:
 
     nordvpn -> <data>/nordvpn.conf    profile generated from a NordVPN token
@@ -76,7 +76,7 @@ _WG_QUICK_ONLY = {
 _BIND_RE = re.compile(r"^(?P<host>[A-Za-z0-9_.\-\[\]:]+):(?P<port>\d{1,5})$")
 
 _PROJECT_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-CTL_SCRIPT = os.path.join(_PROJECT_DIR, "scripts", "wg_tunnel_ctl.sh")
+CTL_SCRIPT = os.path.join(_PROJECT_DIR, "scripts", "wireproxy_ctl.sh")
 
 _server_cache = {"fetched_at": 0.0, "used_at": 0.0, "servers": []}
 _server_lock = asyncio.Lock()

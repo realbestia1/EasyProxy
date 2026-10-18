@@ -149,6 +149,7 @@ class HLSProxyExtractorHandlerMixin:
                     ],
                     "examples": [
                         f"{get_public_base_url(request)}/extractor/video?d=https://vavoo.to/channel/123",
+                        f"{get_public_base_url(request)}/extractor/video?d=https://kool.to/kool-iptv/play/abc123",
                         f"{get_public_base_url(request)}/extractor/video.m3u8?host=vavoo&d=https://custom-link.com",
                         f"{get_public_base_url(request)}/extractor/video.mp4?host=mixdrop&d=https://mixdrop.co/e/ABC123XYZ",
                         f"{get_public_base_url(request)}/extractor/video?host=fctv33&d=https://fctv33.stream/match/123/stream/456",

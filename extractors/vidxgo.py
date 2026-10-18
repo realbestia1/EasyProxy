@@ -12,17 +12,14 @@ that mirrors the easystreams addon: Firefox 120 TLS fingerprint via the
 (and variant playlists when a refresh is requested) with the same session.
 """
 
-import asyncio
-import json
 import logging
 import os
-import shutil
 from typing import Any
 from urllib.parse import urlparse
 
 import config as _cfg
-from config import get_preferred_proxy_for_url
 from extractors.base import BaseExtractor, ExtractorError
+from extractors.node_runner import run_node_runner
 
 logger = logging.getLogger(__name__)
 
@@ -40,10 +37,6 @@ class VidXgoExtractor(BaseExtractor):
         super().__init__(request_headers, proxies, extractor_name="vidxgo", bypass_warp=bypass_warp)
         self.request_headers = request_headers or {}
         self.selected_proxy = None
-
-    @staticmethod
-    def _node_bin() -> str | None:
-        return shutil.which("node")
 
     @staticmethod
     def _validate_url(url: str) -> None:
@@ -66,23 +59,10 @@ class VidXgoExtractor(BaseExtractor):
 
     async def extract(self, url: str, **kwargs) -> dict[str, Any]:
         self._validate_url(url)
-        node = self._node_bin()
-        if not node:
-            raise ExtractorError("VidXgo: Node.js is required for TLS-fingerprint extraction")
-        if not os.path.exists(_RUNNER):
-            raise ExtractorError(f"VidXgo: runner script not found at {_RUNNER}")
 
         self._apply_routing_kwargs(url, kwargs)
-        if self._force_direct:
-            proxy = None
-        else:
-            proxy = _cfg.effective_forced_proxy(url, self._forced_proxy) or await get_preferred_proxy_for_url(
-                url, self.extractor_name, self.proxies, self.bypass_warp_active
-            )
-        if proxy is None and not self._force_direct and not _cfg.is_direct_connection_allowed(self.bypass_warp_active):
-            raise ExtractorError("VidXgo: direct fallback disabled; no proxy route available")
+        proxy = await self._resolve_proxy(url)
         self.selected_proxy = proxy
-        self.last_used_proxy = proxy
 
         env = dict(os.environ)
         runner_proxy = self._normalize_proxy(proxy)
@@ -93,48 +73,7 @@ class VidXgoExtractor(BaseExtractor):
         if kwargs.get("force_refresh") or kwargs.get("background_refresh"):
             env["VIDXGO_CAPTURE_VARIANTS"] = "1"
 
-        proc = None
-        try:
-            proc = await asyncio.create_subprocess_exec(
-                node, _RUNNER, url,
-                stdout=asyncio.subprocess.PIPE,
-                stderr=asyncio.subprocess.PIPE,
-                env=env,
-                start_new_session=os.name != "nt",
-            )
-            stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=60)
-        except FileNotFoundError as exc:
-            raise ExtractorError(f"VidXgo: failed to spawn node: {exc}") from exc
-        except asyncio.TimeoutError:
-            raise ExtractorError("VidXgo: node runner timed out")
-        finally:
-            if proc and proc.returncode is None:
-                try:
-                    if os.name != "nt":
-                        import signal
-                        os.killpg(proc.pid, signal.SIGKILL)
-                    else:
-                        proc.kill()
-                    await asyncio.wait_for(proc.wait(), timeout=2)
-                except BaseException:
-                    pass
-
-        raw = stdout.decode("utf-8", errors="replace").strip() if stdout else ""
-        payload = None
-        for line in reversed(raw.splitlines()):
-            try:
-                candidate = json.loads(line)
-            except json.JSONDecodeError:
-                continue
-            if isinstance(candidate, dict):
-                payload = candidate
-                break
-
-        if payload is None:
-            detail = stderr.decode("utf-8", errors="replace")[-400:] if stderr else raw[-400:]
-            raise ExtractorError(f"VidXgo: runner produced no result ({detail})")
-        if payload.get("error"):
-            raise ExtractorError(f"VidXgo: {payload['error']}")
+        payload = await run_node_runner(_RUNNER, [url], env, timeout=60, label="VidXgo")
 
         destination_url = str(payload.get("destination_url") or "")
         if not destination_url.startswith("http"):
