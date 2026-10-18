@@ -51,9 +51,6 @@ class _CurlResponse:
         self.url = response_url
         self.headers = headers or {}
 
-    async def text_async(self):
-        return self._text
-
     def raise_for_status(self):
         if self.status >= 400:
             raise ExtractorError(f"HTTP error {self.status} for {self.url}")
@@ -698,9 +695,6 @@ class VixSrcExtractor:
                             self.url = response_url
                             self.status_code = status_val
                             self.text = text_content
-
-                        async def text_async(self):
-                            return self._text
 
                         def raise_for_status(self):
                             if self.status >= 400:

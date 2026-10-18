@@ -1,7 +1,6 @@
 import re
 import base64
 import json
-import uuid
 import time
 import asyncio
 import os
@@ -12,12 +11,12 @@ from concurrent.futures import ProcessPoolExecutor, as_completed
 from pathlib import Path
 from urllib.parse import urlparse
 
+from Crypto.Cipher import AES
 from Crypto.Hash import SHA256
 from Crypto.PublicKey import ECC
 from Crypto.Signature import DSS
 
 from extractors.base import BaseExtractor, ExtractorError
-from utils import python_aesgcm
 
 
 # ──────────────────────────────────────────────────────────────────────
@@ -89,18 +88,10 @@ def _pow_hash(data: bytes):
 
 
 def _lz_bits(words) -> int:
-    bits = 0
-    for n in words:
-        if n == 0:
-            bits += 32
-            continue
-        c = 0
-        m = 0x80000000
-        while m and not (n & m):
-            c += 1
-            m >>= 1
-        return bits + c
-    return bits
+    for index, n in enumerate(words):
+        if n:
+            return index * 32 + 32 - n.bit_length()
+    return len(words) * 32
 
 
 def _solve_pow_worker(nonce: str, difficulty: int, start: int, step: int,
@@ -196,11 +187,7 @@ class F16PxExtractor(BaseExtractor):
     # ── base64url ──
     @staticmethod
     def _b64url_decode(value: str) -> bytes:
-        value = value.replace("-", "+").replace("_", "/")
-        padding = (-len(value)) % 4
-        if padding:
-            value += "=" * padding
-        return base64.b64decode(value)
+        return base64.urlsafe_b64decode(value + "=" * (-len(value) % 4))
 
     @staticmethod
     def _b64url_encode(value: bytes) -> str:
@@ -230,9 +217,13 @@ class F16PxExtractor(BaseExtractor):
         iv = self._b64url_decode(pb["iv"])
         key = self._join_key_parts(pb["key_parts"], pb["version"])
         payload = self._b64url_decode(pb["payload"])
-        cipher = python_aesgcm.new(key)
-        decrypted = cipher.open(iv, payload)
-        if decrypted is None:
+        if len(payload) < 16:
+            raise self._error("GCM authentication failed")
+        try:
+            decrypted = AES.new(key, AES.MODE_GCM, nonce=iv).decrypt_and_verify(
+                payload[:-16], payload[-16:]
+            )
+        except ValueError:
             raise self._error("GCM authentication failed")
         return json.loads(decrypted.decode("utf-8", "ignore")).get("sources") or []
 
@@ -446,5 +437,3 @@ class F16PxExtractor(BaseExtractor):
             "bypass_warp": self.bypass_warp_active,
         }
 
-    async def close(self):
-        await super().close()

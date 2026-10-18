@@ -229,7 +229,7 @@ class LiveTVExtractor(BaseExtractor):
 
     async def _process_player_option(self, api_base: str, method: str, post: str, nume: str, type_: str) -> dict:
         """Process player option to get stream URL."""
-        session = await self._get_session(api_base)
+        await self._get_session(api_base)
         
         if method == "wp_json":
             api_url = f"{api_base}{post}/{type_}/{nume}"
@@ -368,5 +368,3 @@ class LiveTVExtractor(BaseExtractor):
         except Exception:
             return {}
 
-    async def close(self):
-        await super().close()

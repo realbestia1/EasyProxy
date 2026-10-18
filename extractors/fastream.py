@@ -1,6 +1,6 @@
 from urllib.parse import urlparse
 from utils.packed import eval_solver
-from extractors.base import BaseExtractor, ExtractorError
+from extractors.base import BaseExtractor
 
 class FastreamExtractor(BaseExtractor):
     """Fastream URL extractor."""
@@ -51,5 +51,3 @@ class FastreamExtractor(BaseExtractor):
             "bypass_warp": self.bypass_warp_active,
         }
 
-    async def close(self):
-        await super().close()

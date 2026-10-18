@@ -8,9 +8,11 @@ import os
 import re
 import time
 import urllib.parse
-from typing import Dict, Any, Optional
+from typing import Dict, Any
 
-import aiohttp
+from Crypto.Cipher import AES
+from Crypto.Util.Padding import pad
+
 from aiohttp import ClientSession, ClientTimeout, TCPConnector
 
 from extractors.base import BaseExtractor, ExtractorError
@@ -43,10 +45,6 @@ SPORT_SLUG_MAP = {
 # It lets EasyProxy recognise a plain playlist entry as an FCTV33 stream and mint a
 # fresh token from its own egress IP, without a dedicated /extractor/... link.
 _MARKER_RE = re.compile(r'(?:#|%23)fctv33(?![a-z0-9])', re.IGNORECASE)
-
-
-def has_fctv33_marker(url: str) -> bool:
-    return bool(url) and bool(_MARKER_RE.search(str(url)))
 
 
 def parse_fctv33_marker(url: str) -> dict:
@@ -126,21 +124,9 @@ def rot47(text: str) -> str:
     return "".join(res)
 
 
-def pkcs7_pad(data: bytes, block_size: int = 16) -> bytes:
-    pad_len = block_size - (len(data) % block_size)
-    return data + bytes([pad_len] * pad_len)
-
-
 def encrypt_aes_cbc(data: bytes, key: bytes, iv: bytes) -> bytes:
-    try:
-        from Crypto.Cipher import AES
-        cipher = AES.new(key, AES.MODE_CBC, iv)
-        return cipher.encrypt(pkcs7_pad(data))
-    except ImportError:
-        from cryptography.hazmat.primitives.ciphers import Cipher, algorithms, modes
-        cipher = Cipher(algorithms.AES(key), modes.CBC(iv))
-        encryptor = cipher.encryptor()
-        return encryptor.update(pkcs7_pad(data)) + encryptor.finalize()
+    cipher = AES.new(key, AES.MODE_CBC, iv)
+    return cipher.encrypt(pad(data, 16))
 
 
 def build_signed_stream_url(obfuscated_url: str, session_token: str) -> str:
@@ -168,10 +154,6 @@ def set_current_s2_salt(salt) -> None:
     if salt is None or salt == "":
         return
     _current_s2_salt = str(salt)
-
-
-def get_current_s2_salt() -> str:
-    return _current_s2_salt
 
 
 def decode_rot13_b64(s: str, is_slice: bool = True) -> str:
@@ -207,7 +189,7 @@ def sign_s2_token(url: str, salt: str | None = None) -> str:
         return url
 
 
-def resolve_fctv33_segment_url(url: str, geo_country: str = "IT", geo_continent: str = "EU", salt: str | None = None) -> str:
+def resolve_fctv33_segment_url(url: str, geo_country: str = "IT", geo_continent: str = "EU") -> str:
     """Resolve FCTV33 segment URL (_ctump / _ctuph smart link) and append _s2 signature."""
     try:
         parsed = urllib.parse.urlparse(url)
@@ -215,7 +197,7 @@ def resolve_fctv33_segment_url(url: str, geo_country: str = "IT", geo_continent:
         ctump = qs.get("_ctump", [""])[0]
         ctuph = qs.get("_ctuph", [""])[0]
         if not ctump or not ctuph:
-            return sign_s2_token(url, salt=salt)
+            return sign_s2_token(url)
 
         decoded_ctump = decode_rot13_b64(ctump)
         decoded_ctuph = decode_rot13_b64(ctuph)
@@ -238,10 +220,10 @@ def resolve_fctv33_segment_url(url: str, geo_country: str = "IT", geo_continent:
 
         target_host = chosen_host or ww_host or (items[0].split("@")[-1] if "@" in items[0] else None)
         if not target_host:
-            return sign_s2_token(url, salt=salt)
+            return sign_s2_token(url)
 
         target_url = f"https://{target_host}{decoded_ctuph}"
-        return sign_s2_token(target_url, salt=salt)
+        return sign_s2_token(target_url)
     except Exception as e:
         logger.warning(f"Failed to resolve FCTV33 segment URL: {e}")
         return url
@@ -453,7 +435,6 @@ class Fctv33Extractor(BaseExtractor):
         self.data_api_base = os.getenv("FCTV_DATA_API", DEFAULT_DATA_API_BASE)
         self.player_referer = DEFAULT_PLAYER_REFERER
         self.stream_digit = DEFAULT_STREAM_DIGIT
-        self.salt = "00"
         self.geo = {"country": "IT", "continent": "EU"}
         self._params_ts = 0
         self._init_lock = asyncio.Lock()
@@ -530,7 +511,6 @@ class Fctv33Extractor(BaseExtractor):
                             smart_link = json.loads(cfg.get("common:cdnSmartLink", "{}"))
                             auth_salt = smart_link.get("auth", {}).get("salt")
                             if auth_salt:
-                                self.salt = auth_salt
                                 set_current_s2_salt(auth_salt)
                                 logger.info("Fctv33Extractor: Updated _s2 salt")
                         except Exception:
@@ -593,7 +573,7 @@ class Fctv33Extractor(BaseExtractor):
         strs = _message_strings(match_msg)
         if ev["league"] not in strs and ev["page"] not in strs:
             raise ExtractorError(
-                f"FCTV33: match API response does not match event page (wrong sportType? pass ?sportType=N)"
+                "FCTV33: match API response does not match event page (wrong sportType? pass ?sportType=N)"
             )
         items = [parse_stream_item(b) for b in fields.get(2, []) if isinstance(b, bytes)]
         items = [it for it in items if it.get("streamId")]

@@ -36,8 +36,8 @@ _RUNNER = os.path.join(
 class VidXgoExtractor(BaseExtractor):
     """VidXgo embed -> HLS extractor (Node tls-client runner)."""
 
-    def __init__(self, request_headers: dict = None, proxies: list = None, extractor_name: str = "vidxgo", bypass_warp: bool = False):
-        super().__init__(request_headers, proxies, extractor_name=extractor_name, bypass_warp=bypass_warp)
+    def __init__(self, request_headers: dict = None, proxies: list = None, bypass_warp: bool = False):
+        super().__init__(request_headers, proxies, extractor_name="vidxgo", bypass_warp=bypass_warp)
         self.request_headers = request_headers or {}
         self.selected_proxy = None
 
@@ -61,6 +61,7 @@ class VidXgoExtractor(BaseExtractor):
             proxy = f"socks5://{proxy}"
         return proxy.replace("socks5h://", "socks5://", 1)
 
+    # Public alias used by the routing-policy tests.
     _normalize_proxy_url = _normalize_proxy
 
     async def extract(self, url: str, **kwargs) -> dict[str, Any]:
@@ -156,5 +157,3 @@ class VidXgoExtractor(BaseExtractor):
             "disable_ssl": True,
         }
 
-    async def close(self):
-        pass

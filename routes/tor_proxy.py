@@ -1,16 +1,12 @@
 """Admin panel and API for the local Tor SOCKS5 proxy."""
 
 import functools
-import os
 
 from aiohttp import web
 
-from config import APP_VERSION, check_password
+from config import check_password
 from services import tor_proxy
-
-_TEMPLATES_DIR = os.path.join(
-    os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "templates"
-)
+from services.proxy_shared import read_template
 
 
 def _json(payload, status=200):
@@ -25,8 +21,7 @@ def setup_tor_proxy_routes(app: web.Application) -> None:
     async def page(request):
         if not check_password(request):
             raise web.HTTPFound("/admin/login")
-        with open(os.path.join(_TEMPLATES_DIR, "torproxy.html"), "r", encoding="utf-8") as handle:
-            return web.Response(text=handle.read().replace("{{APP_VERSION}}", APP_VERSION), content_type="text/html")
+        return web.Response(text=read_template("torproxy.html"), content_type="text/html")
 
     async def guard(request):
         if not check_password(request):

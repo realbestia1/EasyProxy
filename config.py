@@ -13,8 +13,6 @@ from dotenv import load_dotenv
 from config_store import (
     DEFAULT_RECORDINGS_DIR,
     get as _cfg_get,
-    set as _cfg_set,
-    get_all as _cfg_get_all,
 )
 from aiohttp_socks import (
     ProxyConnector,
@@ -46,7 +44,7 @@ _SOCKET_CHECK_EXECUTOR = ThreadPoolExecutor(
 )
 
 
-APP_VERSION = "2.13.51"
+APP_VERSION = "2.13.52"
 
 _MEMORY_PROFILE_FRAMES = 15
 _memory_profile_baseline = None
@@ -196,6 +194,11 @@ PROXY_TEST_CONCURRENCY = 10 if cpu_cores == 1 else min(100, max(30, cpu_cores * 
 # Keep WARP as a normal SOCKS route. The generated WireGuard profile and
 # wireproxy decide which address family is usable for each destination.
 WARP_PROXY_URL = "socks5://127.0.0.1:1080"
+# Declared here so static analysis sees them and imports that happen before
+# reload_config() cannot raise NameError; reload_config() refreshes the live
+# values from config_store and callers may still patch the attributes.
+WARP_EXCLUDE_DOMAINS: list = []
+PROXY_EXCLUDE_DOMAINS: list = []
 # Monotonic timestamp of the last real WARP connector use. Health probes do
 # not update it; EasyProxy uses it to recycle WireProxy only after true idle.
 WARP_LAST_ACTIVITY = 0.0
@@ -240,20 +243,6 @@ def resolve_proxy_alias(value: str | None) -> str | None:
         bind = wg_tunnels.get_bind("nordvpn" if name == "nordvpn" else "custom")
     return f"socks5h://{bind}" if bind else value
 
-
-def get_preferred_proxy(proxies: list | None) -> str | None:
-    """Return the first proxy from an ordered list. No alive filtering (use async version for that)."""
-    if not proxies:
-        return None
-    PROXY_SOURCE_LIST.set(proxies)
-    if getattr(proxies, "strict", False):
-        for proxy in proxies or []:
-            if proxy:
-                return proxy
-    result = proxies[0] if proxies else None
-    if result:
-        SELECTED_PROXY_CONTEXT.set(result)
-    return result
 
 
 async def find_first_alive_async(proxies: list, concurrency: int | None = None) -> str | None:
@@ -326,48 +315,6 @@ async def find_first_alive_async(proxies: list, concurrency: int | None = None) 
         
     return None
 
-
-async def filter_alive_async(proxies: list, concurrency: int | None = None) -> list:
-    """Test all proxies in parallel, return all alive. Respects DEAD_PROXIES."""
-    if not proxies:
-        return []
-    if getattr(proxies, "strict", False):
-        return list(proxies)
-    concurrency = concurrency or PROXY_TEST_CONCURRENCY
-    now = time.time()
-    with _proxy_lock:
-        candidates = [p for p in proxies if p not in DEAD_PROXIES or now >= DEAD_PROXIES.get(p, 0)]
-    if not candidates:
-        return []
-    sem = asyncio.Semaphore(concurrency)
-    loop = asyncio.get_event_loop()
-
-    async def _check(proxy: str):
-        async with sem:
-            try:
-                await loop.run_in_executor(_SOCKET_CHECK_EXECUTOR, _socket_check, proxy, 2)
-                return proxy
-            except (OSError, socket.timeout):
-                return None
-
-    tasks = [asyncio.create_task(_check(p)) for p in candidates if p]
-    results = await asyncio.gather(*tasks, return_exceptions=True)
-    return [r for r in results if isinstance(r, str)]
-
-
-def get_transport_route_proxy(url: str, transport_routes: list) -> str | None:
-    """Return only an explicit TRANSPORT_ROUTES proxy match, without global/WARP fallback."""
-    if not url or not transport_routes:
-        return None
-    normalized_url = url.lower()
-    for route in transport_routes:
-        url_pattern = route["url"].lower()
-        if url_pattern in normalized_url:
-            proxy_value = route.get("proxy")
-            if not proxy_value:
-                return None
-            return proxy_value
-    return None
 
 
 def _get_dynamic_warp_enabled() -> bool:
@@ -597,29 +544,6 @@ async def get_preferred_proxy_for_url(
     return None
 
 
-async def get_preferred_proxy_for_url_async(
-    url: str | None,
-    extractor_name: str = "",
-    fallback_proxies: list | None = None,
-    bypass_warp: bool | None = None,
-) -> str | None:
-    """Return the first alive proxy using parallel test across the ordered priority list."""
-    ordered = get_ordered_proxies_for_url(url, extractor_name, fallback_proxies, bypass_warp)
-    if not ordered:
-        return None
-    PROXY_SOURCE_LIST.set(ordered)
-    result = await find_first_alive_async(ordered)
-    if result:
-        SELECTED_PROXY_CONTEXT.set(result)
-        return result
-    if getattr(ordered, "strict", False):
-        return ordered[0]
-    effective_bypass_warp = BYPASS_WARP_CONTEXT.get() if bypass_warp is None else bypass_warp
-    if _get_dynamic_warp_enabled() and not effective_bypass_warp and not _is_warp_excluded(url or ""):
-        # Fail through WARP connector; never silently fall back to direct.
-        return WARP_PROXY_URL
-    return None
-
 
 DEAD_PROXIES = {}  # proxy_url -> expire_time
 _proxy_lock = __import__('threading').Lock()  # sync access to DEAD_PROXIES
@@ -763,28 +687,6 @@ def clear_proxy_dead(proxy_url: str) -> None:
 def clear_proxy_affinity():
     pass
 
-
-def _get_stream_key(url: str) -> str | None:
-    if not url:
-        return None
-    from urllib.parse import urlparse
-    parsed = urlparse(url)
-    path = parsed.path.rstrip("/")
-    # Use the directory part as stream key
-    if "/" in path:
-        return parsed.netloc + path.rsplit("/", 1)[0]
-    return parsed.netloc + path
-
-
-def _next_from_source(current_proxy: str | None) -> str | None:
-    """Find the next alive proxy from the same source list (extractor, proxy_file, etc.)."""
-    source_list = PROXY_SOURCE_LIST.get()
-    if not source_list:
-        return None
-    for p in source_list:
-        if p != current_proxy and is_proxy_alive(p):
-            return p
-    return None
 
 
 def get_proxy_for_url(
@@ -987,30 +889,6 @@ def get_solver_proxy_url(proxy_url: str | None) -> str | None:
 
     return proxy_url
 
-
-def build_proxy_with_auth(proxy_url: str | None) -> dict | None:
-    """Converte un proxy URL in dict con username/password separati.
-
-    Browser headless non supporta
-    --proxy-server con credenziali nell'URL. Funziona solo se username
-    e password sono campi separati.
-    """
-    if not proxy_url:
-        return None
-    clean = get_solver_proxy_url(proxy_url)
-    result = {"url": clean}
-    if "@" in clean:
-        try:
-            pp = urllib.parse.urlparse(clean)
-            if pp.username and pp.password:
-                result["username"] = pp.username
-                result["password"] = pp.password
-                result["url"] = f"{pp.scheme}://{pp.hostname}"
-                if pp.port:
-                    result["url"] += f":{pp.port}"
-        except Exception:
-            pass
-    return result
 
 
 def get_ssl_setting_for_url(url: str, transport_routes: list = None) -> bool:

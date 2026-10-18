@@ -57,8 +57,6 @@ EasyProxy plus solvers is fully supported on Android via Termux + Ubuntu proot.
 
 The setup supports proot-distro 5 and earlier releases, and installs Python dependencies in an isolated virtual environment at `/root/EasyProxy/.venv`.
 
-Android users can also install the APK build if they prefer a simpler app-style setup. The APK is convenient, but it is not as complete as the Python/Termux version, so Termux remains the recommended option for full functionality.
-
 For Termux, full functionality requires a 64-bit Android device. On 32-bit devices, some components and solvers may not work.
 
 The setup also installs `wireproxy` (arm64/armv7) and the pinned WARP registration

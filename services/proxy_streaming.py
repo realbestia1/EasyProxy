@@ -6,9 +6,8 @@ import urllib.parse
 from concurrent.futures import ThreadPoolExecutor
 import aiohttp
 from services.dual.video import byte_range, video_only
-import config_store
 import config as _config
-from config import PROXY_SOURCE_LIST, find_first_alive_async, is_proxy_alive
+from config import is_proxy_alive
 import services.proxy_shared as _shared
 import services.wg_tunnels as wg_tunnels
 from services.proxy_shared import (
@@ -1726,7 +1725,6 @@ class HLSProxyStreamingMixin:
                             pass
 
                     # --- DEFAULT: DASH Proxy (Rewriting) ---
-                    req_format = request.query.get("format")
                     rep_id = request.query.get("rep_id")
 
                     api_password = request.query.get("api_password")

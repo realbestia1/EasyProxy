@@ -43,42 +43,37 @@ Notes:
 - Stdlib/aiohttp for HTTP only. No new dependencies.
 - Optional, only if needed: `force_ipv4 = True` (IPv4-bound tokens / CDN behind CF, see `vavoo.py`), `REQUEST_TIMEOUT_TOTAL = 60+` (slow solvers; default 30 in `proxy_extractor.py`), `disable_ssl` / `captured_manifest(s)` in the return dict.
 
-## 2. `extractors/registry_imports.py` — import + `__all__`
+## 2. `extractors/registry_imports.py` — one table row
 
 ```python
-try:
-    from extractors.<name> import <Name>Extractor
-    logger.info("✅ <Name>Extractor module loaded.")
-except Exception as e:
-    logger.warning("⚠️ <Name>Extractor failed to load: %s", e)
-    <Name>Extractor = None
-# + add "<Name>Extractor" to __all__
+("extractors.<name>", ("<Name>Extractor",)),
 ```
+
+Add it to `_MODULES` (load order) — `__all__` is derived from the table. A module
+that fails to import degrades to `None` (the resolver then reports it as
+unavailable) instead of killing startup.
 
 Without this, `available_extractors` (admin warp_off/proxy_off/max_res toggles) won't see it. The admin toggles are then automatic via `extractor_name` — no further changes needed.
 
-## 3. `extractors/registry_resolver.py` — BOTH branches
-
-Forced host (`?host=<name>`) and auto-detect:
+## 3. `extractors/registry_resolver.py` — one `_Entry`
 
 ```python
-# host branch (section 1)
-elif host in {"<name>", "<alias1>"}:
-    key = _cache_key("<name>", bypass_warp)
-    if <Name>Extractor is None:
-        raise RuntimeError("<Name>Extractor module not available")
-    proxy = get_proxy_for_url(url, bypass_warp=bypass_warp, extractor_name="<name>")
-    proxy_list = _build_proxy_list(proxy, "<name>")
-    if key not in self.extractors:
-        self.extractors[key] = <Name>Extractor(request_headers, proxies=proxy_list, bypass_warp=bypass_warp)
-    return self.extractors[key]
-
-# auto-detect branch (bottom of the function, before the GenericHLS fallback)
-elif "<domain>" in url.lower() or url.lower().startswith("<name>://"):
-    ...same as the host branch...
+_Entry("<name>", <Name>Extractor, hosts=("<name>", "<alias>"),
+       match=_sub("<domain>"), url_proxy="<domain>"),
 ```
 
-FORBIDDEN: `get_proxy_for_url("<name>")` with a literal — it breaks `TRANSPORT_ROUTES` (substring match on the real URL), `warp/proxy_exclude_domains` (hostname parse → `None`) and `extractor_proxies`. Always use `url` + `extractor_name="<name>"`. Always pass `bypass_warp=` to the constructor.
+- `hosts` → `?host=` aliases (lower-case, exact match).
+- `match` → URL predicate for auto-detection (`_sub`, `_rex`, `_any_of`,
+  `_all_of`, `_host_endswith`, `_path_startswith`, or a lambda).
+- `url_proxy` → proxy lookup target when auto-detected: `"url"`, a literal host,
+  or a callable `(url, bypass_warp)`; add `url_proxy_final=True` when the
+  callable already returns the proxy (`_resolve_sportsonline_proxy`).
+- `host_proxy` → override for the `?host=` lookup target (default: the alias).
+- `key_name` → cache key when it differs from the alias (canonical admin name).
+- `proxy_extractor_name="<name>"` → forwarded to `get_proxy_for_url`.
+- `refresh_headers=True` → re-bind request headers on every hit.
+
+FORBIDDEN: `get_proxy_for_url("<name>")` with a literal — it breaks `TRANSPORT_ROUTES` (substring match on the real URL), `warp/proxy_exclude_domains` (hostname parse → `None`) and `extractor_proxies`. Always use `url` + `extractor_name="<name>"`. Extractor `_Entry` rows are constructed with `bypass_warp=` passed through by the resolver.
 
 ## 4. `services/proxy_extractor.py` — help JSON
 

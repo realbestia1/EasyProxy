@@ -1,6 +1,5 @@
 import logging
 import re
-import asyncio
 import urllib.parse
 import aiohttp
 from aiohttp import ClientSession, ClientTimeout, TCPConnector
@@ -15,9 +14,6 @@ class FreeshotExtractor(BaseExtractor):
     Extractor per Freeshot (wideiptv.top).
     Risolve l'URL iframe e restituisce l'm3u8 finale.
     """
-    MAX_RETRIES = 3
-    RETRY_DELAYS = [1, 2, 4]  # Exponential backoff in seconds
-    
     def __init__(self, request_headers=None, proxies=None, bypass_warp: bool = False):
         super().__init__(request_headers or {}, proxies, extractor_name="freeshot", bypass_warp=bypass_warp)
         self.request_headers = request_headers or {}
@@ -193,5 +189,3 @@ class FreeshotExtractor(BaseExtractor):
             "bypass_warp": self.bypass_warp_active,
         }
 
-    async def close(self):
-        await super().close()

@@ -167,9 +167,16 @@ async def eval_solver(session, url: str, headers: dict, patterns: list[str], met
                 logger.warning("Video not available at %s: detected '%s'", url, indicator)
                 raise UnpackingError(f"Video not found or unavailable at {url}")
         
-        # BS4 parsing is CPU-bound, run in executor
-        loop = asyncio.get_event_loop()
-        script_all = await loop.run_in_executor(None, lambda: _parse_scripts(text))
+        # BS4 parsing is CPU-bound: offload it when a loop is running. Called
+        # from a sync context (or a non-asyncio loop) it just parses inline.
+        try:
+            loop = asyncio.get_running_loop()
+        except RuntimeError:
+            loop = None
+        if loop is not None:
+            script_all = await loop.run_in_executor(None, lambda: _parse_scripts(text))
+        else:
+            script_all = _parse_scripts(text)
 
         packed_scripts = []
         for i in script_all:
@@ -201,7 +208,7 @@ async def eval_solver(session, url: str, headers: dict, patterns: list[str], met
         
         # If we got here, we found packed JS but couldn't extract the URL
         logger.warning("Found packed JavaScript but no patterns matched at %s. Patterns tried: %s", url, patterns)
-        raise UnpackingError(f"Found packed JavaScript but could not extract video URL. The extraction patterns may need updating.")
+        raise UnpackingError("Found packed JavaScript but could not extract video URL. The extraction patterns may need updating.")
         
     except ALL_PROXY_ERRORS + (UnpackingError, asyncio.TimeoutError):
         raise

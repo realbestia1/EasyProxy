@@ -1,14 +1,12 @@
 aiohttp
 aiohttp-socks
 python-dotenv
-zstandard
 beautifulsoup4
 lxml
 python-socks
 pycryptodome
 cryptography
 PyNaCl
-pydash2hls
 Pillow
 curl_cffi
 brotli

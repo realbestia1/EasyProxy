@@ -38,9 +38,12 @@ async def _pipe(reader: asyncio.StreamReader, writer: asyncio.StreamWriter):
     except Exception:
         pass
     finally:
+        # Half-close, do not close: closing a socket while the peer still has
+        # unread data makes the stack send RST, which discards what we already
+        # forwarded. handle_client closes both writers once both pipes are done.
         try:
-            writer.close()
-            await writer.wait_closed()
+            if writer.can_write_eof():
+                writer.write_eof()
         except Exception:
             pass
 
@@ -122,15 +125,16 @@ def _create_client_handler(upstream_socks_url: str):
             except Exception:
                 pass
         finally:
-            if up_writer is not None:
+            # Both directions are drained by now (or the bridge is aborting), so
+            # a full close no longer truncates peer data.
+            for stream in (up_writer, client_writer):
+                if stream is None:
+                    continue
                 try:
-                    up_writer.close()
+                    stream.close()
+                    await stream.wait_closed()
                 except Exception:
                     pass
-            try:
-                client_writer.close()
-            except Exception:
-                pass
 
     return handle_client
 

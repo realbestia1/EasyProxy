@@ -1,5 +1,4 @@
 import logging
-import os
 import random
 import re
 import string
@@ -9,8 +8,7 @@ from urllib.parse import urljoin, urlparse
 from curl_cffi.requests import AsyncSession
 from config import get_preferred_proxy_for_url
 import config as _cfg
-from extractors.base import BaseExtractor, ExtractorError
-from utils.cookie_cache import CookieCache
+from extractors.base import BaseExtractor, ExtractorError, normalize_socks_proxy_url
 
 logger = logging.getLogger(__name__)
 
@@ -33,19 +31,13 @@ class DoodStreamExtractor(BaseExtractor):
         self.proxies = proxies or []
         self.last_used_proxy = None
         self.mediaflow_endpoint = "proxy_stream_endpoint"
-        self.cache = CookieCache("dood")
+
     async def _get_proxy(self, url: str, bypass_warp: bool = None) -> str | None:
         return await get_preferred_proxy_for_url(url, "doodstream", self.proxies, bypass_warp)
 
     @staticmethod
     def _normalize_proxy_url(proxy_url: str) -> str:
-        proxy_url = _cfg.resolve_proxy_alias(str(proxy_url).strip()) or str(proxy_url).strip()
-        # Keep local-DNS SOCKS5 for WARP; remote DNS via wireproxy can stall.
-        if proxy_url.startswith("socks5://"):
-            return proxy_url
-        if "://" not in proxy_url:
-            return f"socks5h://{proxy_url}"
-        return proxy_url
+        return normalize_socks_proxy_url(proxy_url)
 
     def _extract_pass_path(self, html: str) -> str | None:
         patterns = [
@@ -85,12 +77,6 @@ class DoodStreamExtractor(BaseExtractor):
         if re.search(r"expiry=.*Date\.now\(\)", html, re.I | re.S):
             return str(int(time.time() * 1000))
         return str(int(time.time()))
-
-    def _is_valid_dood_page(self, html: str) -> bool:
-        if not html: return False
-        # Extended markers for newer domains
-        markers = ["pass_md5", "makePlay(", "token=", "get_player(", "vtt", "subtitle"]
-        return any(m in html for m in markers)
 
     def _log_parse_debug(self, html: str) -> None:
         markers = {
@@ -234,5 +220,3 @@ class DoodStreamExtractor(BaseExtractor):
             "bypass_warp": self.bypass_warp_active,
         }
 
-    async def close(self):
-        pass

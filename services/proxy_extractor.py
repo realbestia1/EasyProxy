@@ -18,7 +18,6 @@ import config_store
 import asyncio
 import base64
 import gzip
-import re
 import urllib.parse
 import config as _config
 from yarl import URL

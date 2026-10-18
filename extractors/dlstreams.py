@@ -1,5 +1,4 @@
 import logging
-import socket
 import re
 import asyncio
 import base64
@@ -345,10 +344,6 @@ class DLStreamsExtractor(BaseExtractor):
         return players
 
     @staticmethod
-    def _origin_of(url: str) -> str:
-        parsed = urlparse(url)
-        return f"{parsed.scheme}://{parsed.netloc}"
-
     def _route_diagnostic(self, url: str) -> str:
         """Describe routing state without exposing proxy credentials."""
         try:
@@ -517,7 +512,7 @@ class DLStreamsExtractor(BaseExtractor):
 
     async def _segment_carries_video(
         self, session, segment_url: str, headers: dict, timeout: float,
-        deep: bool = True, encrypted: bool = False,
+        encrypted: bool = False,
     ) -> bool:
         """Bounded probe; stop downloading native TS as soon as video is found."""
         max_bytes = 16 * 1024 * 1024
@@ -529,7 +524,7 @@ class DLStreamsExtractor(BaseExtractor):
             head = await resp.content.read(4096)
             if not head:
                 return False
-            if not deep or encrypted:
+            if encrypted:
                 return True
             is_image = self._segment_looks_like_image(
                 segment_url, (resp.headers.get("Content-Type") or "").lower(), head
@@ -589,7 +584,7 @@ class DLStreamsExtractor(BaseExtractor):
             logger.debug("DLStreams: premium token refresh failed for %s: %s", stream_url, exc)
             return stream_url
 
-    async def _is_stream_alive(self, session, stream_url: str, headers: dict, budget: float | None = None, deep: bool = True) -> bool:
+    async def _is_stream_alive(self, session, stream_url: str, headers: dict, budget: float | None = None) -> bool:
         """Validate the full chain: master -> variant -> first segment (+ AES key).
 
         Some CDNs serve the manifest (200) while segments 403 (IP-bound
@@ -597,13 +592,12 @@ class DLStreamsExtractor(BaseExtractor):
         dead player and hide the working ones, so follow the chain with
         bounded segment probes.
 
-        With ``deep=True`` an image-wrapped segment (PNG/WebP, e.g. Player 1) is
+        With an image-wrapped segment (PNG/WebP, e.g. Player 1) the body is
         downloaded once and unwrapped exactly like the proxy does when serving it:
         if no MPEG-TS can be recovered (static banner/placeholder image, which the
         proxy would answer with HTTP 204) the player is reported dead so the caller
         moves on to the next player. Native TS must carry video PES, rather
         than only announcing a video PID in its program map.
-        ``deep=False`` keeps the HTTP-only probe for callers that request it.
         """
         deadline = time.monotonic() + (budget if budget is not None else self.EXTRACT_BUDGET_SECONDS)
 
@@ -640,7 +634,7 @@ class DLStreamsExtractor(BaseExtractor):
                 current_url = variant
                 if "#EXTM3U" not in current_body[:8000]:
                     return False
-            # Variant -> segment. Do not use Range for a deep TS probe: an
+            # Variant -> segment. Do not use Range for a TS video probe: an
             # audio-only prefix cannot establish whether video exists later.
             segment = self._first_media_uri(current_body, current_url, want_playlist=False)
             if not segment:
@@ -648,10 +642,10 @@ class DLStreamsExtractor(BaseExtractor):
                 return False
             encrypted = bool(re.search(r'#EXT-X-KEY:[^\n]*METHOD=(?!NONE\b)', current_body))
             probe_headers = {k: v for k, v in headers.items() if k.lower() != "range"}
-            if not deep or encrypted:
+            if encrypted:
                 probe_headers["Range"] = "bytes=0-4095"
             if not await self._segment_carries_video(
-                session, segment, probe_headers, _timeout(12), deep=deep, encrypted=encrypted
+                session, segment, probe_headers, _timeout(12), encrypted=encrypted
             ):
                 return False
             # AES key, if the variant uses one
@@ -1043,7 +1037,7 @@ class DLStreamsExtractor(BaseExtractor):
 
     async def _extract_impl(self, url: str, channel_id: str, **kwargs) -> Dict[str, Any]:
         try:
-            session = await self._get_session(url)
+            await self._get_session(url)
 
             # Direct browser-less HTTP extraction (only active path)
             direct_error = None

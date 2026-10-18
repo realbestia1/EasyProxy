@@ -239,5 +239,3 @@ class CinejoyExtractor(BaseExtractor):
             "bypass_warp": bypass_warp,
         }
 
-    async def close(self):
-        return await super().close()

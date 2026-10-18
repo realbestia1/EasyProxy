@@ -16,7 +16,6 @@ set PYTHONUNBUFFERED=1
 :: --- 2. EasyProxy Main Dependencies ---
 echo Checking EasyProxy dependencies...
 python -m pip install -r requirements.txt --quiet
-python -m pip install pycryptodome --quiet
 
 :: --- 3. Start EasyProxy ---
 echo.

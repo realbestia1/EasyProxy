@@ -21,6 +21,20 @@ class ExtractorError(Exception):
     pass
 
 
+def normalize_socks_proxy_url(proxy_url: str) -> str:
+    """Resolve a proxy alias, keeping the scheme the routing policy selected.
+
+    socks5:// stays local-DNS (remote DNS through wireproxy can stall); a bare
+    host:port becomes socks5h:// so the SOCKS endpoint resolves the hostname.
+    """
+    proxy_url = _cfg.resolve_proxy_alias(str(proxy_url).strip()) or str(proxy_url).strip()
+    if proxy_url.startswith("socks5://"):
+        return proxy_url
+    if "://" not in proxy_url:
+        return f"socks5h://{proxy_url}"
+    return proxy_url
+
+
 class MockResponse:
     """Small response adapter shared by text and binary extractor results."""
 
@@ -187,11 +201,9 @@ class BaseExtractor:
                     return MockResponse(content, response.status, response.headers, str(response.url), response.cookies)
             except ALL_PROXY_ERRORS + (asyncio.TimeoutError, ClientConnectionError, aiohttp.ClientResponseError) as e:
                 is_proxy_err = isinstance(e, ALL_PROXY_ERRORS)
-                is_timeout = isinstance(e, asyncio.TimeoutError)
                 
                 # Check for 403 or network errors to trigger fallback. Keep
                 # intermediate failures quiet: a later retry may succeed.
-                status = getattr(e, 'status', None)
                 if attempt >= retries - 1:
                     logger.error(
                         "[%s] Request failed after %s attempts for %s: %s",

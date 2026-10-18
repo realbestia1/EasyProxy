@@ -13,7 +13,6 @@ import base64
 import hashlib
 import socket
 import config as _config
-import config_store
 import services.wg_tunnels as wg_tunnels
 from services.session_lifetime import retire_session
 from services.socks_bridge import close_socks_bridges
@@ -1293,7 +1292,6 @@ class HLSProxyCoreMixin:
             bypass_warp=bypass_warp,
         )
         if result:
-            key = getattr(result, '_cache_key', None) or id(result)
             for ek, ev in self.extractors.items():
                 if ev is result:
                     self._extractor_atimes[ek] = time.time()

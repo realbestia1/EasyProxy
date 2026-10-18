@@ -17,6 +17,7 @@ _EMBED_CODE_RE = re.compile(r"/e/([A-Za-z0-9_-]+)")
 _MEDIA_PATTERNS = [
     r'file:"(.*?)"',
     r'sources:\s*\[\s*\{\s*file:\s*"([^"]+)"',
+    r'src\("(.*?)"\)',
     r'https?://[^"\'\s]+\.m3u8[^"\'\s]*',
     r'https?://[^"\'\s]+\.mp4[^"\'\s]*',
 ]
@@ -25,12 +26,17 @@ _MEDIA_PATTERNS = [
 class DroploadExtractor(BaseExtractor):
     """Dropload URL extractor.
 
-    The embed page sits behind a Cloudflare Turnstile gate. FlareSolverr
+    The embed page can sit behind a Cloudflare Turnstile gate. FlareSolverr
     clicks the widget; the page callback then submits ``op=embed`` and the
     browser player immediately consumes the stream token in the returned
     page.  Re-submitting the form over HTTP with the solver cookies (which
     carry the cleared ``vcap`` captcha marker) returns a fresh player page
     whose token has not been consumed yet.
+
+    With a trusted egress IP the media can already be in the first response, so
+    that page is checked before paying for a solver round-trip.  Real gate pages
+    carry no stream at all: there FlareSolverr stays mandatory, and a missing
+    solver is reported immediately instead of guessing.
     """
 
     TURNSTILE_TABS = 1
@@ -45,6 +51,15 @@ class DroploadExtractor(BaseExtractor):
     @staticmethod
     def _extract_m3u8(text: str) -> str | None:
         match = re.search(r'https?://[^"\'\s]+\.m3u8[^"\'\s]*', text)
+        return match.group(0) if match else None
+
+    @classmethod
+    def _media_from_html(cls, text: str) -> str | None:
+        """Media URL already present in a page (m3u8 first, then mp4)."""
+        url = cls._extract_m3u8(text)
+        if url:
+            return url
+        match = re.search(r'https?://[^"\'\s]+\.mp4[^"\'\s]*', text)
         return match.group(0) if match else None
 
     async def _solve_turnstile(self, url: str):
@@ -116,37 +131,41 @@ class DroploadExtractor(BaseExtractor):
         resp = await self._make_request(url, headers=headers)
         html = resp.text or ""
         extra_headers = {}
+        gate_stuck = False
 
-        if _TURNSTILE_GATE_RE.search(html):
+        # Some pages the gate still references already carry the stream (trusted
+        # IP, cached variant): take it and skip the solver round-trip. A real
+        # gate page has no media here, so the solver stays mandatory below.
+        final_url = self._media_from_html(html)
+
+        if not final_url and _TURNSTILE_GATE_RE.search(html):
             logger.info("Dropload: Turnstile gate detected, trying FlareSolverr")
             solved_html, cookie_header, user_agent = await self._solve_turnstile(url)
-            if _TURNSTILE_GATE_RE.search(solved_html):
-                raise ExtractorError(
-                    "Dropload extraction failed: Cloudflare Turnstile challenge "
-                    "not solved by FlareSolverr"
-                )
             if user_agent:
                 extra_headers["User-Agent"] = user_agent
             if cookie_header:
                 extra_headers["Cookie"] = cookie_header
 
-            code_match = _EMBED_CODE_RE.search(parsed.path or "")
             html = solved_html
+            # A solved page may still reference the widget script while already
+            # handing over the player, so the marker alone is not a failure.
+            gate_stuck = bool(_TURNSTILE_GATE_RE.search(solved_html))
+
+            code_match = _EMBED_CODE_RE.search(parsed.path or "")
             if code_match:
                 try:
                     fresh_html = await self._fetch_player_page(
                         url, code_match.group(1), cookie_header, user_agent
                     )
                     if "m3u8" in fresh_html or "mp4" in fresh_html:
+                        # Fresh token: the browser already consumed the one in
+                        # the solver page.
                         html = fresh_html
+                        gate_stuck = False
                 except ExtractorError as exc:
                     logger.warning("Dropload: fresh player page failed, using solver page: %s", exc)
 
-        final_url = self._extract_m3u8(html)
-        if not final_url:
-            mp4_match = re.search(r'https?://[^"\'\s]+\.mp4[^"\'\s]*', html)
-            if mp4_match:
-                final_url = mp4_match.group(0)
+            final_url = self._media_from_html(html)
 
         if not final_url:
             try:
@@ -157,6 +176,11 @@ class DroploadExtractor(BaseExtractor):
                 final_url = None
 
         if not final_url:
+            if gate_stuck:
+                raise ExtractorError(
+                    "Dropload extraction failed: Cloudflare Turnstile challenge "
+                    "not solved by FlareSolverr"
+                )
             raise ExtractorError("Dropload extraction failed: no media URL found")
 
         req_headers = {
@@ -176,5 +200,3 @@ class DroploadExtractor(BaseExtractor):
             "bypass_warp": self.bypass_warp_active,
         }
 
-    async def close(self):
-        await super().close()

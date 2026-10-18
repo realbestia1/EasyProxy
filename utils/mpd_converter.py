@@ -607,7 +607,7 @@ class MPDToHLSConverter:
                     if is_null_key:
                         # Chiave nulla: usa comunque l'endpoint decrypt per il remux a TS
                         # ma aggiungi flag per saltare la decrittazione vera e propria
-                        logger.debug(f"🔓 Null key detected - using remux endpoint without decryption")
+                        logger.debug("🔓 Null key detected - using remux endpoint without decryption")
                         server_side_decryption = True
                         drm_token = next(
                             (
@@ -648,7 +648,7 @@ class MPDToHLSConverter:
                  ext_param = "ts"
             
             if ext_param == "ts" and not server_side_decryption:
-                 logger.debug(f"🔄 Concatenation requested (ext=ts)")
+                 logger.debug("🔄 Concatenation requested (ext=ts)")
                  server_side_decryption = True
                  # Use dummy key/id to satisfy the endpoint requirement, and set skip_decrypt=1
                  decryption_params = "&key=00000000000000000000000000000000&key_id=00000000000000000000000000000000&skip_decrypt=1"
@@ -837,7 +837,6 @@ class MPDToHLSConverter:
                         if not segments_to_use:
                             segments_to_use = [all_segments[-1]]
 
-                        total_duration = sum(seg['duration'] for seg in segments_to_use)
                         max_duration = max(seg['duration'] for seg in segments_to_use)
                         if segments_to_use:
                             if has_explicit_start_number:

@@ -1,6 +1,29 @@
-import logging
+"""Extractor resolution: ``?host=`` aliases plus URL auto-detection.
+
+One table drives both lookups. Adding an extractor means adding one ``_Entry``
+line here plus the module import in ``registry_imports`` (see extractors/AGENTS.md).
+
+Fields:
+  name                 registry attribute / canonical extractor name
+  cls                  extractor class (None when the module failed to import)
+  hosts                ``?host=`` aliases (lower-case)
+  match                URL predicate for auto-detection
+  url_proxy            proxy lookup target when auto-detected: "url", a literal
+                       host, or a callable(url, bypass_warp). With
+                       url_proxy_final the callable returns the proxy itself.
+  host_proxy           override for the ``?host=`` lookup target (default: the
+                       alias itself); "url" resolves against the real URL
+  key_name             cache key when it differs from the alias (canonical name)
+  host_build_name      extractor name passed to ``_build_proxy_list`` for host
+                       lookups (default: the alias)
+  proxy_extractor_name ``extractor_name`` forwarded to ``get_proxy_for_url``
+  refresh_headers      re-bind request headers on every hit (per-call h_* args)
+  url_proxy_final      url_proxy already yields the proxy (no further lookup)
+"""
+
 import re
 import urllib.parse
+from collections import namedtuple
 
 import config as _config
 from config import (
@@ -14,11 +37,15 @@ from config import (
 from extractors.generic import GenericHLSExtractor, ExtractorError
 from extractors.registry_imports import *
 
-logger = logging.getLogger("extractors.registry")
-
 _SPORTSONLINE_PATH_PATTERNS = (
     re.compile(r"/channels/[a-z0-9_-]+/[a-z0-9_-]+\.php(?:$|[?#])", re.IGNORECASE),
     re.compile(r"/hd/hd\d+\.php(?:$|[?#])", re.IGNORECASE),
+)
+
+_FCTV33_MARKER = re.compile(r"(?:#|%23)fctv33(?![a-z0-9])", re.IGNORECASE)
+_MEDIA_EXTENSIONS = (
+    ".mp4", ".m3u8", ".ts", ".mkv", ".avi", ".mov", ".flv", ".wmv",
+    ".mp3", ".aac", ".m4a", ".mpd",
 )
 
 
@@ -84,7 +111,6 @@ def _build_proxy_list(primary_proxy: str | None = None, extractor_name: str | No
     return proxies
 
 
-
 def _cache_key(name: str, bypass_warp: bool = False) -> str:
     """Extractor cache key reflecting routing state (warp/proxy bypass)."""
     base = f"{name}_direct" if bypass_warp else name
@@ -93,307 +119,198 @@ def _cache_key(name: str, bypass_warp: bool = False) -> str:
     return base
 
 
+# --- match helpers -----------------------------------------------------------
+
+def _sub(*needles, lower=False):
+    if lower:
+        lowered = tuple(needle.lower() for needle in needles)
+        return lambda url, parsed: any(needle in url.lower() for needle in lowered)
+    return lambda url, parsed: any(needle in url for needle in needles)
+
+
+def _rex(pattern, flags=0, unquote=False):
+    rx = re.compile(pattern, flags)
+    if unquote:
+        return lambda url, parsed: rx.search(urllib.parse.unquote(url)) is not None
+    return lambda url, parsed: rx.search(url) is not None
+
+
+def _host_endswith(suffix):
+    return lambda url, parsed: (parsed.hostname or "").lower().endswith(suffix)
+
+
+def _path_startswith(prefix):
+    return lambda url, parsed: parsed.path.startswith(prefix)
+
+
+def _any_of(*preds):
+    return lambda url, parsed: any(pred(url, parsed) for pred in preds)
+
+
+def _all_of(*preds):
+    return lambda url, parsed: all(pred(url, parsed) for pred in preds)
+
+
+def _no_media_extension(url, parsed):
+    return not any(url.endswith(ext) or f"{ext}?" in url for ext in _MEDIA_EXTENSIONS)
+
+
+# --- extractor table (order = auto-detection priority) -----------------------
+
+_Entry = namedtuple(
+    "_Entry",
+    "name cls hosts match url_proxy host_proxy key_name host_build_name "
+    "proxy_extractor_name refresh_headers url_proxy_final",
+    defaults=((), None, "url", None, None, None, "", False, False),
+)
+
+_ENTRIES = (
+    _Entry("ads", ADSExtractor, hosts=("ads",), host_proxy="url"),
+    _Entry("mediaset", MediasetExtractor, hosts=("mediaset", "mediasetinfinity"),
+           match=_sub("mediasetinfinity.mediaset.it/"), key_name="mediaset"),
+    _Entry("wittytv", WittyTVExtractor, hosts=("witty", "wittytv"),
+           match=_sub("wittytv.it/"), key_name="wittytv"),
+    _Entry("raiplay", RaiPlayExtractor, hosts=("rai", "raiplay"),
+           match=_any_of(_sub("mediapolisvod.rai.it/relinker/"), _host_endswith("raiplay.it")),
+           key_name="raiplay"),
+    _Entry("vavoo", VavooExtractor, hosts=("vavoo",), match=_sub("vavoo.to"),
+           url_proxy="vavoo.to"),
+    _Entry("vixsrc", VixSrcExtractor, hosts=("vixsrc",),
+           match=_all_of(_sub("vixsrc.to/", "unitv.mom/", lower=True),
+                         _sub("/movie/", "/tv/", "/iframe/", "/embed/", "/playlist/")),
+           url_proxy=lambda url, bypass_warp: urllib.parse.urlparse(url).netloc or "vixsrc.to"),
+    _Entry("vixcloud", VixSrcExtractor, hosts=("vixcloud",),
+           match=_all_of(_sub("vixcloud.co/", "unitv.mom/", lower=True),
+                         _sub("/embed/", "/playlist/", lower=True)),
+           url_proxy=lambda url, bypass_warp: urllib.parse.urlparse(url).netloc or "vixcloud.co"),
+    _Entry("sportsonline", SportsonlineExtractor,
+           hosts=("sportsonline",),
+           match=lambda url, parsed: _is_sportsonline_candidate(url),
+           key_name="sportsonline",
+           url_proxy=lambda url, bypass_warp: _resolve_sportsonline_proxy(url, bypass_warp),
+           url_proxy_final=True),
+    _Entry("streamhg", StreamHGExtractor, hosts=("streamhg",),
+           match=_all_of(_rex(r"/e/[^/?#]+", re.IGNORECASE),
+                         _sub("dhcplay.com/", "vibuxer.com/", "streamhg.com/",
+                              "masukestin.com/", lower=True)),
+           url_proxy="streamhg"),
+    _Entry("mixdrop", MixdropExtractor, hosts=("mixdrop", "m1xdrop"),
+           match=_sub("mixdrop", "m1xdrop"), url_proxy="mixdrop"),
+    _Entry("voe", VoeExtractor, hosts=("voe",),
+           match=_sub("voe.sx", "voe.to", "voe.st", "voe.eu", "voe.la", "voe-network.net"),
+           url_proxy="voe.sx"),
+    _Entry("freeshot", FreeshotExtractor, hosts=("freeshot",),
+           match=_sub("popcdn.day", "freeshot.live"),
+           url_proxy=lambda url, bypass_warp: "popcdn.day" if "popcdn.day" in url else "freeshot.live"),
+    _Entry("streamtape", StreamtapeExtractor, hosts=("streamtape",),
+           match=_sub("streamtape.com", "streamtape.to", "streamtape.net"),
+           url_proxy="streamtape"),
+    _Entry("orion", OrionExtractor, hosts=("orion",), match=_sub("orionoid.com"),
+           url_proxy="orionoid.com"),
+    _Entry("doodstream", DoodStreamExtractor, hosts=("doodstream", "dood", "d000d"),
+           match=_sub("doodstream", "d000d.com", "dood.wf", "dood.cx", "dood.la",
+                      "dood.so", "dood.pm"),
+           host_proxy="url", key_name="doodstream"),
+    _Entry("fastream", FastreamExtractor, hosts=("fastream",), match=_sub("fastream"),
+           url_proxy="fastream"),
+    _Entry("filelions", FileLionsExtractor, hosts=("filelions",), match=_sub("filelions"),
+           url_proxy="filelions"),
+    _Entry("filemoon", FileMoonExtractor, hosts=("filemoon",), match=_sub("filemoon"),
+           url_proxy="filemoon"),
+    _Entry("dlstreams", DLStreamsExtractor, hosts=("dlhd", "dlstreams"),
+           match=_rex(r"(/watch\.php\?.*id=\d+|/(?:stream|cast|watch|plus|casting|player|hub)/stream-[\w-]+\.php)",
+                      unquote=True),
+           key_name="dlstreams"),
+    _Entry("lulustream", LuluStreamExtractor, hosts=("lulustream",), match=_sub("lulustream"),
+           url_proxy="lulustream"),
+    _Entry("okru", OkruExtractor, hosts=("okru", "ok.ru"),
+           match=_sub("ok.ru", "odnoklassniki"), url_proxy="ok.ru", key_name="okru"),
+    _Entry("streamwish", StreamWishExtractor, hosts=("streamwish",),
+           match=_sub("streamwish", "swish", "wishfast", "embedwish", "wishembed"),
+           url_proxy="streamwish"),
+    _Entry("supervideo", SupervideoExtractor, hosts=("supervideo",), match=_sub("supervideo"),
+           url_proxy="supervideo"),
+    _Entry("vidxgo", VidXgoExtractor, hosts=("vidxgo",), match=_sub("vidxgo", lower=True),
+           url_proxy="vidxgo", key_name="vidxgo", refresh_headers=True),
+    _Entry("dropload", DroploadExtractor, hosts=("dropload",),
+           match=_any_of(_sub("dropload"), _sub("dr0pstream", lower=True)),
+           url_proxy="dropload"),
+    _Entry("uqload", UqloadExtractor, hosts=("uqload",),
+           match=_all_of(_sub("uqload"), _no_media_extension), url_proxy="uqload"),
+    _Entry("vidmoly", VidmolyExtractor, hosts=("vidmoly",), match=_sub("vidmoly"),
+           url_proxy="vidmoly"),
+    _Entry("vidoza", VidozaExtractor, hosts=("vidoza", "videzz"),
+           match=_sub("vidoza", "videzz"), url_proxy="vidoza", key_name="vidoza"),
+    _Entry("turbovidplay", TurboVidPlayExtractor,
+           hosts=("turbovidplay", "turboviplay", "emturbovid"),
+           match=_sub("turboviplay", "emturbovid", "tuborstb", "javggvideo", "stbturbo",
+                      "turbovidhls"),
+           url_proxy="turbovidplay", key_name="turbovidplay"),
+    _Entry("f16px", F16PxExtractor, hosts=("f16px", "byse"),
+           match=_all_of(_sub("/e/"), _sub("f16px", "embedme", "embedsb", "playersb")),
+           url_proxy="f16px", host_proxy="f16px", key_name="f16px", host_build_name="f16px"),
+    _Entry("guardabest", GuardabestExtractor, hosts=("guardabest", "guardabestvid"),
+           match=_sub("guardabestvid.cam", lower=True),
+           url_proxy="guardabestvid", host_proxy="guardabestvid",
+           key_name="guardabest", host_build_name="guardabest"),
+    _Entry("sports99", Sports99Extractor, hosts=("sports99", "cdnlivetv"),
+           match=_sub("cdnlivetv.tv", "cdnlivetv.ru"),
+           url_proxy="cdnlivetv.tv", key_name="sports99"),
+    _Entry("embedst", EmbedStExtractor,
+           hosts=("embedst", "embedsports", "embed.st", "embedsports.top", "streamed",
+                  "streamed.pk"),
+           match=_any_of(_sub("embed.st/embed/", lower=True),
+                         _sub("embedsports.top/embed/", lower=True),
+                         _sub("streamed.pk/watch/", lower=True)),
+           url_proxy="embed.st", key_name="embedst"),
+    _Entry("vidsonic", VidSonicExtractor, hosts=("vidsonic",),
+           match=_all_of(_sub("vidsonic.net/", "vixeo.io/", lower=True),
+                         _rex(r"/e/[A-Za-z0-9]+", re.IGNORECASE)),
+           url_proxy="vidsonic"),
+    _Entry("vidlink", VidLinkExtractor, hosts=("vidlink",),
+           match=_rex(r"vidlink\.pro/(?:movie/|tv/)", re.IGNORECASE),
+           url_proxy="vidlink.pro"),
+    _Entry("vidfast", VidFastExtractor, hosts=("vidfast", "vidfast.vc"),
+           match=_rex(r"(?:www\.)?vidfast\.vc/(?:movie/|tv/)", re.IGNORECASE),
+           url_proxy="vidfast.vc", key_name="vidfast"),
+    _Entry("cinejoy", CinejoyExtractor, hosts=("cinejoy",),
+           match=_rex(r"(?:www\.)?cinejoy\.[a-z]{2,}/", re.IGNORECASE),
+           url_proxy="url", key_name="cinejoy"),
+    _Entry("fctv33", Fctv33Extractor, hosts=("fctv33", "fctv", "fctv33hd"),
+           match=_any_of(_sub("fctv33", lower=True),
+                         lambda url, parsed: url.lower().startswith("fctv33://"),
+                         _sub("tcdru136ovur.ru", "tcpwe138stya.ru",
+                              "mpgreatestclgczbmiddle", lower=True)),
+           url_proxy="url", host_proxy="url", key_name="fctv33",
+           host_build_name="fctv33", proxy_extractor_name="fctv33"),
+    _Entry("livetv", LiveTVExtractor, hosts=("livetv",), match=_sub("livetv", lower=True),
+           url_proxy="livetv.sx"),
+)
+
+_BY_NAME = {entry.name: entry for entry in _ENTRIES}
+_HOST_INDEX = {alias: entry for entry in _ENTRIES for alias in entry.hosts}
+
+
+def _entry_for_host(host: str):
+    entry = _HOST_INDEX.get(host)
+    if entry is not None:
+        return entry
+    if _is_sportsonline_candidate(host):
+        return _BY_NAME["sportsonline"]
+    if host.startswith("cinejoy."):
+        return _BY_NAME["cinejoy"]
+    return None
+
+
 async def resolve_extractor(self, url: str, request_headers: dict, host: str = None, bypass_warp: bool = False):
     """Ottiene l'estrattore appropriato per l'URL"""
     try:
-        # 1. Selezione Manuale tramite parametro 'host'
+        # 1. Selezione manuale tramite parametro 'host'
         if host:
             host = host.lower()
-            # ✅ FIX: Usa una chiave di cache che include lo stato del WARP per evitare contaminazioni
-            key = _cache_key(host, bypass_warp)
-
-            # ✅ FIX: Calcola il proxy corretto in base a bypass_warp invece di usare GLOBAL_PROXIES indiscriminatamente
-            proxy_lookup_target = url if host in ["doodstream", "dood", "d000d"] else host
-            proxy = get_proxy_for_url(
-        proxy_lookup_target,
-        bypass_warp=bypass_warp,
-    )
-            proxy_list = _build_proxy_list(proxy, host)
-
-            if host == "vavoo":
-                if key not in self.extractors:
-                    self.extractors[key] = VavooExtractor(
-                        request_headers, proxies=proxy_list, bypass_warp=bypass_warp
-                    )
-                return self.extractors[key]
-            elif host == "vixsrc":
-                if key not in self.extractors:
-                    self.extractors[key] = VixSrcExtractor(
-                        request_headers, proxies=proxy_list, bypass_warp=bypass_warp
-                    )
-                return self.extractors[key]
-            elif host == "vixcloud":
-                if key not in self.extractors:
-                    self.extractors[key] = VixSrcExtractor(
-                        request_headers, proxies=proxy_list, bypass_warp=bypass_warp
-                    )
-                return self.extractors[key]
-            elif host == "ads":
-                key = _cache_key("ads", bypass_warp)
-                if ADSExtractor is None:
-                    raise RuntimeError("ADSExtractor module not available")
-                proxy = get_proxy_for_url(url, bypass_warp=bypass_warp)
-                proxy_list = _build_proxy_list(proxy, "ads")
-                if key not in self.extractors:
-                    self.extractors[key] = ADSExtractor(
-                        request_headers, proxies=proxy_list, bypass_warp=bypass_warp
-                    )
-                return self.extractors[key]
-            elif host == "sportsonline" or _is_sportsonline_candidate(host):
-                key = _cache_key("sportsonline", bypass_warp)
-                if key not in self.extractors:
-                    self.extractors[key] = SportsonlineExtractor(
-                        request_headers, proxies=proxy_list, bypass_warp=bypass_warp
-                    )
-                return self.extractors[key]
-            elif host in {"mixdrop", "m1xdrop"}:
-                if key not in self.extractors:
-                    self.extractors[key] = MixdropExtractor(
-                        request_headers, proxies=proxy_list, bypass_warp=bypass_warp
-                    )
-                return self.extractors[key]
-            elif host == "voe":
-                if key not in self.extractors:
-                    self.extractors[key] = VoeExtractor(
-                        request_headers, proxies=proxy_list, bypass_warp=bypass_warp
-                    )
-                return self.extractors[key]
-            elif host == "streamtape":
-                if key not in self.extractors:
-                    self.extractors[key] = StreamtapeExtractor(
-                        request_headers, proxies=proxy_list, bypass_warp=bypass_warp
-                    )
-                return self.extractors[key]
-            elif host == "orion":
-                if key not in self.extractors:
-                    self.extractors[key] = OrionExtractor(
-                        request_headers, proxies=proxy_list, bypass_warp=bypass_warp
-                    )
-                return self.extractors[key]
-            elif host == "freeshot":
-                if key not in self.extractors:
-                    self.extractors[key] = FreeshotExtractor(
-                        request_headers, proxies=proxy_list, bypass_warp=bypass_warp
-                    )
-                return self.extractors[key]
-            # --- New Extractors (host selection) ---
-            elif host in ["doodstream", "dood", "d000d"]:
-                key = _cache_key("doodstream", bypass_warp)
-                if key not in self.extractors:
-                    self.extractors[key] = DoodStreamExtractor(
-                        request_headers,
-                        proxies=proxy_list,
-                        bypass_warp=bypass_warp,
-                    )
-                return self.extractors[key]
-            elif host == "fastream":
-                if key not in self.extractors:
-                    self.extractors[key] = FastreamExtractor(
-                        request_headers, proxies=proxy_list, bypass_warp=bypass_warp
-                    )
-                return self.extractors[key]
-            elif host == "filelions":
-                if key not in self.extractors:
-                    self.extractors[key] = FileLionsExtractor(
-                        request_headers, proxies=proxy_list, bypass_warp=bypass_warp
-                    )
-                return self.extractors[key]
-            elif host == "filemoon":
-                if key not in self.extractors:
-                    self.extractors[key] = FileMoonExtractor(
-                        request_headers, proxies=proxy_list, bypass_warp=bypass_warp
-                    )
-                return self.extractors[key]
-            elif host == "lulustream":
-                if key not in self.extractors:
-                    self.extractors[key] = LuluStreamExtractor(
-                        request_headers, proxies=proxy_list, bypass_warp=bypass_warp
-                    )
-                return self.extractors[key]
-
-            elif host in ["okru", "ok.ru"]:
-                key = _cache_key("okru", bypass_warp)
-                if key not in self.extractors:
-                    self.extractors[key] = OkruExtractor(
-                        request_headers, proxies=proxy_list, bypass_warp=bypass_warp
-                    )
-                return self.extractors[key]
-            elif host == "streamwish":
-                if key not in self.extractors:
-                    self.extractors[key] = StreamWishExtractor(
-                        request_headers, proxies=proxy_list, bypass_warp=bypass_warp
-                    )
-                return self.extractors[key]
-
-            elif host == "streamhg":
-                if key not in self.extractors:
-                    self.extractors[key] = StreamHGExtractor(
-                        request_headers, proxies=proxy_list, bypass_warp=bypass_warp
-                    )
-                return self.extractors[key]
-            elif host == "supervideo":
-                if key not in self.extractors:
-                    self.extractors[key] = SupervideoExtractor(
-                        request_headers, proxies=proxy_list, bypass_warp=bypass_warp
-                    )
-                return self.extractors[key]
-            elif host == "dropload":
-                if key not in self.extractors:
-                    self.extractors[key] = DroploadExtractor(
-                        request_headers, proxies=proxy_list, bypass_warp=bypass_warp
-                    )
-                return self.extractors[key]
-            elif host == "uqload":
-                if key not in self.extractors:
-                    self.extractors[key] = UqloadExtractor(
-                        request_headers, proxies=proxy_list, bypass_warp=bypass_warp
-                    )
-                return self.extractors[key]
-            elif host == "vidmoly":
-                if key not in self.extractors:
-                    self.extractors[key] = VidmolyExtractor(
-                        request_headers, proxies=proxy_list, bypass_warp=bypass_warp
-                    )
-                return self.extractors[key]
-            elif host in ["vidoza", "videzz"]:
-                key = _cache_key("vidoza", bypass_warp)
-                if key not in self.extractors:
-                    self.extractors[key] = VidozaExtractor(
-                        request_headers, proxies=proxy_list, bypass_warp=bypass_warp
-                    )
-                return self.extractors[key]
-            elif host in ["turbovidplay", "turboviplay", "emturbovid"]:
-                key = _cache_key("turbovidplay", bypass_warp)
-                if key not in self.extractors:
-                    self.extractors[key] = TurboVidPlayExtractor(
-                        request_headers, proxies=proxy_list, bypass_warp=bypass_warp
-                    )
-                return self.extractors[key]
-            elif host == "livetv":
-                if key not in self.extractors:
-                    self.extractors[key] = LiveTVExtractor(
-                        request_headers, proxies=proxy_list, bypass_warp=bypass_warp
-                    )
-                return self.extractors[key]
-            elif host in ["f16px", "byse"]:
-                key = _cache_key("f16px", bypass_warp)
-                proxy = get_proxy_for_url("f16px", bypass_warp=bypass_warp)
-                proxy_list = _build_proxy_list(proxy, "f16px")
-                if key not in self.extractors:
-                    self.extractors[key] = F16PxExtractor(
-                        request_headers, proxies=proxy_list, bypass_warp=bypass_warp
-                    )
-                return self.extractors[key]
-            elif host in ["guardabest", "guardabestvid"]:
-                key = _cache_key("guardabest", bypass_warp)
-                proxy = get_proxy_for_url("guardabestvid", bypass_warp=bypass_warp)
-                proxy_list = _build_proxy_list(proxy, "guardabest")
-                if key not in self.extractors:
-                    self.extractors[key] = GuardabestExtractor(
-                        request_headers, proxies=proxy_list, bypass_warp=bypass_warp
-                    )
-                return self.extractors[key]
-            elif host in ["sports99", "cdnlivetv"]:
-                key = _cache_key("sports99", bypass_warp)
-                if key not in self.extractors:
-                    self.extractors[key] = Sports99Extractor(
-                        request_headers, proxies=proxy_list, bypass_warp=bypass_warp
-                    )
-                return self.extractors[key]
-            elif host in ["dlhd", "dlstreams"]:
-                key = _cache_key("dlstreams", bypass_warp)
-                if key not in self.extractors:
-                    self.extractors[key] = DLStreamsExtractor(
-                        request_headers, proxies=proxy_list, bypass_warp=bypass_warp
-                    )
-                return self.extractors[key]
-            elif host in ["embedst", "embedsports", "embed.st", "embedsports.top", "streamed", "streamed.pk"]:
-                key = _cache_key("embedst", bypass_warp)
-                if key not in self.extractors:
-                    self.extractors[key] = EmbedStExtractor(
-                        request_headers, proxies=proxy_list, bypass_warp=bypass_warp
-                    )
-                return self.extractors[key]
-            elif host == "vidsonic":
-                if key not in self.extractors:
-                    self.extractors[key] = VidSonicExtractor(
-                        request_headers, proxies=proxy_list, bypass_warp=bypass_warp
-                    )
-                return self.extractors[key]
-            elif host == "vidlink":
-                if VidLinkExtractor is None:
-                    raise RuntimeError("VidLinkExtractor module not available")
-                if key not in self.extractors:
-                    self.extractors[key] = VidLinkExtractor(
-                        request_headers, proxies=proxy_list, bypass_warp=bypass_warp
-                    )
-                return self.extractors[key]
-            elif host in {"vidfast", "vidfast.vc"}:
-                key = _cache_key("vidfast", bypass_warp)
-                if VidFastExtractor is None:
-                    raise RuntimeError("VidFastExtractor module not available")
-                if key not in self.extractors:
-                    self.extractors[key] = VidFastExtractor(
-                        request_headers, proxies=proxy_list, bypass_warp=bypass_warp
-                    )
-                return self.extractors[key]
-            elif host == "vidxgo":
-                key = _cache_key("vidxgo", bypass_warp)
-                if VidXgoExtractor is None:
-                    raise RuntimeError("VidXgoExtractor module not available")
-                if key not in self.extractors:
-                    self.extractors[key] = VidXgoExtractor(
-                        request_headers, proxies=proxy_list, bypass_warp=bypass_warp
-                    )
-                self.extractors[key].request_headers = request_headers
-                return self.extractors[key]
-            elif host == "cinejoy" or host.startswith("cinejoy."):
-                key = _cache_key("cinejoy", bypass_warp)
-                if CinejoyExtractor is None:
-                    raise RuntimeError("CinejoyExtractor module not available")
-                if key not in self.extractors:
-                    self.extractors[key] = CinejoyExtractor(
-                        request_headers, proxies=proxy_list, bypass_warp=bypass_warp
-                    )
-                return self.extractors[key]
-            elif host in {"mediaset", "mediasetinfinity"}:
-                key = _cache_key("mediaset", bypass_warp)
-                if MediasetExtractor is None:
-                    raise RuntimeError("MediasetExtractor module not available")
-                if key not in self.extractors:
-                    self.extractors[key] = MediasetExtractor(
-                        request_headers, proxies=proxy_list, bypass_warp=bypass_warp
-                    )
-                return self.extractors[key]
-            elif host in {"witty", "wittytv"}:
-                key = _cache_key("wittytv", bypass_warp)
-                if WittyTVExtractor is None:
-                    raise RuntimeError("WittyTVExtractor module not available")
-                if key not in self.extractors:
-                    self.extractors[key] = WittyTVExtractor(
-                        request_headers, proxies=proxy_list, bypass_warp=bypass_warp
-                    )
-                return self.extractors[key]
-            elif host in {"rai", "raiplay"}:
-                key = _cache_key("raiplay", bypass_warp)
-                if RaiPlayExtractor is None:
-                    raise RuntimeError("RaiPlayExtractor module not available")
-                if key not in self.extractors:
-                    self.extractors[key] = RaiPlayExtractor(
-                        request_headers, proxies=proxy_list, bypass_warp=bypass_warp
-                    )
-                return self.extractors[key]
-            elif host in {"fctv33", "fctv", "fctv33hd"}:
-                key = _cache_key("fctv33", bypass_warp)
-                if Fctv33Extractor is None:
-                    raise RuntimeError("Fctv33Extractor module not available")
-                proxy = get_proxy_for_url(url, bypass_warp=bypass_warp, extractor_name="fctv33")
-                proxy_list = _build_proxy_list(proxy, "fctv33")
-                if key not in self.extractors:
-                    self.extractors[key] = Fctv33Extractor(
-                        request_headers, proxies=proxy_list, bypass_warp=bypass_warp
-                    )
-                return self.extractors[key]
+            entry = _entry_for_host(host)
+            if entry is not None:
+                return _instance_for_host(self, entry, host, url, request_headers, bypass_warp)
 
         # 2. Auto-detection basata sull'URL
         parsed_url = urllib.parse.urlparse(url)
@@ -407,510 +324,75 @@ async def resolve_extractor(self, url: str, request_headers: dict, host: str = N
             or ADS_SERIES_PATTERN.fullmatch(parsed_url.path)
         )
         if parsed_url.path.startswith("/api/player-sources/") or (ads_host_ok and ads_path_ok):
-            key = _cache_key("ads", bypass_warp)
-            if ADSExtractor is None:
-                raise RuntimeError("ADSExtractor module not available")
-            proxy = get_proxy_for_url(url, bypass_warp=bypass_warp)
-            proxy_list = _build_proxy_list(proxy, "ads")
-            if key not in self.extractors:
-                self.extractors[key] = ADSExtractor(
-                    request_headers, proxies=proxy_list, bypass_warp=bypass_warp
-                )
-            return self.extractors[key]
+            return _instance_for_url(self, _BY_NAME["ads"], url, request_headers, bypass_warp)
 
         # FCTV33: link diretto firmato con marker #fctv33&matchId=..&streamId=.. (generato da
         # fctv33_omg_universal). Va riconosciuto PRIMA dello shortcut "link diretto" sotto,
         # altrimenti finirebbe nel generic con un token legato all'IP/scaduto.
-        if re.search(r"(?:#|%23)fctv33(?![a-z0-9])", url, re.IGNORECASE):
-            key = _cache_key("fctv33", bypass_warp)
-            if Fctv33Extractor is None:
-                raise RuntimeError("Fctv33Extractor module not available")
-            proxy = get_proxy_for_url(url, bypass_warp=bypass_warp, extractor_name="fctv33")
-            proxy_list = _build_proxy_list(proxy, "fctv33")
-            if key not in self.extractors:
-                self.extractors[key] = Fctv33Extractor(
-                    request_headers, proxies=proxy_list, bypass_warp=bypass_warp
-                )
-            return self.extractors[key]
+        if _FCTV33_MARKER.search(url):
+            return _instance_for_url(self, _BY_NAME["fctv33"], url, request_headers, bypass_warp)
 
         # ✅ NUOVO: Salta estrattori specifici se l'URL sembra già un link diretto a un media
         # (evita di provare a estrarre un .mp4 come se fosse una pagina HTML)
         path_lower = url.split('?')[0].lower()
-        if any(path_lower.endswith(ext) for ext in [".mp4", ".m3u8", ".ts", ".mkv", ".avi", ".mov", ".flv", ".wmv", ".mp3", ".aac", ".m4a", ".mpd"]):
-            key = _cache_key("hls_generic", bypass_warp)
-            if key not in self.extractors:
-                self.extractors[key] = GenericHLSExtractor(
-                    request_headers,
-                    proxies=_build_proxy_list(None, "generic"),
-                    bypass_warp=bypass_warp,
-                )
-            return self.extractors[key]
+        if any(path_lower.endswith(ext) for ext in _MEDIA_EXTENSIONS):
+            return _generic_instance(self, request_headers, bypass_warp)
 
-        if any(
-            domain in url.lower()
-            for domain in (
-                "mediasetinfinity.mediaset.it/",
-                "wittytv.it/",
-            )
-        ):
-            extractor_name = (
-                "wittytv" if "wittytv.it/" in url.lower() else "mediaset"
-            )
-            key = _cache_key(extractor_name, bypass_warp)
-            extractor_cls = (
-                WittyTVExtractor
-                if extractor_name == "wittytv"
-                else MediasetExtractor
-            )
-            proxy = get_proxy_for_url(url, bypass_warp=bypass_warp)
-            proxy_list = _build_proxy_list(proxy, extractor_name)
-            if extractor_cls is None:
-                raise RuntimeError(f"{extractor_name} extractor module not available")
-            if key not in self.extractors:
-                self.extractors[key] = extractor_cls(
-                    request_headers, proxies=proxy_list, bypass_warp=bypass_warp
-                )
-            return self.extractors[key]
-        elif "mediapolisvod.rai.it/relinker/" in url.lower():
-            key = _cache_key("raiplay", bypass_warp)
-            proxy = get_proxy_for_url(url, bypass_warp=bypass_warp)
-            proxy_list = _build_proxy_list(proxy, "raiplay")
-            if RaiPlayExtractor is None:
-                raise RuntimeError("RaiPlayExtractor module not available")
-            if key not in self.extractors:
-                self.extractors[key] = RaiPlayExtractor(
-                    request_headers, proxies=proxy_list, bypass_warp=bypass_warp
-                )
-            return self.extractors[key]
-        elif (parsed_url.hostname or "").lower().endswith("raiplay.it"):
-            key = _cache_key("raiplay", bypass_warp)
-            proxy = get_proxy_for_url(url, bypass_warp=bypass_warp)
-            proxy_list = _build_proxy_list(proxy, "raiplay")
-            if RaiPlayExtractor is None:
-                raise RuntimeError("RaiPlayExtractor module not available")
-            if key not in self.extractors:
-                self.extractors[key] = RaiPlayExtractor(
-                    request_headers, proxies=proxy_list, bypass_warp=bypass_warp
-                )
-            return self.extractors[key]
-        elif "vavoo.to" in url:
-            key = _cache_key("vavoo", bypass_warp)
-            proxy = get_proxy_for_url("vavoo.to", bypass_warp=bypass_warp)
-            proxy_list = _build_proxy_list(proxy, "vavoo")
-            if key not in self.extractors:
-                self.extractors[key] = VavooExtractor(
-                    request_headers, proxies=proxy_list, bypass_warp=bypass_warp
-                )
-            return self.extractors[key]
-        elif ("vixsrc.to/" in url.lower() or "unitv.mom/" in url.lower()) and any(
-            x in url for x in ["/movie/", "/tv/", "/iframe/", "/embed/", "/playlist/"]
-        ):
-            key = _cache_key("vixsrc", bypass_warp)
-            parsed_domain = urllib.parse.urlparse(url).netloc or "vixsrc.to"
-            proxy = get_proxy_for_url(parsed_domain, bypass_warp=bypass_warp)
-            proxy_list = _build_proxy_list(proxy, "vixsrc")
-            if key not in self.extractors:
-                self.extractors[key] = VixSrcExtractor(
-                    request_headers, proxies=proxy_list, bypass_warp=bypass_warp
-                )
-            return self.extractors[key]
-        elif ("vixcloud.co/" in url.lower() or "unitv.mom/" in url.lower()) and any(
-            x in url.lower() for x in ["/embed/", "/playlist/"]
-        ):
-            key = _cache_key("vixcloud", bypass_warp)
-            parsed_domain = urllib.parse.urlparse(url).netloc or "vixcloud.co"
-            proxy = get_proxy_for_url(parsed_domain, bypass_warp=bypass_warp)
-            proxy_list = _build_proxy_list(proxy, "vixcloud")
-            if key not in self.extractors:
-                self.extractors[key] = VixSrcExtractor(
-                    request_headers, proxies=proxy_list, bypass_warp=bypass_warp
-                )
-            return self.extractors[key]
-        elif _is_sportsonline_candidate(url):
-            key = _cache_key("sportsonline", bypass_warp)
-            proxy = _resolve_sportsonline_proxy(url, bypass_warp=bypass_warp)
-            proxy_list = _build_proxy_list(proxy, "sportsonline")
-            if key not in self.extractors:
-                self.extractors[key] = SportsonlineExtractor(
-                    request_headers, proxies=proxy_list, bypass_warp=bypass_warp
-                )
-            return self.extractors[key]
-        elif (
-            re.search(r"/e/[^/?#]+", url, re.IGNORECASE) is not None
-            and any(
-                d in url.lower()
-                for d in [
-                    "dhcplay.com/",
-                    "vibuxer.com/",
-                    "streamhg.com/",
-                    "masukestin.com/",
-                ]
-            )
-        ):
-            key = _cache_key("streamhg", bypass_warp)
-            proxy = get_proxy_for_url("streamhg", bypass_warp=bypass_warp)
-            proxy_list = _build_proxy_list(proxy, "streamhg")
-            if key not in self.extractors:
-                self.extractors[key] = StreamHGExtractor(
-                    request_headers, proxies=proxy_list, bypass_warp=bypass_warp
-                )
-            return self.extractors[key]
+        for entry in _ENTRIES:
+            if entry.match is not None and entry.match(url, parsed_url):
+                return _instance_for_url(self, entry, url, request_headers, bypass_warp)
 
-        elif "mixdrop" in url or "m1xdrop" in url:
-            key = _cache_key("mixdrop", bypass_warp)
-            proxy = get_proxy_for_url("mixdrop", bypass_warp=bypass_warp)
-            proxy_list = _build_proxy_list(proxy, "mixdrop")
-            if key not in self.extractors:
-                self.extractors[key] = MixdropExtractor(
-                    request_headers, proxies=proxy_list, bypass_warp=bypass_warp
-                )
-            return self.extractors[key]
-        elif any(
-            d in url
-            for d in [
-                "voe.sx",
-                "voe.to",
-                "voe.st",
-                "voe.eu",
-                "voe.la",
-                "voe-network.net",
-            ]
-        ):
-            key = _cache_key("voe", bypass_warp)
-            proxy = get_proxy_for_url("voe.sx", bypass_warp=bypass_warp)
-            proxy_list = _build_proxy_list(proxy, "voe")
-            if key not in self.extractors:
-                self.extractors[key] = VoeExtractor(
-                    request_headers, proxies=proxy_list, bypass_warp=bypass_warp
-                )
-            return self.extractors[key]
-        elif "popcdn.day" in url or "freeshot.live" in url:
-            key = _cache_key("freeshot", bypass_warp)
-            proxy = get_proxy_for_url(
-                "popcdn.day" if "popcdn.day" in url else "freeshot.live", bypass_warp=bypass_warp)
-            proxy_list = _build_proxy_list(proxy, "freeshot")
-            if key not in self.extractors:
-                self.extractors[key] = FreeshotExtractor(
-                    request_headers, proxies=proxy_list, bypass_warp=bypass_warp
-                )
-            return self.extractors[key]
-        elif (
-            "streamtape.com" in url
-            or "streamtape.to" in url
-            or "streamtape.net" in url
-        ):
-            key = _cache_key("streamtape", bypass_warp)
-            proxy = get_proxy_for_url(
-                "streamtape", bypass_warp=bypass_warp)
-            proxy_list = _build_proxy_list(proxy, "streamtape")
-            if key not in self.extractors:
-                self.extractors[key] = StreamtapeExtractor(
-                    request_headers, proxies=proxy_list, bypass_warp=bypass_warp
-                )
-            return self.extractors[key]
-        elif "orionoid.com" in url:
-            key = _cache_key("orion", bypass_warp)
-            proxy = get_proxy_for_url(
-                "orionoid.com", bypass_warp=bypass_warp)
-            proxy_list = _build_proxy_list(proxy, "orion")
-            if key not in self.extractors:
-                self.extractors[key] = OrionExtractor(
-                    request_headers, proxies=proxy_list, bypass_warp=bypass_warp
-                )
-            return self.extractors[key]
-        # --- New Extractors (URL auto-detection) ---
-        elif any(
-            d in url
-            for d in [
-                "doodstream",
-                "d000d.com",
-                "dood.wf",
-                "dood.cx",
-                "dood.la",
-                "dood.so",
-                "dood.pm",
-            ]
-        ):
-            key = _cache_key("doodstream", bypass_warp)
-            proxy = get_proxy_for_url(
-                url, bypass_warp=bypass_warp)
-            proxy_list = _build_proxy_list(proxy, "doodstream")
-            if key not in self.extractors:
-                self.extractors[key] = DoodStreamExtractor(
-                    request_headers,
-                    proxies=proxy_list,
-                    bypass_warp=bypass_warp,
-                )
-            return self.extractors[key]
-        elif "fastream" in url:
-            key = _cache_key("fastream", bypass_warp)
-            proxy = get_proxy_for_url("fastream", bypass_warp=bypass_warp)
-            proxy_list = _build_proxy_list(proxy, "fastream")
-            if key not in self.extractors:
-                self.extractors[key] = FastreamExtractor(
-                    request_headers, proxies=proxy_list, bypass_warp=bypass_warp
-                )
-            return self.extractors[key]
-        elif "filelions" in url:
-            key = _cache_key("filelions", bypass_warp)
-            proxy = get_proxy_for_url("filelions", bypass_warp=bypass_warp)
-            proxy_list = _build_proxy_list(proxy, "filelions")
-            if key not in self.extractors:
-                self.extractors[key] = FileLionsExtractor(
-                    request_headers, proxies=proxy_list, bypass_warp=bypass_warp
-                )
-            return self.extractors[key]
-        elif "filemoon" in url:
-            key = _cache_key("filemoon", bypass_warp)
-            proxy = get_proxy_for_url("filemoon", bypass_warp=bypass_warp)
-            proxy_list = _build_proxy_list(proxy, "filemoon")
-            if key not in self.extractors:
-                self.extractors[key] = FileMoonExtractor(
-                    request_headers, proxies=proxy_list, bypass_warp=bypass_warp
-                )
-            return self.extractors[key]
-        elif (
-            re.search(r'(/watch\.php\?.*id=\d+|/(?:stream|cast|watch|plus|casting|player|hub)/stream-[\w-]+\.php)', urllib.parse.unquote(url)) is not None
-        ):
-            key = _cache_key("dlstreams", bypass_warp)
-            proxy = get_proxy_for_url(
-                url, bypass_warp=bypass_warp)
-            proxy_list = _build_proxy_list(proxy, "dlstreams")
-            if key not in self.extractors:
-                self.extractors[key] = DLStreamsExtractor(
-                    request_headers, proxies=proxy_list, bypass_warp=bypass_warp
-                )
-            return self.extractors[key]
-        elif "lulustream" in url:
-            key = _cache_key("lulustream", bypass_warp)
-            proxy = get_proxy_for_url(
-                "lulustream", bypass_warp=bypass_warp)
-            proxy_list = _build_proxy_list(proxy, "lulustream")
-            if key not in self.extractors:
-                self.extractors[key] = LuluStreamExtractor(
-                    request_headers, proxies=proxy_list, bypass_warp=bypass_warp
-                )
-            return self.extractors[key]
-
-        elif "ok.ru" in url or "odnoklassniki" in url:
-            key = _cache_key("okru", bypass_warp)
-            proxy = get_proxy_for_url("ok.ru", bypass_warp=bypass_warp)
-            proxy_list = _build_proxy_list(proxy, "okru")
-            if key not in self.extractors:
-                self.extractors[key] = OkruExtractor(
-                    request_headers, proxies=proxy_list, bypass_warp=bypass_warp
-                )
-            return self.extractors[key]
-        elif any(
-            d in url
-            for d in ["streamwish", "swish", "wishfast", "embedwish", "wishembed"]
-        ):
-            key = _cache_key("streamwish", bypass_warp)
-            proxy = get_proxy_for_url(
-                "streamwish", bypass_warp=bypass_warp)
-            proxy_list = _build_proxy_list(proxy, "streamwish")
-            if key not in self.extractors:
-                self.extractors[key] = StreamWishExtractor(
-                    request_headers, proxies=proxy_list, bypass_warp=bypass_warp
-                )
-            return self.extractors[key]
-        elif "supervideo" in url:
-            key = _cache_key("supervideo", bypass_warp)
-            proxy = get_proxy_for_url(
-                "supervideo", bypass_warp=bypass_warp)
-            proxy_list = _build_proxy_list(proxy, "supervideo")
-            if key not in self.extractors:
-                self.extractors[key] = SupervideoExtractor(
-                    request_headers, proxies=proxy_list, bypass_warp=bypass_warp
-                )
-            return self.extractors[key]
-        elif "vidxgo" in url.lower():
-            key = _cache_key("vidxgo", bypass_warp)
-            proxy = get_proxy_for_url(
-                "vidxgo", bypass_warp=bypass_warp)
-            proxy_list = _build_proxy_list(proxy, "vidxgo")
-            if key not in self.extractors:
-                if VidXgoExtractor is None:
-                    raise RuntimeError("VidXgoExtractor module not available")
-                self.extractors[key] = VidXgoExtractor(
-                    request_headers, proxies=proxy_list, bypass_warp=bypass_warp
-                )
-            # Always refresh request_headers so per-call h_* overrides are honored.
-            self.extractors[key].request_headers = request_headers
-            return self.extractors[key]
-        elif "dropload" in url or "dr0pstream" in url.lower():
-            key = _cache_key("dropload", bypass_warp)
-            proxy = get_proxy_for_url(
-                "dropload", bypass_warp=bypass_warp)
-            proxy_list = _build_proxy_list(proxy, "dropload")
-            if key not in self.extractors:
-                self.extractors[key] = DroploadExtractor(
-                    request_headers, proxies=proxy_list, bypass_warp=bypass_warp
-                )
-            return self.extractors[key]
-        elif "uqload" in url and not any(
-            url.endswith(ext) or f"{ext}?" in url
-            for ext in (".mp4", ".m3u8", ".ts", ".mkv", ".avi", ".mpd")
-        ):
-            # Only match embed pages (e.g. uqload.is/abc123.html), not CDN video URLs (m80.uqload.is/.../v.mp4)
-            key = _cache_key("uqload", bypass_warp)
-            proxy = get_proxy_for_url("uqload", bypass_warp=bypass_warp)
-            proxy_list = _build_proxy_list(proxy, "uqload")
-            if key not in self.extractors:
-                self.extractors[key] = UqloadExtractor(
-                    request_headers, proxies=proxy_list, bypass_warp=bypass_warp
-                )
-            return self.extractors[key]
-        elif "vidmoly" in url:
-            key = _cache_key("vidmoly", bypass_warp)
-            proxy = get_proxy_for_url("vidmoly", bypass_warp=bypass_warp)
-            proxy_list = _build_proxy_list(proxy, "vidmoly")
-            if key not in self.extractors:
-                self.extractors[key] = VidmolyExtractor(
-                    request_headers, proxies=proxy_list, bypass_warp=bypass_warp
-                )
-            return self.extractors[key]
-        elif "vidoza" in url or "videzz" in url:
-            key = _cache_key("vidoza", bypass_warp)
-            proxy = get_proxy_for_url("vidoza", bypass_warp=bypass_warp)
-            proxy_list = _build_proxy_list(proxy, "vidoza")
-            if key not in self.extractors:
-                self.extractors[key] = VidozaExtractor(
-                    request_headers, proxies=proxy_list, bypass_warp=bypass_warp
-                )
-            return self.extractors[key]
-        elif any(
-            d in url
-            for d in [
-                "turboviplay",
-                "emturbovid",
-                "tuborstb",
-                "javggvideo",
-                "stbturbo",
-                "turbovidhls",
-            ]
-        ):
-            key = _cache_key("turbovidplay", bypass_warp)
-            proxy = get_proxy_for_url(
-                "turbovidplay", bypass_warp=bypass_warp)
-            proxy_list = _build_proxy_list(proxy, "turbovidplay")
-            if key not in self.extractors:
-                self.extractors[key] = TurboVidPlayExtractor(
-                    request_headers, proxies=proxy_list, bypass_warp=bypass_warp
-                )
-            return self.extractors[key]
-        elif "/e/" in url and any(
-            d in url for d in ["f16px", "embedme", "embedsb", "playersb"]
-        ):
-            key = _cache_key("f16px", bypass_warp)
-            proxy = get_proxy_for_url("f16px", bypass_warp=bypass_warp)
-            proxy_list = _build_proxy_list(proxy, "f16px")
-            if key not in self.extractors:
-                self.extractors[key] = F16PxExtractor(
-                    request_headers, proxies=proxy_list, bypass_warp=bypass_warp
-                )
-            return self.extractors[key]
-        elif "guardabestvid.cam" in url.lower():
-            key = _cache_key("guardabest", bypass_warp)
-            proxy = get_proxy_for_url("guardabestvid", bypass_warp=bypass_warp)
-            proxy_list = _build_proxy_list(proxy, "guardabest")
-            if key not in self.extractors:
-                self.extractors[key] = GuardabestExtractor(
-                    request_headers, proxies=proxy_list, bypass_warp=bypass_warp
-                )
-            return self.extractors[key]
-        elif "cdnlivetv.tv" in url or "cdnlivetv.ru" in url:
-            key = _cache_key("sports99", bypass_warp)
-            proxy = get_proxy_for_url("cdnlivetv.tv", bypass_warp=bypass_warp)
-            proxy_list = _build_proxy_list(proxy, "sports99")
-            if key not in self.extractors:
-                self.extractors[key] = Sports99Extractor(
-                    request_headers, proxies=proxy_list, bypass_warp=bypass_warp
-                )
-            return self.extractors[key]
-        elif "embed.st/embed/" in url.lower() or "embedsports.top/embed/" in url.lower() or "streamed.pk/watch/" in url.lower():
-            key = _cache_key("embedst", bypass_warp)
-            proxy = get_proxy_for_url("embed.st", bypass_warp=bypass_warp)
-            proxy_list = _build_proxy_list(proxy, "embedst")
-            if key not in self.extractors:
-                self.extractors[key] = EmbedStExtractor(
-                    request_headers, proxies=proxy_list, bypass_warp=bypass_warp
-                )
-            return self.extractors[key]
-        elif any(d in url.lower() for d in ("vidsonic.net/", "vixeo.io/")) and re.search(r"/e/[A-Za-z0-9]+", url, re.IGNORECASE):
-            key = _cache_key("vidsonic", bypass_warp)
-            proxy = get_proxy_for_url("vidsonic", bypass_warp=bypass_warp)
-            proxy_list = _build_proxy_list(proxy, "vidsonic")
-            if key not in self.extractors:
-                self.extractors[key] = VidSonicExtractor(
-                    request_headers, proxies=proxy_list, bypass_warp=bypass_warp
-                )
-            return self.extractors[key]
-        elif re.search(r"vidlink\.pro/(?:movie/|tv/)", url, re.IGNORECASE):
-            key = _cache_key("vidlink", bypass_warp)
-            proxy = get_proxy_for_url("vidlink.pro", bypass_warp=bypass_warp)
-            proxy_list = _build_proxy_list(proxy, "vidlink")
-            if VidLinkExtractor is None:
-                raise RuntimeError("VidLinkExtractor module not available")
-            if key not in self.extractors:
-                self.extractors[key] = VidLinkExtractor(
-                    request_headers, proxies=proxy_list, bypass_warp=bypass_warp
-                )
-            return self.extractors[key]
-        elif re.search(r"(?:www\.)?vidfast\.vc/(?:movie/|tv/)", url, re.IGNORECASE):
-            key = _cache_key("vidfast", bypass_warp)
-            proxy = get_proxy_for_url("vidfast.vc", bypass_warp=bypass_warp)
-            proxy_list = _build_proxy_list(proxy, "vidfast")
-            if VidFastExtractor is None:
-                raise RuntimeError("VidFastExtractor module not available")
-            if key not in self.extractors:
-                self.extractors[key] = VidFastExtractor(
-                    request_headers, proxies=proxy_list, bypass_warp=bypass_warp
-                )
-            return self.extractors[key]
-        elif re.search(r"(?:www\.)?cinejoy\.[a-z]{2,}/", url, re.IGNORECASE):
-            key = _cache_key("cinejoy", bypass_warp)
-            proxy = get_proxy_for_url(url, bypass_warp=bypass_warp)
-            proxy_list = _build_proxy_list(proxy, "cinejoy")
-            if CinejoyExtractor is None:
-                raise RuntimeError("CinejoyExtractor module not available")
-            if key not in self.extractors:
-                self.extractors[key] = CinejoyExtractor(
-                    request_headers, proxies=proxy_list, bypass_warp=bypass_warp
-                )
-            return self.extractors[key]
-        elif "fctv33" in url.lower() or url.lower().startswith("fctv33://") or "tcdru136ovur.ru" in url.lower() or "tcpwe138stya.ru" in url.lower() or "mpgreatestclgczbmiddle" in url.lower():
-            key = _cache_key("fctv33", bypass_warp)
-            if Fctv33Extractor is None:
-                raise RuntimeError("Fctv33Extractor module not available")
-            proxy = get_proxy_for_url(url, bypass_warp=bypass_warp, extractor_name="fctv33")
-            proxy_list = _build_proxy_list(proxy, "fctv33")
-            if key not in self.extractors:
-                self.extractors[key] = Fctv33Extractor(
-                    request_headers, proxies=proxy_list, bypass_warp=bypass_warp
-                )
-            return self.extractors[key]
-        elif "livetv.sx" in url.lower() or "livetv" in url.lower():
-            key = _cache_key("livetv", bypass_warp)
-            proxy = get_proxy_for_url("livetv.sx", bypass_warp=bypass_warp)
-            proxy_list = _build_proxy_list(proxy, "livetv")
-            if key not in self.extractors:
-                self.extractors[key] = LiveTVExtractor(
-                    request_headers, proxies=proxy_list, bypass_warp=bypass_warp
-                )
-            return self.extractors[key]
-        else:
-            # ✅ MODIFICATO: Fallback al GenericHLSExtractor per qualsiasi altro URL.
-            # Questo permette di gestire estensioni sconosciute o URL senza estensione.
-            key = _cache_key("hls_generic", bypass_warp)
-            if key not in self.extractors:
-                self.extractors[key] = GenericHLSExtractor(
-                    request_headers,
-                    proxies=_build_proxy_list(None, "generic"),
-                    bypass_warp=bypass_warp,
-                )
-            return self.extractors[key]
+        # ✅ Fallback al GenericHLSExtractor per qualsiasi altro URL: gestisce
+        # estensioni sconosciute o URL senza estensione.
+        return _generic_instance(self, request_headers, bypass_warp)
     except (NameError, TypeError) as e:
         raise ExtractorError(f"Extractor not available - module missing: {e}")
+
+
+def _cached(self, key_name: str, cls, request_headers, proxy_list, bypass_warp, refresh_headers=False):
+    if cls is None:
+        raise RuntimeError(f"{key_name} extractor module not available")
+    key = _cache_key(key_name, bypass_warp)
+    instance = self.extractors.get(key)
+    if instance is None:
+        instance = cls(request_headers, proxies=proxy_list, bypass_warp=bypass_warp)
+        self.extractors[key] = instance
+    if refresh_headers:
+        # Always refresh request_headers so per-call h_* overrides are honored.
+        instance.request_headers = request_headers
+    return instance
+
+
+def _instance_for_host(self, entry, host, url, request_headers, bypass_warp):
+    target = entry.host_proxy or host
+    if target == "url":
+        target = url
+    kwargs = {"extractor_name": entry.proxy_extractor_name} if entry.proxy_extractor_name else {}
+    proxy = get_proxy_for_url(target, bypass_warp=bypass_warp, **kwargs)
+    proxy_list = _build_proxy_list(proxy, entry.host_build_name or host)
+    return _cached(self, entry.key_name or host, entry.cls, request_headers, proxy_list,
+                   bypass_warp, entry.refresh_headers)
+
+
+def _instance_for_url(self, entry, url, request_headers, bypass_warp):
+    target = entry.url_proxy
+    if callable(target):
+        target = target(url, bypass_warp)
+    elif target == "url":
+        target = url
+    if entry.url_proxy_final:
+        proxy = target
+    else:
+        kwargs = {"extractor_name": entry.proxy_extractor_name} if entry.proxy_extractor_name else {}
+        proxy = get_proxy_for_url(target, bypass_warp=bypass_warp, **kwargs)
+    proxy_list = _build_proxy_list(proxy, entry.name)
+    return _cached(self, entry.name, entry.cls, request_headers, proxy_list,
+                   bypass_warp, entry.refresh_headers)
+
+
+def _generic_instance(self, request_headers, bypass_warp):
+    return _cached(self, "hls_generic", GenericHLSExtractor, request_headers,
+                   _build_proxy_list(None, "generic"), bypass_warp)
+
 
 __all__ = ["resolve_extractor", "ExtractorError"]

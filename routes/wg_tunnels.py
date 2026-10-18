@@ -9,12 +9,10 @@ from aiohttp import web
 import config_store
 from config import APP_VERSION, check_password
 from services import wg_tunnels
+from services.proxy_shared import read_template
 
 logger = logging.getLogger(__name__)
 
-_TEMPLATES_DIR = os.path.join(
-    os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "templates"
-)
 PAGES = {
     "nordvpn": ("/admin/nordvpn", "nordvpn.html"),
     "custom": ("/admin/wireguard", "wireguard.html"),
@@ -37,11 +35,6 @@ async def _payload(request) -> dict:
     return data if isinstance(data, dict) else {}
 
 
-def _read_template(name: str) -> str:
-    with open(os.path.join(_TEMPLATES_DIR, name), "r", encoding="utf-8") as handle:
-        return handle.read().replace("{{APP_VERSION}}", APP_VERSION)
-
-
 def setup_wg_tunnel_routes(app: web.Application) -> None:
     """Register the tunnel panels and their JSON API."""
 
@@ -50,7 +43,7 @@ def setup_wg_tunnel_routes(app: web.Application) -> None:
             raise web.HTTPFound("/admin/login")
         _, template = PAGES[slot]
         try:
-            return web.Response(text=_read_template(template), content_type="text/html")
+            return web.Response(text=read_template(template), content_type="text/html")
         except FileNotFoundError:
             return web.Response(text=f"{template} not found", status=404)
 

@@ -1,0 +1,1790 @@
+{
+  "openapi": "3.0.3",
+  "info": {
+    "title": "EasyProxy API",
+    "version": "__VERSION__",
+    "description": "Interactive documentation for EasyProxy. Includes HLS/MPD proxying, extractor endpoints, key and license helpers, playlist generation, admin API, DVR/recording management, DUAL video/audio synchronization with VLC HLS master generation, and compatibility endpoints inspired by MediaFlow Proxy."
+  },
+  "servers": [
+    {
+      "url": "__SERVER_URL__"
+    }
+  ],
+  "components": {
+    "securitySchemes": {
+      "ApiPasswordQuery": {
+        "type": "apiKey",
+        "in": "query",
+        "name": "api_password",
+        "description": "Primary auth method shown in docs. Header x-api-password is still accepted by the server."
+      }
+    },
+    "schemas": {
+      "DualSource": {
+        "type": "object",
+        "description": "Direct URL or extractor source. Use url for a direct manifest, or extractor + d for an extractor page.",
+        "properties": {
+          "url": {
+            "type": "string",
+            "format": "uri"
+          },
+          "extractor": {
+            "type": "string",
+            "example": "vixsrc"
+          },
+          "d": {
+            "type": "string",
+            "format": "uri"
+          },
+          "headers": {
+            "type": "object",
+            "additionalProperties": {
+              "type": "string"
+            }
+          },
+          "warp_off": {
+            "type": "boolean",
+            "default": false
+          },
+          "proxy_off": {
+            "type": "boolean",
+            "default": false
+          },
+          "proxy": {
+            "type": "string",
+            "description": "Optional forced route: torproxy, nordvpn, cwg, a full proxy URL, or off."
+          }
+        }
+      },
+      "DualSyncRequest": {
+        "type": "object",
+        "required": [
+          "video",
+          "audio",
+          "audio_lang"
+        ],
+        "properties": {
+          "video": {
+            "$ref": "#/components/schemas/DualSource"
+          },
+          "audio": {
+            "$ref": "#/components/schemas/DualSource"
+          },
+          "audio_lang": {
+            "type": "string",
+            "description": "HLS LANGUAGE code or NAME alias.",
+            "enum": [
+              "ita",
+              "eng",
+              "spa",
+              "fra",
+              "deu",
+              "hin",
+              "rus",
+              "it",
+              "en",
+              "es",
+              "fr",
+              "de",
+              "hi",
+              "ru"
+            ],
+            "example": "ita"
+          },
+          "resolution": {
+            "type": "integer",
+            "enum": [
+              720,
+              1080,
+              1440,
+              2160
+            ],
+            "description": "Optional override. Omit it to select the highest available video quality automatically.",
+            "example": 2160
+          },
+          "bypass_audio_language": {
+            "type": "boolean",
+            "default": false,
+            "description": "When true, ignore a language mismatch and use the DEFAULT or best available audio track."
+          },
+          "reference_audio_url": {
+            "type": "string",
+            "format": "uri"
+          },
+          "media_key": {
+            "type": "string"
+          },
+          "video_fingerprint": {
+            "type": "string"
+          }
+        },
+        "example": {
+          "video": {
+            "url": "https://info.movieboxnoob.cc/playlist/ZgRENwVpICUbvjgdTAAjvA.m3u8"
+          },
+          "audio": {
+            "extractor": "vixsrc",
+            "d": "https://vixsrc.to/movie/1339713/"
+          },
+          "audio_lang": "ita"
+        }
+      }
+    }
+  },
+  "paths": {
+    "/api/info": {
+      "get": {
+        "summary": "Server information",
+        "description": "Returns server status, loaded extractors, modules, and example endpoints.",
+        "responses": {
+          "200": {
+            "description": "Server information JSON"
+          }
+        }
+      }
+    },
+    "/api/dual/memory": {
+      "get": {
+        "summary": "DUAL memory usage",
+        "description": "Returns RSS used by the in-process DUAL service and its active audio tracks.",
+        "responses": {
+          "200": {
+            "description": "DUAL memory usage JSON"
+          },
+          "401": {
+            "description": "Invalid API password"
+          }
+        },
+        "security": "__SECURITY__"
+      }
+    },
+    "/dual/manifest.m3u8": {
+      "get": {
+        "summary": "DUAL HLS master",
+        "description": "Builds one HLS master containing a selected video and an extracted, synchronized audio track. The video is always served through EasyProxy's HLS proxy. The d parameter is URL-safe Base64 JSON.",
+        "parameters": [
+          {
+            "name": "d",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "URL-safe Base64 JSON DualSyncRequest payload."
+          },
+          {
+            "name": "api_password",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Combined HLS master playlist",
+            "content": {
+              "application/vnd.apple.mpegurl": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid Base64 JSON descriptor or source"
+          },
+          "401": {
+            "description": "Invalid API password"
+          },
+          "409": {
+            "description": "Synchronization unavailable; JSON error response"
+          },
+          "502": {
+            "description": "Extraction or upstream failure"
+          }
+        },
+        "security": "__SECURITY__"
+      }
+    },
+    "/dual/sync/links": {
+      "post": {
+        "summary": "Sync direct or extracted video/audio links",
+        "description": "Resolves the two sources, selects the requested HLS audio language/NAME alias, prepares audio in memory, calculates the offset, and returns the synchronized result as JSON.",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/DualSyncRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Synchronization result"
+          },
+          "400": {
+            "description": "Invalid source or language"
+          },
+          "401": {
+            "description": "Invalid API password"
+          },
+          "409": {
+            "description": "Synchronization failed"
+          },
+          "502": {
+            "description": "Extraction or upstream failure"
+          }
+        },
+        "security": "__SECURITY__"
+      }
+    },
+    "/dual/aud/{hid}/audio.m3u8": {
+      "get": {
+        "summary": "Serve synchronized audio playlist",
+        "description": "Returns the generated fragmented MP4 audio playlist with the requested offset and playback rate.",
+        "parameters": [
+          {
+            "name": "hid",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "o",
+            "in": "query",
+            "schema": {
+              "type": "integer",
+              "default": 0
+            },
+            "description": "Offset in milliseconds."
+          },
+          {
+            "name": "r",
+            "in": "query",
+            "schema": {
+              "type": "integer",
+              "default": 1000000000
+            },
+            "description": "Playback rate in nano-units."
+          },
+          {
+            "name": "t",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Audio HLS playlist"
+          },
+          "401": {
+            "description": "Invalid DUAL session"
+          },
+          "410": {
+            "description": "Audio session expired"
+          }
+        },
+        "security": "__SECURITY__"
+      }
+    },
+    "/dual/aud/{hid}/init.mp4": {
+      "get": {
+        "summary": "Serve audio fragmented MP4 init",
+        "description": "Returns the initialization fragment for the active DUAL audio track.",
+        "parameters": [
+          {
+            "name": "hid",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "t",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "MP4 initialization fragment"
+          },
+          "401": {
+            "description": "Invalid DUAL session"
+          },
+          "410": {
+            "description": "Audio session expired"
+          }
+        },
+        "security": "__SECURITY__"
+      }
+    },
+    "/dual/aud/{hid}/s{idx}.m4s": {
+      "get": {
+        "summary": "Serve audio fragmented MP4 segment",
+        "description": "Returns one active DUAL audio segment after applying the requested offset/rate.",
+        "parameters": [
+          {
+            "name": "hid",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "idx",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "integer"
+            }
+          },
+          {
+            "name": "o",
+            "in": "query",
+            "schema": {
+              "type": "integer"
+            }
+          },
+          {
+            "name": "r",
+            "in": "query",
+            "schema": {
+              "type": "integer"
+            }
+          },
+          {
+            "name": "t",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Audio segment"
+          },
+          "401": {
+            "description": "Invalid DUAL session"
+          },
+          "410": {
+            "description": "Audio session expired"
+          }
+        },
+        "security": "__SECURITY__"
+      }
+    },
+    "/dual/sub/{sid}/subtitles.m3u8": {
+      "get": {
+        "summary": "Serve shifted audio-source subtitle playlist",
+        "description": "Returns the subtitle playlist of the audio source with the DUAL offset/rate already applied to its segment timeline.",
+        "parameters": [
+          {
+            "name": "sid",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "o",
+            "in": "query",
+            "schema": {
+              "type": "integer",
+              "default": 0
+            },
+            "description": "Offset in milliseconds."
+          },
+          {
+            "name": "r",
+            "in": "query",
+            "schema": {
+              "type": "integer",
+              "default": 1000000000
+            },
+            "description": "Playback rate in nano-units."
+          },
+          {
+            "name": "t",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Subtitle HLS playlist"
+          },
+          "401": {
+            "description": "Invalid DUAL session"
+          },
+          "410": {
+            "description": "Subtitle session expired"
+          }
+        },
+        "security": "__SECURITY__"
+      }
+    },
+    "/dual/sub/{sid}/init.mp4": {
+      "get": {
+        "summary": "Serve subtitle fragmented MP4 init",
+        "description": "Returns the initialization fragment when the audio-source subtitles are fMP4 (wvtt) renditions.",
+        "parameters": [
+          {
+            "name": "sid",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "t",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "MP4 initialization fragment"
+          },
+          "401": {
+            "description": "Invalid DUAL session"
+          },
+          "410": {
+            "description": "Subtitle session expired"
+          }
+        },
+        "security": "__SECURITY__"
+      }
+    },
+    "/dual/sub/{sid}/s{idx}.vtt": {
+      "get": {
+        "summary": "Serve shifted subtitle segment",
+        "description": "Returns one subtitle segment with cue times mapped to the audio timeline by (t + offset) / rate.",
+        "parameters": [
+          {
+            "name": "sid",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "idx",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "integer"
+            }
+          },
+          {
+            "name": "o",
+            "in": "query",
+            "schema": {
+              "type": "integer"
+            }
+          },
+          {
+            "name": "r",
+            "in": "query",
+            "schema": {
+              "type": "integer"
+            }
+          },
+          {
+            "name": "t",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Subtitle segment"
+          },
+          "401": {
+            "description": "Invalid DUAL session"
+          },
+          "410": {
+            "description": "Subtitle session expired"
+          }
+        },
+        "security": "__SECURITY__"
+      }
+    },
+    "/dual/cache/status": {
+      "post": {
+        "summary": "Check cached DUAL offset",
+        "description": "Returns only whether the requested video/audio offset exists in the shared MongoDB cache. Audio is not exposed as a persistent cache.",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Offset cache status JSON"
+          },
+          "400": {
+            "description": "Missing media key, resolution or fingerprint"
+          },
+          "401": {
+            "description": "Invalid API password"
+          }
+        },
+        "security": "__SECURITY__"
+      }
+    },
+    "/health": {
+      "get": {
+        "summary": "Health check",
+        "description": "Simple health check endpoint returning OK status and app version.",
+        "responses": {
+          "200": {
+            "description": "JSON with status and version"
+          }
+        }
+      }
+    },
+    "/generate_urls": {
+      "post": {
+        "summary": "Generate proxy URLs",
+        "description": "Generate one or multiple compatibility URLs for clients.",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "mediaflow_proxy_url": {
+                    "type": "string"
+                  },
+                  "api_password": {
+                    "type": "string"
+                  },
+                  "urls": {
+                    "type": "array",
+                    "items": {
+                      "type": "object",
+                      "description": "Supported keys: destination_url, endpoint, request_headers, warp (off), proxy (off, torproxy, nordvpn, cwg or a proxy URL), disable_ssl."
+                    }
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Generated URL list"
+          }
+        },
+        "security": "__SECURITY__"
+      }
+    },
+    "/proxy/ip": {
+      "get": {
+        "summary": "Resolve public IP",
+        "description": "Returns the public IP as seen through the configured proxy route.",
+        "responses": {
+          "200": {
+            "description": "Public IP response"
+          }
+        }
+      }
+    },
+    "/proxy/manifest.m3u8": {
+      "get": {
+        "summary": "Legacy proxy manifest",
+        "description": "Proxy a manifest using the legacy url parameter.",
+        "parameters": [
+          {
+            "name": "url",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            },
+            "required": true
+          },
+          {
+            "name": "proxy",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            },
+            "description": "Force the outbound route: torproxy (Tor), nordvpn (NordLynx), cwg (custom WireGuard), a full proxy URL, or off to bypass all configured proxies. Omit for automatic routing."
+          },
+          {
+            "name": "api_password",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Proxied manifest or media response"
+          }
+        },
+        "security": "__SECURITY__"
+      }
+    },
+    "/proxy/hls/manifest.m3u8": {
+      "get": {
+        "summary": "Proxy HLS manifest",
+        "description": "MediaFlow-compatible HLS proxy endpoint.",
+        "parameters": [
+          {
+            "name": "d",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            },
+            "required": true,
+            "description": "Destination manifest URL"
+          },
+          {
+            "name": "host",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            },
+            "description": "Force a specific extractor instead of auto-detection"
+          },
+          {
+            "name": "max_res",
+            "in": "query",
+            "schema": {
+              "type": "boolean"
+            },
+            "description": "Serve only the highest video variant"
+          },
+          {
+            "name": "proxy",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            },
+            "description": "Force the outbound route: torproxy (Tor), nordvpn (NordLynx), cwg (custom WireGuard), a full proxy URL, or off to bypass all configured proxies. Omit for automatic routing."
+          },
+          {
+            "name": "api_password",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Proxied HLS manifest"
+          }
+        },
+        "security": "__SECURITY__"
+      }
+    },
+    "/proxy/hls/segment.{format}": {
+      "get": {
+        "summary": "HLS segment compatibility",
+        "description": "Serve HLS segments (ts, m4s, mp4, vtt, aac, mp3, m4a, ac3, ec3) through the proxy with proper headers.",
+        "parameters": [
+          {
+            "name": "format",
+            "in": "path",
+            "schema": {
+              "type": "string",
+              "enum": [
+                "ts",
+                "m4s",
+                "mp4",
+                "vtt",
+                "aac",
+                "mp3",
+                "m4a",
+                "ac3",
+                "ec3"
+              ]
+            },
+            "required": true
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Segment data"
+          }
+        }
+      }
+    },
+    "/proxy/mpd/manifest.m3u8": {
+      "get": {
+        "summary": "Proxy MPD as HLS",
+        "description": "Converts or relays MPEG-DASH/MPD streams through EasyProxy.",
+        "parameters": [
+          {
+            "name": "d",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            },
+            "required": true,
+            "description": "Destination MPD URL"
+          },
+          {
+            "name": "host",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            },
+            "description": "Force a specific extractor instead of auto-detection"
+          },
+          {
+            "name": "max_res",
+            "in": "query",
+            "schema": {
+              "type": "boolean"
+            },
+            "description": "Serve only the highest video variant"
+          },
+          {
+            "name": "key_id",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "key",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "proxy",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            },
+            "description": "Force the outbound route: torproxy (Tor), nordvpn (NordLynx), cwg (custom WireGuard), a full proxy URL, or off to bypass all configured proxies. Omit for automatic routing."
+          },
+          {
+            "name": "api_password",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Generated HLS manifest"
+          }
+        },
+        "security": "__SECURITY__"
+      }
+    },
+    "/proxy/mpd/manifest.mpd": {
+      "get": {
+        "summary": "Proxy MPD native",
+        "description": "Proxy the native MPD manifest for DASH streams.",
+        "parameters": [
+          {
+            "name": "d",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            },
+            "required": true,
+            "description": "Destination MPD URL"
+          },
+          {
+            "name": "proxy",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            },
+            "description": "Force the outbound route: torproxy (Tor), nordvpn (NordLynx), cwg (custom WireGuard), a full proxy URL, or off to bypass all configured proxies. Omit for automatic routing."
+          },
+          {
+            "name": "api_password",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Proxied MPD manifest"
+          }
+        },
+        "security": "__SECURITY__"
+      }
+    },
+    "/proxy/mpd/segment/{session_id}/{tail:.*}": {
+      "get": {
+        "summary": "DASH segment serving",
+        "description": "Serve DASH segments for an active MPD-to-HLS conversion session.",
+        "parameters": [
+          {
+            "name": "session_id",
+            "in": "path",
+            "schema": {
+              "type": "string"
+            },
+            "required": true
+          },
+          {
+            "name": "tail",
+            "in": "path",
+            "schema": {
+              "type": "string"
+            },
+            "required": true
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Segment data"
+          }
+        }
+      }
+    },
+    "/proxy/stream": {
+      "get": {
+        "summary": "Generic stream proxy",
+        "description": "Generic MediaFlow-style stream endpoint for direct proxying.",
+        "parameters": [
+          {
+            "name": "d",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            },
+            "required": true
+          },
+          {
+            "name": "proxy",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            },
+            "description": "Force the outbound route: torproxy (Tor), nordvpn (NordLynx), cwg (custom WireGuard), a full proxy URL, or off to bypass all configured proxies. Omit for automatic routing."
+          },
+          {
+            "name": "api_password",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Streamed response"
+          }
+        },
+        "security": "__SECURITY__"
+      }
+    },
+    "/playlist": {
+      "get": {
+        "summary": "Build a playlist",
+        "description": "Combine multiple source URLs into a generated playlist. Each ';'-separated definition supports |sort=true, |noproxy=true, |native_mpd=true, |warp=off and |proxy=off|torproxy|nordvpn|cwg.",
+        "parameters": [
+          {
+            "name": "url",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            },
+            "required": true
+          },
+          {
+            "name": "api_password",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Generated playlist"
+          }
+        },
+        "security": "__SECURITY__"
+      }
+    },
+    "/segment/{tail:.*}": {
+      "get": {
+        "summary": "Legacy TS segment serving",
+        "description": "Serve TS segments by their segment identifier.",
+        "parameters": [
+          {
+            "name": "tail",
+            "in": "path",
+            "schema": {
+              "type": "string"
+            },
+            "required": true
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Segment data"
+          }
+        }
+      }
+    },
+    "/decrypt/segment.{format}": {
+      "get": {
+        "summary": "Legacy decrypt segment",
+        "description": "Decrypt and serve segments using ClearKey (legacy mode).",
+        "parameters": [
+          {
+            "name": "format",
+            "in": "path",
+            "schema": {
+              "type": "string",
+              "enum": [
+                "mp4",
+                "ts"
+              ]
+            },
+            "required": true
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Decrypted segment"
+          }
+        }
+      }
+    },
+    "/extractor": {
+      "get": {
+        "summary": "Generic extractor",
+        "description": "Resolve supported hosters into playable URLs.",
+        "parameters": [
+          {
+            "name": "host",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "url",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "proxy",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            },
+            "description": "Force the outbound route: torproxy (Tor), nordvpn (NordLynx), cwg (custom WireGuard), a full proxy URL, or off to bypass all configured proxies. Omit for automatic routing."
+          },
+          {
+            "name": "api_password",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Extractor response"
+          }
+        },
+        "security": "__SECURITY__"
+      }
+    },
+    "/extractor/video": {
+      "get": {
+        "summary": "Extractor compatibility endpoint",
+        "description": "MediaFlow-compatible alias for video extractor requests.",
+        "parameters": [
+          {
+            "name": "host",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "url",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "proxy",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            },
+            "description": "Force the outbound route: torproxy (Tor), nordvpn (NordLynx), cwg (custom WireGuard), a full proxy URL, or off to bypass all configured proxies. Omit for automatic routing."
+          },
+          {
+            "name": "api_password",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Extractor response"
+          }
+        },
+        "security": "__SECURITY__"
+      }
+    },
+    "/extractor/video.{format}": {
+      "get": {
+        "summary": "Extractor format-suffix variants",
+        "description": "Format-forced extractor variants. Supported extensions: m3u8, mp4, mpd, ts, m4s, vtt, aac, m4a, webm, mkv, avi, mov. All share the same parameters and handler.",
+        "parameters": [
+          {
+            "name": "format",
+            "in": "path",
+            "schema": {
+              "type": "string"
+            },
+            "required": true
+          },
+          {
+            "name": "host",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "url",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "d",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "proxy",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            },
+            "description": "Force the outbound route: torproxy (Tor), nordvpn (NordLynx), cwg (custom WireGuard), a full proxy URL, or off to bypass all configured proxies. Omit for automatic routing."
+          },
+          {
+            "name": "api_password",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Extractor response"
+          }
+        },
+        "security": "__SECURITY__"
+      }
+    },
+    "/key": {
+      "get": {
+        "summary": "Fetch or transform decryption keys",
+        "description": "Proxy AES-128 keys or derive license-related key material.",
+        "parameters": [
+          {
+            "name": "key_url",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "key",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "key_id",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "proxy",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            },
+            "description": "Force the outbound route: torproxy (Tor), nordvpn (NordLynx), cwg (custom WireGuard), a full proxy URL, or off to bypass all configured proxies. Omit for automatic routing."
+          },
+          {
+            "name": "api_password",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Key response"
+          }
+        },
+        "security": "__SECURITY__"
+      }
+    },
+    "/license": {
+      "get": {
+        "summary": "License proxy",
+        "description": "Proxy DRM license requests or handle ClearKey shortcuts.",
+        "parameters": [
+          {
+            "name": "url",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "clearkey",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "api_password",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "License response"
+          }
+        },
+        "security": "__SECURITY__"
+      },
+      "post": {
+        "summary": "License proxy POST",
+        "description": "POST DRM license payloads to the upstream license server.",
+        "requestBody": {
+          "required": false,
+          "content": {
+            "application/octet-stream": {
+              "schema": {
+                "type": "string",
+                "format": "binary"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "License response"
+          }
+        },
+        "security": "__SECURITY__"
+      }
+    },
+    "/api/admin/login": {
+      "post": {
+        "summary": "Admin login",
+        "description": "Authenticate as admin. Sets a session cookie on success.",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "password": {
+                    "type": "string"
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Login success"
+          },
+          "401": {
+            "description": "Invalid password"
+          }
+        }
+      }
+    },
+    "/api/admin/config": {
+      "get": {
+        "summary": "Get admin config",
+        "description": "Retrieve the full server configuration as JSON.",
+        "responses": {
+          "200": {
+            "description": "Configuration JSON"
+          }
+        },
+        "security": "__SECURITY__"
+      },
+      "post": {
+        "summary": "Update admin config",
+        "description": "Update server configuration with a JSON payload.",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "description": "Partial or full config update"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Config updated"
+          }
+        },
+        "security": "__SECURITY__"
+      }
+    },
+    "/api/admin/config/download": {
+      "get": {
+        "summary": "Download config as file",
+        "description": "Download the current configuration as a downloadable file.",
+        "responses": {
+          "200": {
+            "description": "Config file download"
+          }
+        },
+        "security": "__SECURITY__"
+      }
+    },
+    "/api/admin/config/upload": {
+      "post": {
+        "summary": "Upload config file",
+        "description": "Upload a configuration file to replace the current server config.",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "multipart/form-data": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "config": {
+                    "type": "string",
+                    "format": "binary"
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Config uploaded and reloaded"
+          }
+        },
+        "security": "__SECURITY__"
+      }
+    },
+    "/api/admin/warp/toggle": {
+      "post": {
+        "summary": "Toggle WARP",
+        "description": "Enable or disable Cloudflare WARP proxy routing.",
+        "responses": {
+          "200": {
+            "description": "WARP toggled"
+          }
+        },
+        "security": "__SECURITY__"
+      }
+    },
+    "/api/admin/warp/reconnect": {
+      "post": {
+        "summary": "Reconnect WARP",
+        "description": "Force WARP to disconnect, re-register, and reconnect.",
+        "responses": {
+          "200": {
+            "description": "WARP reconnected"
+          }
+        },
+        "security": "__SECURITY__"
+      }
+    },
+    "/api/admin/extractor/proxy": {
+      "post": {
+        "summary": "Set extractor proxy",
+        "description": "Override the proxy used by a specific extractor for testing.",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "extractor": {
+                    "type": "string"
+                  },
+                  "proxy": {
+                    "type": "string"
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Extractor proxy updated"
+          }
+        },
+        "security": "__SECURITY__"
+      }
+    },
+    "/api/admin/speedtest": {
+      "post": {
+        "summary": "Run speed test",
+        "description": "Test download speed through a specified proxy or direct connection.",
+        "responses": {
+          "200": {
+            "description": "Speed test results"
+          }
+        },
+        "security": "__SECURITY__"
+      }
+    },
+    "/recordings": {
+      "get": {
+        "summary": "Recordings UI page",
+        "description": "DVR/recording management web interface.",
+        "responses": {
+          "200": {
+            "description": "HTML page"
+          }
+        }
+      }
+    },
+    "/record": {
+      "get": {
+        "summary": "Start recording via GET",
+        "description": "Quick-start a recording from a URL query parameter and redirect to the live stream while recording.",
+        "parameters": [
+          {
+            "name": "url",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            },
+            "required": true
+          },
+          {
+            "name": "name",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "duration",
+            "in": "query",
+            "schema": {
+              "type": "integer"
+            },
+            "description": "Recording duration in seconds"
+          },
+          {
+            "name": "extractor",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            },
+            "description": "Force a specific extractor instead of auto-detection"
+          },
+          {
+            "name": "max_res",
+            "in": "query",
+            "schema": {
+              "type": "boolean"
+            },
+            "description": "Record only the highest video variant"
+          },
+          {
+            "name": "key_id",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            },
+            "description": "ClearKey key ID for DRM-protected streams"
+          },
+          {
+            "name": "key",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            },
+            "description": "ClearKey key for DRM-protected streams"
+          },
+          {
+            "name": "proxy",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            },
+            "description": "Force the outbound route: torproxy (Tor), nordvpn (NordLynx), cwg (custom WireGuard), a full proxy URL, or off to bypass all configured proxies. Omit for automatic routing."
+          },
+          {
+            "name": "api_password",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Recording started"
+          }
+        },
+        "security": "__SECURITY__"
+      }
+    },
+    "/record/stop/{id}": {
+      "get": {
+        "summary": "Stop recording via GET",
+        "description": "Stop a recording by ID via GET request.",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "schema": {
+              "type": "string"
+            },
+            "required": true
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Recording stopped"
+          }
+        }
+      }
+    },
+    "/api/recordings": {
+      "get": {
+        "summary": "List recordings",
+        "description": "Get a paginated list of all recordings, with optional status filter.",
+        "parameters": [
+          {
+            "name": "status",
+            "in": "query",
+            "schema": {
+              "type": "string",
+              "enum": [
+                "active",
+                "completed",
+                "failed"
+              ]
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Recordings list"
+          }
+        }
+      }
+    },
+    "/api/recordings/active": {
+      "get": {
+        "summary": "Active recordings",
+        "description": "Get a list of currently active recordings.",
+        "responses": {
+          "200": {
+            "description": "Active recordings list"
+          }
+        }
+      }
+    },
+    "/api/recordings/start": {
+      "post": {
+        "summary": "Start recording",
+        "description": "Start a new DVR recording for a specified stream URL.",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": [
+                  "url"
+                ],
+                "properties": {
+                  "url": {
+                    "type": "string",
+                    "description": "Stream URL to record"
+                  },
+                  "name": {
+                    "type": "string",
+                    "description": "Human-readable recording name"
+                  },
+                  "duration": {
+                    "type": "integer",
+                    "description": "Recording duration in seconds"
+                  },
+                  "extractor": {
+                    "type": "string",
+                    "description": "Force a specific extractor instead of auto-detection"
+                  },
+                  "max_res": {
+                    "type": "boolean",
+                    "description": "Record only the highest video variant"
+                  },
+                  "warp": {
+                    "type": "string",
+                    "enum": [
+                      "off"
+                    ],
+                    "description": "Bypass WARP for this recording"
+                  },
+                  "proxy": {
+                    "type": "string",
+                    "enum": [
+                      "off",
+                      "torproxy",
+                      "nordvpn",
+                      "cwg"
+                    ],
+                    "description": "Bypass all proxies (off) or force a route (torproxy, nordvpn, cwg) for this recording"
+                  },
+                  "disable_ssl": {
+                    "type": "string",
+                    "enum": [
+                      "1"
+                    ],
+                    "description": "Disable SSL verification for this recording"
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Recording started"
+          },
+          "400": {
+            "description": "Invalid request"
+          }
+        }
+      }
+    },
+    "/api/recordings/{id}": {
+      "get": {
+        "summary": "Get recording details",
+        "description": "Retrieve metadata for a specific recording.",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "schema": {
+              "type": "string"
+            },
+            "required": true
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Recording metadata"
+          }
+        }
+      },
+      "delete": {
+        "summary": "Delete recording",
+        "description": "Delete a recording by ID.",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "schema": {
+              "type": "string"
+            },
+            "required": true
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Recording deleted"
+          }
+        }
+      }
+    },
+    "/api/recordings/{id}/delete": {
+      "get": {
+        "summary": "Delete recording via GET",
+        "description": "Delete a recording by ID using a GET request (legacy compatibility).",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "schema": {
+              "type": "string"
+            },
+            "required": true
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Recording deleted"
+          }
+        }
+      }
+    },
+    "/api/recordings/{id}/stop": {
+      "post": {
+        "summary": "Stop recording",
+        "description": "Stop an active recording by ID.",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "schema": {
+              "type": "string"
+            },
+            "required": true
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Recording stopped"
+          }
+        }
+      }
+    },
+    "/api/recordings/{id}/download": {
+      "get": {
+        "summary": "Download recording",
+        "description": "Download a completed recording file.",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "schema": {
+              "type": "string"
+            },
+            "required": true
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Recording file download"
+          }
+        }
+      }
+    },
+    "/api/recordings/{id}/stream": {
+      "get": {
+        "summary": "Stream recording",
+        "description": "Stream a completed recording as HLS.",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "schema": {
+              "type": "string"
+            },
+            "required": true
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "HLS stream"
+          }
+        }
+      }
+    },
+    "/api/recordings/all": {
+      "delete": {
+        "summary": "Delete all recordings",
+        "description": "Delete all recordings, optionally filtering by status.",
+        "parameters": [
+          {
+            "name": "status",
+            "in": "query",
+            "schema": {
+              "type": "string",
+              "enum": [
+                "active",
+                "completed",
+                "failed"
+              ]
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "All matching recordings deleted"
+          }
+        }
+      }
+    }
+  }
+}

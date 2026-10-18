@@ -44,5 +44,3 @@ class OkruExtractor(BaseExtractor):
         
         raise ExtractorError("Failed to parse OK.ru page")
 
-    async def close(self):
-        await super().close()

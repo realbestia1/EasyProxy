@@ -11,7 +11,7 @@ from nacl.secret import SecretBox
 
 from config import get_preferred_proxy_for_url
 import config as _cfg
-from extractors.base import BaseExtractor, ExtractorError
+from extractors.base import BaseExtractor, ExtractorError, normalize_socks_proxy_url
 
 logger = logging.getLogger(__name__)
 
@@ -118,13 +118,7 @@ class VidLinkExtractor(BaseExtractor):
 
     @staticmethod
     def _normalize_proxy_url(proxy_url: str) -> str:
-        proxy_url = _cfg.resolve_proxy_alias(str(proxy_url).strip()) or str(proxy_url).strip()
-        # Preserve the proxy scheme selected by the routing policy.
-        if proxy_url.startswith("socks5://"):
-            return proxy_url
-        if "://" not in proxy_url:
-            return f"socks5h://{proxy_url}"
-        return proxy_url
+        return normalize_socks_proxy_url(proxy_url)
 
     async def extract(self, url: str, **kwargs) -> dict:
         path = urlparse(url).path
@@ -210,5 +204,3 @@ class VidLinkExtractor(BaseExtractor):
             "bypass_warp": self.bypass_warp_active,
         }
 
-    async def close(self):
-        pass

@@ -180,9 +180,6 @@ proot-distro login "$DISTRO_NAME" -- bash -s <<'UBUNTU_SETUP'
     cd "$EP_DIR"
     "$VENV_PYTHON" -m pip install --no-cache-dir -r requirements.txt
 
-    echo "[INFO] Installing critical dependencies..."
-    "$VENV_PYTHON" -m pip install --no-cache-dir uvicorn prometheus-client certifi
-
     if [ ! -f "$EP_DIR/.env" ]; then
         {
             echo "PORT=7860"

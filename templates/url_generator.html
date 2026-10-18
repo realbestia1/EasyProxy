@@ -12,25 +12,9 @@
         :root {
             --bg-primary: #09090f;
             --bg-secondary: #111119;
-            --surface: rgba(255, 255, 255, 0.03);
-            --surface-glass: rgba(255, 255, 255, 0.06);
-            --surface-elevated: rgba(255, 255, 255, 0.1);
-            --primary-gradient: linear-gradient(135deg, #6366f1 0%, #a855f7 50%, #ec4899 100%);
-            --neon-gradient: linear-gradient(90deg, #06b6d4, #a855f7, #ec4899, #a855f7, #06b6d4);
-            --accent-primary: #6366f1;
-            --accent-success: #10b981;
             --text-primary: #ffffff;
             --text-secondary: #a1a1aa;
             --text-muted: #6b6b80;
-            --border-primary: rgba(255, 255, 255, 0.08);
-            --border-accent: rgba(255, 255, 255, 0.15);
-            --glow-primary: 0 0 30px rgba(99, 102, 241, 0.25);
-            --glow-secondary: 0 0 40px rgba(168, 85, 247, 0.3);
-            --shadow-dark: 0 25px 60px -15px rgba(0, 0, 0, 0.8);
-            --transition-fast: all 0.15s cubic-bezier(0.4, 0, 0.2, 1);
-            --transition-normal: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
-            --border-radius: 16px;
-            --border-radius-large: 24px;
         }
 
         * { margin: 0; padding: 0; box-sizing: border-box; }
@@ -79,28 +63,9 @@
             z-index: 1;
         }
 
-        .back-link {
-            display: inline-flex;
-            align-items: center;
-            gap: 8px;
-            padding: 0.7rem 1.4rem;
-            border-radius: var(--border-radius);
-            text-decoration: none;
-            font-weight: 600;
-            font-size: 0.9rem;
-            background: var(--surface-glass);
-            color: var(--text-primary);
-            border: 1px solid var(--border-primary);
-            backdrop-filter: blur(20px);
-            transition: var(--transition-normal);
-            margin-bottom: 2rem;
-        }
+        
 
-        .back-link:hover {
-            transform: translateY(-2px);
-            background: var(--surface-elevated);
-            border-color: var(--border-accent);
-        }
+        
 
         .page-title {
             font-size: clamp(2.2rem, 5vw, 3.5rem);
@@ -495,12 +460,7 @@
             color: white;
         }
 
-        .empty-state {
-            text-align: center;
-            padding: 2rem 1rem;
-            color: var(--text-muted);
-            font-size: 0.9rem;
-        }
+        
 
         ::-webkit-scrollbar { width: 8px; }
         ::-webkit-scrollbar-track { background: var(--bg-secondary); }
@@ -922,68 +882,6 @@
     </div>
 
     <script>
-        const canvas = document.getElementById('particles-canvas');
-        const ctx = canvas.getContext('2d');
-        let particles = [];
-
-        function resize() {
-            canvas.width = window.innerWidth;
-            canvas.height = window.innerHeight;
-        }
-        resize();
-        window.addEventListener('resize', resize);
-
-        class Particle {
-            constructor() { this.reset(); }
-            reset() {
-                this.x = Math.random() * canvas.width;
-                this.y = Math.random() * canvas.height;
-                this.vx = (Math.random() - 0.5) * 0.4;
-                this.vy = (Math.random() - 0.5) * 0.4;
-                this.size = Math.random() * 2 + 0.5;
-                this.alpha = Math.random() * 0.4 + 0.1;
-                this.pulse = Math.random() * Math.PI * 2;
-                this.pulseSpeed = Math.random() * 0.02 + 0.005;
-            }
-            update() {
-                this.x += this.vx;
-                this.y += this.vy;
-                this.pulse += this.pulseSpeed;
-                if (this.x < 0 || this.x > canvas.width) this.vx *= -1;
-                if (this.y < 0 || this.y > canvas.height) this.vy *= -1;
-            }
-            draw() {
-                const a = this.alpha * (0.6 + 0.4 * Math.sin(this.pulse));
-                ctx.beginPath();
-                ctx.arc(this.x, this.y, this.size, 0, Math.PI * 2);
-                ctx.fillStyle = `rgba(168, 85, 247, ${a})`;
-                ctx.fill();
-            }
-        }
-
-        for (let i = 0; i < 100; i++) particles.push(new Particle());
-
-        function animate() {
-            ctx.clearRect(0, 0, canvas.width, canvas.height);
-            for (const p of particles) { p.update(); p.draw(); }
-            for (let i = 0; i < particles.length; i++) {
-                for (let j = i + 1; j < particles.length; j++) {
-                    const dx = particles[i].x - particles[j].x;
-                    const dy = particles[i].y - particles[j].y;
-                    const dist = Math.sqrt(dx * dx + dy * dy);
-                    if (dist < 150) {
-                        ctx.beginPath();
-                        ctx.moveTo(particles[i].x, particles[i].y);
-                        ctx.lineTo(particles[j].x, particles[j].y);
-                        ctx.strokeStyle = `rgba(99, 102, 241, ${0.1 * (1 - dist / 150)})`;
-                        ctx.lineWidth = 0.5;
-                        ctx.stroke();
-                    }
-                }
-            }
-            requestAnimationFrame(animate);
-        }
-        animate();
 
         // Tab switching
         const tabBtns = document.querySelectorAll('.tab-btn');
@@ -1525,6 +1423,7 @@
                 </div>
             </div>
         </div>
+<script src="/static/ep-particles.js?v={{APP_VERSION}}"></script>
 <script src="/static/ep-nav.js?v={{APP_VERSION}}"></script>
 </body>
 </html>

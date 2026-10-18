@@ -3,7 +3,6 @@ import urllib.parse
 
 
 SPECIAL_CDN_DOMAIN = "cccdn.net"
-SHORT_URL_DOMAINS = ("cinemacity.cc", SPECIAL_CDN_DOMAIN)
 DYNAMIC_WARP_BYPASS_DOMAINS = (
     SPECIAL_CDN_DOMAIN,
     "cinemacity.cc",
@@ -22,15 +21,8 @@ PROTECTED_CURL_DOMAINS = (
 MANIFEST_ONLY_CURL_DOMAINS = ("torrentio", "strem.fun")
 
 
-def hls_url_ttl_for(url: str, default_ttl: int, extended_ttl: int) -> int:
-    value = (url or "").lower()
-    return extended_ttl if any(domain in value for domain in SHORT_URL_DOMAINS) else default_ttl
-
-
-def is_dynamic_warp_bypass_candidate(domain: str, force: bool = False) -> bool:
+def is_dynamic_warp_bypass_candidate(domain: str) -> bool:
     value = (domain or "").lower()
-    if force:
-        return False
     return any(pattern in value for pattern in DYNAMIC_WARP_BYPASS_DOMAINS)
 
 
@@ -105,19 +97,6 @@ def should_use_short_manifest_urls(original_url: str, host_param: str, response_
     )
 
 
-def should_use_short_captured_manifest_urls(original_url: str, host_param: str) -> bool:
-    original = (original_url or "").lower()
-    host = (host_param or "").lower()
-    return (
-        "cinemacity.cc" in original
-        or "vidxgo" in original
-        or "vixsrc" in original
-        or "vixcloud" in original
-        or "streamvix" in original
-        or host in {"city", "cinemacity", "vixsrc", "vixcloud", "streamvix", "vidxgo"}
-    )
-
-
 def is_expired_embed_error(error_msg: str) -> bool:
     value = (error_msg or "").lower()
     return "expired vixsrc embed url" in value or (
@@ -163,7 +142,6 @@ async def fetch_browser_backed_key(extractors: dict, key_url: str, original_chan
 
 
 __all__ = [
-    "hls_url_ttl_for",
     "is_dynamic_warp_bypass_candidate",
     "prefer_default_family_for_url",
     "is_special_cdn_stream",
@@ -171,7 +149,6 @@ __all__ = [
     "prepare_curl_headers",
     "final_curl_request_url",
     "should_use_short_manifest_urls",
-    "should_use_short_captured_manifest_urls",
     "is_expired_embed_error",
     "extractor_name_for_log",
     "is_browser_key_request",

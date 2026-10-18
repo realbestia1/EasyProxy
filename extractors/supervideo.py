@@ -1,5 +1,5 @@
 from utils.packed import eval_solver
-from extractors.base import BaseExtractor, ExtractorError
+from extractors.base import BaseExtractor
 
 class SupervideoExtractor(BaseExtractor):
     """Supervideo URL extractor."""

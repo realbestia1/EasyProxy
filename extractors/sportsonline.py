@@ -121,9 +121,6 @@ class SportsonlineExtractor(BaseExtractor):
         deadline = self._host_backoff.get(self._host_of(url), 0.0)
         return max(0.0, deadline - time.monotonic())
 
-    def _get_random_proxy(self):
-        return random.choice(self.proxies) if self.proxies else None
-
     def update_request_headers(self, request_headers: dict | None):
         self.request_headers = request_headers or {}
 
@@ -193,18 +190,6 @@ class SportsonlineExtractor(BaseExtractor):
         page_headers["Sec-Fetch-Dest"] = "iframe"
         page_headers.pop("Sec-Fetch-User", None)
         return page_headers
-
-    def _looks_like_block_page(self, html: str) -> bool:
-        lowered = html.lower()
-        return any(
-            marker in lowered
-            for marker in (
-                "sorry, you have been blocked",
-                "attention required!",
-                "cloudflare",
-                "access denied",
-            )
-        )
 
     async def _get_session(self, url: str = None, force_direct: bool = False):
         force_direct = force_direct or self._force_direct
@@ -460,8 +445,6 @@ class SportsonlineExtractor(BaseExtractor):
                 timeout=15,
                 deadline=deadline,
             )
-            parsed_main = urlparse(main_url)
-            main_origin = f"{parsed_main.scheme}://{parsed_main.netloc}"
 
             # Extract first iframe (src can appear in any attribute order)
             iframe_match = re.search(r'<iframe[^>]+(?<!data-)src=["\']([^"\']+)["\']', main_html, re.IGNORECASE)

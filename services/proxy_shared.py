@@ -66,6 +66,17 @@ from services.manifest_rewriter import ManifestRewriter
 from services.secure_state import open_state, seal_state
 
 
+_TEMPLATES_DIR = os.path.join(
+    os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "templates"
+)
+
+
+def read_template(name: str) -> str:
+    """Read a template file with the shared {{APP_VERSION}} substitution."""
+    with open(os.path.join(_TEMPLATES_DIR, name), "r", encoding="utf-8") as handle:
+        return handle.read().replace("{{APP_VERSION}}", APP_VERSION)
+
+
 def safe_log_endpoint(value: str | None) -> str:
     """Return URL endpoint without query tokens or credentials."""
     parsed = urlparse(str(value or ""))
@@ -163,10 +174,6 @@ try:
 except ImportError:
     logger.warning("PlaylistBuilder module not found. PlaylistBuilder functionality disabled.")
 
-_STDLIB_MODULES = {
-    "asyncio", "logging", "random", "re", "sys", "os", "time", "socket",
-    "urllib", "base64", "binascii", "hashlib", "hmac", "json", "ssl",
-}
 
 class ProxyDeadRetryError(Exception):
     """Raised when the proxy dies during playlist fetch; triggers re-extraction."""
@@ -316,6 +323,4 @@ def get_active_streams() -> list:
     return active
 
 
-__all__ = [name for name in globals() if not name.startswith('__') and name not in _STDLIB_MODULES]
 # Commonly used stdlib modules exposed via star import for downstream compatibility
-__all__ += ["asyncio", "re", "sys", "os", "time", "json", "base64", "hashlib", "ssl", "socket", "random", "logging", "urllib"]

@@ -9,14 +9,11 @@
         --bg-primary: #0a0a1a;
         --bg-secondary: #12122a;
         --bg-tertiary: #1a1a3e;
-        --surface-glass: rgba(255,255,255,0.03);
-        --border-primary: rgba(255,255,255,0.08);
         --text-primary: #f0f0f8;
         --text-secondary: #a0a0c0;
         --text-muted: #6b6b8d;
-        --accent-primary: #6366f1;
+        --surface-glass: rgba(255,255,255,0.03);
         --accent-glow: rgba(99,102,241,0.3);
-        --accent-error: #ef4444;
     }
     * { margin:0; padding:0; box-sizing:border-box; }
     body {
@@ -106,28 +103,6 @@
     <div id="error" class="error"></div>
 </div>
 <script>
-const canvas = document.getElementById('particles');
-const ctx = canvas.getContext('2d');
-let W, H;
-function resize() { W=canvas.width=innerWidth; H=canvas.height=innerHeight; }
-resize(); window.addEventListener('resize', resize);
-const particles = Array.from({length:50},()=>({x:Math.random()*W,y:Math.random()*H,vx:(Math.random()-0.5)*0.5,vy:(Math.random()-0.5)*0.5}));
-function animate() {
-    ctx.clearRect(0,0,W,H);
-    for (const p of particles) {
-        p.x+=p.vx; p.y+=p.vy;
-        if(p.x<0||p.x>W)p.vx*=-1;
-        if(p.y<0||p.y>H)p.vy*=-1;
-        ctx.beginPath(); ctx.arc(p.x,p.y,1.5,0,Math.PI*2);
-        ctx.fillStyle='rgba(99,102,241,0.3)'; ctx.fill();
-    }
-    for(let i=0;i<particles.length;i++)for(let j=i+1;j<particles.length;j++){
-        const dx=particles[i].x-particles[j].x, dy=particles[i].y-particles[j].y, dist=Math.sqrt(dx*dx+dy*dy);
-        if(dist<150){ctx.beginPath();ctx.moveTo(particles[i].x,particles[i].y);ctx.lineTo(particles[j].x,particles[j].y);ctx.strokeStyle=`rgba(99,102,241,${0.1*(1-dist/150)})`;ctx.lineWidth=0.5;ctx.stroke();}
-    }
-    requestAnimationFrame(animate);
-}
-animate();
 async function login() {
     const pwd = document.getElementById('password').value;
     const err = document.getElementById('error');
@@ -139,6 +114,7 @@ async function login() {
     } catch(e) { err.textContent='Errore di connessione'; err.style.display='block'; }
 }
 </script>
+<script src="/static/ep-particles.js?v={{APP_VERSION}}"></script>
 <script src="/static/ep-nav.js?v={{APP_VERSION}}"></script>
 </body>
 </html>

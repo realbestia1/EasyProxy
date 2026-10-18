@@ -2,7 +2,6 @@ import logging
 import sys
 import os
 import asyncio
-import aiohttp
 from aiohttp import web
 
 # Configura logging PRIMA di qualsiasi import che possa emettere log
@@ -25,11 +24,6 @@ from routes.wg_tunnels import setup_wg_tunnel_routes
 from routes.tor_proxy import setup_tor_proxy_routes
 
 logger = logging.getLogger(__name__)
-
-def _read_file(path):
-    """Helper for async file reading via run_in_executor."""
-    with open(path, 'r', encoding='utf-8') as f:
-        return f.read()
 
 # --- Logica di Avvio ---
 def create_app():

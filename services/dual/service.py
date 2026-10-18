@@ -459,22 +459,6 @@ async def subtitle_segment(request: web.Request) -> web.Response:
         raise DualServiceError(404, str(exc)) from exc
 
 
-async def offset_lookup(request: web.Request) -> web.Response:
-    body = await _json_body(request)
-    _require_session(request, body)
-    result = await offsets.lookup(body)
-    return _json({"found": bool(result), "offset": result})
-
-
-async def offset_report(request: web.Request) -> web.Response:
-    body = await _json_body(request)
-    _require_session(request, body)
-    result = body.get("offset")
-    if not isinstance(result, dict):
-        raise DualServiceError(400, "offset result required")
-    await offsets.report(body, result)
-    return _json({"ok": True})
-
 
 async def sync_audio(request: web.Request) -> web.Response:
     body = await _json_body(request)

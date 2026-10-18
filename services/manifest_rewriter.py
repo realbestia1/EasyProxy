@@ -30,13 +30,6 @@ def _keep_best_representation(root, namespace: str) -> None:
             if representation is not best:
                 adaptation_set.remove(representation)
 
-# Conditional import for DLHD detection
-# (Rimosso perche non serve piu logica speciale per DLHD nel rewriter)
-try:
-    DLHDExtractor = None  # Placeholder per compatibilita se servisse in futuro
-except ImportError:
-    pass
-
 
 class ManifestRewriter:
     @staticmethod
@@ -74,7 +67,6 @@ class ManifestRewriter:
         version = ManifestRewriter._required_hls_version(manifest_content)
         lines = manifest_content.split("\n")
         new_lines = []
-        has_version = False
         for line in lines:
             stripped = line.strip()
             if stripped == "#EXTM3U":
@@ -82,7 +74,6 @@ class ManifestRewriter:
                 new_lines.append(f"#EXT-X-VERSION:{version}")
                 continue
             if stripped.startswith("#EXT-X-VERSION:"):
-                has_version = True
                 continue
             new_lines.append(line)
         if not new_lines:

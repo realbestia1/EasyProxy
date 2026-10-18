@@ -1,5 +1,4 @@
 import logging
-import random
 from urllib.parse import urlparse
 
 from extractors.base import BaseExtractor

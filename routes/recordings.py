@@ -3,12 +3,11 @@ import logging
 import os
 from aiohttp import web
 import functools
-import shutil
 
 import config
 from config import check_password, APP_VERSION
 import config_store
-from services.proxy_shared import get_public_base_url
+from services.proxy_shared import get_public_base_url, read_template
 
 logger = logging.getLogger(__name__)
 
@@ -28,19 +27,13 @@ def setup_recording_routes(app, recording_manager):
         """Serve the recordings UI page."""
         if not check_password(request):
             raise web.HTTPFound('/admin/login')
-        template_path = os.path.join(
-            os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
-            'templates', 'recordings.html'
-        )
         try:
-            with open(template_path, 'r', encoding='utf-8') as f:
-                html_content = f.read()
+            html_content = read_template('recordings.html')
             proxy = app.get('proxy')
             latest_version = getattr(proxy, 'latest_version', 'Unknown') if proxy else 'Unknown'
             warp_status = getattr(proxy, 'warp_status', 'Unknown') if proxy else 'Unknown'
             is_outdated = latest_version not in ["Checking...", "Unknown", "Error", APP_VERSION]
             version_status_class = "outdated" if is_outdated else ""
-            html_content = html_content.replace("{{APP_VERSION}}", APP_VERSION)
             html_content = html_content.replace("{{LATEST_VERSION}}", latest_version)
             html_content = html_content.replace("{{VERSION_STATUS_CLASS}}", version_status_class)
             html_content = html_content.replace("{{WARP_STATUS}}", warp_status)
@@ -441,7 +434,7 @@ def setup_recording_routes(app, recording_manager):
                         logger.error(f"Failed to start recording after cleanup: {url}")
             # Even if recording failed, still redirect to live stream
             # so user can watch while we figure out what went wrong
-            logger.debug(f"Recording may have failed, but redirecting to live stream anyway")
+            logger.debug("Recording may have failed, but redirecting to live stream anyway")
 
         # Build proxy URL to watch the live stream while recording
         from urllib.parse import urlencode

@@ -87,5 +87,3 @@ class StreamHGExtractor(BaseExtractor):
 
         raise ExtractorError(f"STREAMHG extraction failed for {url}")
 
-    async def close(self):
-        await super().close()

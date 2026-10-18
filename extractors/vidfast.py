@@ -206,5 +206,3 @@ class VidFastExtractor:
             "bypass_warp": bypass_warp,
         }
 
-    async def close(self):
-        return None

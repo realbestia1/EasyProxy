@@ -1,5 +1,5 @@
 from utils.packed import eval_solver
-from extractors.base import BaseExtractor, ExtractorError
+from extractors.base import BaseExtractor
 
 class FileLionsExtractor(BaseExtractor):
     """FileLions URL extractor."""
@@ -32,5 +32,3 @@ class FileLionsExtractor(BaseExtractor):
             "bypass_warp": self.bypass_warp_active,
         }
 
-    async def close(self):
-        await super().close()

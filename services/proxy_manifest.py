@@ -123,7 +123,6 @@ class HLSProxyManifestHandlerMixin:
                         )
 
                     if resp.status != 200:
-                        error_text = await resp.text()
                         logger.error(
                             "❌ Failed to fetch MPD: status=%s [%s]",
                             resp.status,

@@ -1,14 +1,10 @@
-import logging
 from urllib.parse import urlparse
-import ssl
 import yarl
 from extractors.base import BaseExtractor, ExtractorError
 
 class GenericHLSExtractor(BaseExtractor):
     def __init__(self, request_headers, proxies=None, bypass_warp: bool = False):
         super().__init__(request_headers, proxies, extractor_name="generic", bypass_warp=bypass_warp)
-        # Overwrite _get_session to include the specific SSL context needed for generic streams
-        self._original_get_session = self._get_session
 
     async def _get_session(self, url: str = None):
         # ✅ FIX: Delega sempre al genitore per ricalcolare il proxy corrente.
@@ -20,7 +16,7 @@ class GenericHLSExtractor(BaseExtractor):
     async def extract(self, url, **kwargs):
         # ✅ AGGIORNATO: Rimossa validazione estensioni su richiesta utente.
         self._apply_routing_kwargs(url, kwargs)
-        session = await self._get_session(url)
+        await self._get_session(url)
         parsed_url = urlparse(url)
         origin = f"{parsed_url.scheme}://{parsed_url.netloc}"
         
@@ -109,5 +105,3 @@ class GenericHLSExtractor(BaseExtractor):
             "bypass_warp": self.bypass_warp_active,
         }
 
-    async def close(self):
-        await super().close()

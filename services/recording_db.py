@@ -117,9 +117,6 @@ class RecordingDB:
             """, (limit,))
         return [dict(row) for row in cursor.fetchall()]
 
-    def get_active_recordings(self) -> List[Dict[str, Any]]:
-        return self.get_all_recordings(status='recording')
-
     def update_recording_status(self, recording_id: str, status: str,
                                  error_message: str = None) -> bool:
         if status in ('completed', 'failed', 'stopped'):

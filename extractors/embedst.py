@@ -118,7 +118,7 @@ class EmbedStExtractor(BaseExtractor):
 
         m3u8 = data.get("m3u8")
         if not m3u8:
-            raise ExtractorError(f"EmbedSt: video not found (no m3u8 captured)")
+            raise ExtractorError("EmbedSt: video not found (no m3u8 captured)")
 
         headers = data.get("headers") or {}
         # The stream CDN (strmd.st) needs exactly these headers (UA/Referer/Origin).

@@ -11,34 +11,9 @@
             --bg-primary: #09090f;
             --bg-secondary: #111119;
             --bg-tertiary: #1a1a28;
-            --surface: rgba(255, 255, 255, 0.03);
-            --surface-glass: rgba(255, 255, 255, 0.06);
-            --surface-elevated: rgba(255, 255, 255, 0.1);
-            --primary-gradient: linear-gradient(135deg, #6366f1 0%, #a855f7 50%, #ec4899 100%);
-            --secondary-gradient: linear-gradient(135deg, #06b6d4 0%, #3b82f6 100%);
-            --accent-gradient: linear-gradient(135deg, #10b981 0%, #059669 100%);
-            --neon-gradient: linear-gradient(90deg, #06b6d4, #a855f7, #ec4899, #a855f7, #06b6d4);
-            --accent-primary: #6366f1;
-            --accent-secondary: #a855f7;
-            --accent-success: #10b981;
-            --accent-warning: #f59e0b;
-            --accent-error: #ef4444;
-            --accent-info: #06b6d4;
-            --neon-green: #39ff14;
             --text-primary: #ffffff;
             --text-secondary: #a1a1aa;
             --text-muted: #6b6b80;
-            --text-accent: #e4e4e7;
-            --border-primary: rgba(255, 255, 255, 0.08);
-            --border-accent: rgba(255, 255, 255, 0.15);
-            --glow-primary: 0 0 30px rgba(99, 102, 241, 0.25);
-            --glow-secondary: 0 0 40px rgba(168, 85, 247, 0.3);
-            --glow-success: 0 0 30px rgba(16, 185, 129, 0.25);
-            --shadow-dark: 0 25px 60px -15px rgba(0, 0, 0, 0.8);
-            --transition-fast: all 0.15s cubic-bezier(0.4, 0, 0.2, 1);
-            --transition-normal: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
-            --border-radius: 16px;
-            --border-radius-large: 24px;
         }
         * { margin: 0; padding: 0; box-sizing: border-box; }
         body {
@@ -258,7 +233,7 @@
         }
         .badge-on { background: rgba(16,185,129,0.15); color: var(--accent-success); }
         .badge-off { background: rgba(239,68,68,0.15); color: var(--accent-error); }
-        .badge-warp { background: rgba(59,130,246,0.15); color: #3b82f6; }
+        
         .status { margin: 0.5rem 0 0.75rem; font-size: 0.8rem; color: var(--text-muted); }
         .status.connected { color: var(--accent-success); }
         .status.disconnected { color: var(--accent-error); }
@@ -343,19 +318,11 @@
             border-radius: 20px; border: 1px solid var(--border-primary);
             margin-top: 0.75rem;
         }
-        .modal-overlay {
-            position: fixed; inset: 0; z-index: 999;
-            background: rgba(0,0,0,0.6); backdrop-filter: blur(4px);
-            display: none; align-items: center; justify-content: center;
-        }
-        .modal-overlay.show { display: flex; }
-        .modal-box {
-            background: var(--bg-secondary); border: 1px solid var(--border-primary);
-            border-radius: 16px; padding: 1.5rem; width: 90%; max-width: 500px;
-            max-height: 70vh; display: flex; flex-direction: column;
-        }
+        
+        
+        
         .modal-box h3 { margin-bottom: 1rem; font-size: 1.1rem; }
-        .modal-list { flex: 1; overflow-y: auto; margin-bottom: 1rem; }
+        
         .modal-list .item {
             display: flex; align-items: center; justify-content: space-between;
             padding: 6px 10px; margin-bottom: 4px;
@@ -367,9 +334,9 @@
             padding: 2px 8px; border-radius: 4px;
         }
         .modal-list .item .remove:hover { background: rgba(239,68,68,0.15); }
-        .modal-add-row { display: flex; gap: 8px; }
+        
         .modal-add-row input { flex: 1; }
-        .add-form { display: flex; gap: 8px; align-items: center; margin-top: 8px; flex-wrap: wrap; }
+        
         .add-form input, .add-form select { flex: 1; min-width: 120px; }
         .ll-item {
             display: flex; align-items: center; justify-content: space-between;
@@ -1311,61 +1278,6 @@ async function toggleDvr() {
     setToggle('dvr-toggle', newVal);
 }
 
-// Particles
-const canvas = document.getElementById('particles-canvas');
-const ctx = canvas.getContext('2d');
-let particles = [];
-function resize() { canvas.width = window.innerWidth; canvas.height = window.innerHeight; }
-resize();
-window.addEventListener('resize', resize);
-class Particle {
-    constructor() { this.reset(); }
-    reset() {
-        this.x = Math.random() * canvas.width;
-        this.y = Math.random() * canvas.height;
-        this.vx = (Math.random() - 0.5) * 0.4;
-        this.vy = (Math.random() - 0.5) * 0.4;
-        this.size = Math.random() * 2 + 0.5;
-        this.alpha = Math.random() * 0.4 + 0.1;
-        this.pulse = Math.random() * Math.PI * 2;
-        this.pulseSpeed = Math.random() * 0.02 + 0.005;
-    }
-    update() {
-        this.x += this.vx; this.y += this.vy;
-        this.pulse += this.pulseSpeed;
-        if (this.x < 0 || this.x > canvas.width) this.vx *= -1;
-        if (this.y < 0 || this.y > canvas.height) this.vy *= -1;
-    }
-    draw() {
-        const a = this.alpha * (0.6 + 0.4 * Math.sin(this.pulse));
-        ctx.beginPath();
-        ctx.arc(this.x, this.y, this.size, 0, Math.PI * 2);
-        ctx.fillStyle = `rgba(168, 85, 247, ${a})`;
-        ctx.fill();
-    }
-}
-for (let i = 0; i < 100; i++) particles.push(new Particle());
-function animate() {
-    ctx.clearRect(0, 0, canvas.width, canvas.height);
-    for (const p of particles) { p.update(); p.draw(); }
-    for (let i = 0; i < particles.length; i++) {
-        for (let j = i + 1; j < particles.length; j++) {
-            const dx = particles[i].x - particles[j].x;
-            const dy = particles[i].y - particles[j].y;
-            const dist = Math.sqrt(dx * dx + dy * dy);
-            if (dist < 150) {
-                ctx.beginPath();
-                ctx.moveTo(particles[i].x, particles[i].y);
-                ctx.lineTo(particles[j].x, particles[j].y);
-                ctx.strokeStyle = `rgba(99, 102, 241, ${0.1 * (1 - dist / 150)})`;
-                ctx.lineWidth = 0.5;
-                ctx.stroke();
-            }
-        }
-    }
-    requestAnimationFrame(animate);
-}
-animate();
 </script>
 
 <script>
@@ -1485,6 +1397,7 @@ setInterval(async () => {
     }
 }, 5000);
 </script>
+<script src="/static/ep-particles.js?v={{APP_VERSION}}"></script>
 <script src="/static/ep-nav.js?v={{APP_VERSION}}"></script>
 </body>
 </html>

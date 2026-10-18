@@ -153,9 +153,6 @@ input:focus, select:focus, textarea:focus {
 
 .badge-on { background: rgba(16, 185, 129, 0.18); color: #6ee7b7; }
 .badge-off { background: rgba(148, 163, 184, 0.15); color: var(--text-secondary); }
-.badge-warn { background: rgba(245, 158, 11, 0.18); color: #fcd34d; }
-.badge-error { background: rgba(239, 68, 68, 0.18); color: #fca5a5; }
-
 .status {
     font-size: 0.72rem; font-weight: 600; padding: 3px 9px;
     border-radius: 50px; background: var(--surface-elevated);

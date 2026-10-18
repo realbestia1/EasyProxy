@@ -13,26 +13,11 @@
             --bg-primary: #09090f;
             --bg-secondary: #111119;
             --bg-tertiary: #1a1a28;
-            --surface-glass: rgba(255, 255, 255, 0.06);
-            --surface-elevated: rgba(255, 255, 255, 0.1);
-            --primary-gradient: linear-gradient(135deg, #6366f1 0%, #a855f7 50%, #ec4899 100%);
-            --neon-gradient: linear-gradient(90deg, #06b6d4, #a855f7, #ec4899, #a855f7, #06b6d4);
-            --accent-success: #10b981;
-            --accent-warning: #f59e0b;
-            --accent-error: #ef4444;
+            --surface            --surface-elevated: rgba(255, 255, 255, 0.1);
             --text-primary: #ffffff;
             --text-secondary: #a1a1aa;
             --text-muted: #6b6b80;
-            --border-primary: rgba(255, 255, 255, 0.08);
-            --border-accent: rgba(255, 255, 255, 0.15);
-            --glow-primary: 0 0 30px rgba(99, 102, 241, 0.25);
-            --border-radius: 16px;
-            --border-radius-large: 24px;
-            --transition-normal: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
             --font-family: 'Inter', -apple-system, sans-serif;
-            --transition-fast: all 0.15s cubic-bezier(0.4, 0, 0.2, 1);
-            --glow-secondary: 0 0 40px rgba(168, 85, 247, 0.3);
-            --shadow-dark: 0 25px 60px -15px rgba(0, 0, 0, 0.8);
         }
 
         * { margin: 0; padding: 0; box-sizing: border-box; }
@@ -142,34 +127,11 @@
             50% { box-shadow: 0 0 20px #39ff14, 0 0 30px #39ff14; }
         }
 
-        .page-nav {
-            display: flex;
-            gap: 0.75rem;
-            flex-wrap: wrap;
-        }
+        
 
-        .nav-link {
-            display: inline-flex;
-            align-items: center;
-            gap: 6px;
-            padding: 0.6rem 1.25rem;
-            border-radius: var(--border-radius);
-            text-decoration: none;
-            font-weight: 600;
-            font-size: 0.9rem;
-            background: var(--surface-glass);
-            color: var(--text-primary);
-            border: 1px solid var(--border-primary);
-            backdrop-filter: blur(20px);
-            transition: var(--transition-normal);
-        }
+        
 
-        .nav-link:hover {
-            transform: translateY(-2px);
-            background: var(--surface-elevated);
-            border-color: var(--border-accent);
-            box-shadow: var(--glow-primary);
-        }
+        
 
         .version-info-row {
             display: flex;
