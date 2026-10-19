@@ -1,6 +1,7 @@
 import asyncio
 import gc
 import gzip
+from contextlib import asynccontextmanager
 import hmac
 import logging
 import os
@@ -1306,19 +1307,68 @@ class HLSProxyCoreMixin:
                 return name
         return None
 
-    def _invalidate_extractors(self):
-        """Retire active extractors so in-flight requests can finish, while
-        new requests get fresh instances with updated routing/proxies."""
+    @asynccontextmanager
+    async def hold_extractor(self, extractor):
+        """Use an already-resolved extractor; retire it when the last
+        concurrent user leaves, even if the block raises."""
+        inflight = getattr(self, "_extractor_inflight", None)
+        if inflight is None:
+            inflight = self._extractor_inflight = {}
+        key = id(extractor)
+        inflight[key] = inflight.get(key, 0) + 1
+        try:
+            yield extractor
+        finally:
+            remaining = inflight.get(key, 1) - 1
+            if remaining > 0:
+                inflight[key] = remaining
+            else:
+                inflight.pop(key, None)
+                HLSProxyCoreMixin._retire_extractors(self, [extractor])
+
+    @asynccontextmanager
+    async def borrow_extractor(self, url, request_headers, host=None, bypass_warp=False):
+        """Look up an extractor and retire it when the block exits: it only
+        lives for the operation that borrowed it."""
+        extractor = await self.get_extractor(
+            url, request_headers, host=host, bypass_warp=bypass_warp
+        )
+        async with HLSProxyCoreMixin.hold_extractor(self, extractor):
+            yield extractor
+
+    def _retire_extractors(self, extractors):
+        """Detach extractor instances from the cache and drain their sessions:
+        close immediately when no request is in flight, with the cleanup loop
+        as backstop. New requests build fresh instances."""
         retired = getattr(self, "_retired_extractors", None)
         if retired is None:
             retired = self._retired_extractors = []
-        for extractor in list(self.extractors.values()):
+        atimes = getattr(self, "_retired_extractor_atimes", None)
+        if atimes is None:
+            atimes = self._retired_extractor_atimes = {}
+        inflight = getattr(self, "_extractor_inflight", None) or {}
+        now = time.time()
+        for extractor in extractors:
+            if extractor is None or id(extractor) in atimes or inflight.get(id(extractor)):
+                continue
+            for key in [k for k, e in self.extractors.items() if e is extractor]:
+                self.extractors.pop(key, None)
+                self._extractor_atimes.pop(key, None)
             retired.append(extractor)
-        self.extractors.clear()
-        if hasattr(self, "_extractor_atimes"):
-            self._extractor_atimes.clear()
-        if hasattr(self, "_extractor_stream_atimes"):
-            self._extractor_stream_atimes.clear()
+            atimes[id(extractor)] = now
+            # Close the sessions as soon as they have no in-flight request
+            # (retire_session drains first). Step 3b is the hard backstop.
+            sessions = {getattr(extractor, "session", None), *getattr(extractor, "_route_sessions", {}).values()}
+            for session in sessions:
+                # grace=0: the extractor is already out of the cache, so no new
+                # borrower can reach this session; in-flight requests are still
+                # honoured by the drain check.
+                retire_session(self, session, grace=0)
+
+    def _invalidate_extractors(self):
+        """Retire active extractors so in-flight requests can finish, while
+        new requests get fresh instances with updated routing/proxies."""
+        HLSProxyCoreMixin._retire_extractors(self, list(self.extractors.values()))
 
     @staticmethod
     def _stream_key_for_url(url: str | None) -> str | None:
@@ -1370,24 +1420,6 @@ class HLSProxyCoreMixin:
             cache.pop(oldest, None)
         return stream_key
 
-    def _touch_extractor_activity(self, extractor_key: str | None = None, stream_key: str | None = None):
-        now = time.time()
-        if extractor_key:
-            normalized = extractor_key.replace("_direct", "").replace("_noproxy", "")
-            matched = False
-            for k in list(self.extractors.keys()):
-                if k == extractor_key or k.startswith(normalized):
-                    self._extractor_atimes[k] = now
-                    if stream_key:
-                        self._extractor_stream_atimes[(k, stream_key)] = now
-                    matched = True
-            if matched:
-                return
-        for key in self.extractors:
-            self._extractor_atimes[key] = now
-            if stream_key:
-                self._extractor_stream_atimes[(key, stream_key)] = now
-
     def _mark_proxy_dead_if_allowed(self, proxy_url: str | None, dead_duration: int = 300, extractor_key: str | None = None):
         if not proxy_url:
             return
@@ -1431,6 +1463,13 @@ class HLSProxyCoreMixin:
             task.cancel()
         if retired:
             await asyncio.gather(*retired, return_exceptions=True)
+        refresh_tasks = list(getattr(self, "_cdn_refresh_tasks", {}).values())
+        for task in refresh_tasks:
+            task.cancel()
+        if refresh_tasks:
+            await asyncio.gather(*refresh_tasks, return_exceptions=True)
+        if hasattr(self, "_cdn_refresh_tasks"):
+            self._cdn_refresh_tasks.clear()
 
         try:
             if self.session and not self.session.closed:
@@ -1460,8 +1499,6 @@ class HLSProxyCoreMixin:
             self.extractors.clear()
             if hasattr(self, "_extractor_atimes"):
                 self._extractor_atimes.clear()
-            if hasattr(self, "_extractor_stream_atimes"):
-                self._extractor_stream_atimes.clear()
 
             retired = list(getattr(self, "_retired_extractors", ()))
             for extractor in retired:

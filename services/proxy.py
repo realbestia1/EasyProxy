@@ -26,7 +26,6 @@ class HLSProxy(
         # Shared extractors registry owned by the proxy instance
         self.extractors = {}
         self._extractor_atimes = {}
-        self._extractor_stream_atimes = {}
         self._retired_extractors = []
         self._retired_extractor_atimes = {}
 

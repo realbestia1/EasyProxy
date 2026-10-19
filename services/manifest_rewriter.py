@@ -470,7 +470,6 @@ class ManifestRewriter:
         stream_headers: dict,
         original_channel_url: str = "",
         api_password: str = None,
-        get_extractor_func=None,
         no_bypass: bool = False,
         shorten_url_func=None,
         bypass_warp: bool = False,

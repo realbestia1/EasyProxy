@@ -14,7 +14,6 @@ dlstreams_activity.txt
 !/scripts/wireproxy_ctl.sh
 !/scripts/cinejoy_runner.mjs
 !/scripts/pow_solver.js
-!/scripts/vidxgo_runner.mjs
 config.json
 /downloaded_files
 /cache

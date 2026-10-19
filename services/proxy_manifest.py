@@ -343,50 +343,53 @@ class HLSProxyManifestHandlerMixin:
                 extractor = await self.get_extractor(
                     target_url, combined_headers, host=forced_host, bypass_warp=bypass_warp
                 )
-
-                # The first resolver call identifies the extractor. Apply its
-                # admin routing policy before the actual extraction, then use a
-                # routing-specific cached extractor instance.
-                resolved_key = self._extractor_key_for_instance(extractor)
-                if not extractor_key or (resolved_key and not resolved_key.startswith("generic")):
-                    extractor_key = resolved_key or extractor_key
-                admin_warp_off, admin_proxy_off = get_extractor_routing_overrides(extractor_key)
-                routing_changed = False
-                if admin_warp_off and not bypass_warp:
-                    bypass_warp = True
-                    BYPASS_WARP_CONTEXT.set(True)
-                    routing_changed = True
-                if admin_proxy_off and not bypass_proxies:
-                    bypass_proxies = True
-                    BYPASS_PROXIES_CONTEXT.set(True)
-                    routing_changed = True
-                if routing_changed:
-                    selected_proxy = None
-                    SELECTED_PROXY_CONTEXT.set(None)
-                    STRICT_PROXY_CONTEXT.set(False)
-                    extractor = await self.get_extractor(
-                        target_url, combined_headers, host=forced_host, bypass_warp=bypass_warp
-                    )
+                try:
+                    # The first resolver call identifies the extractor. Apply its
+                    # admin routing policy before the actual extraction, then use a
+                    # routing-specific cached extractor instance.
                     resolved_key = self._extractor_key_for_instance(extractor)
                     if not extractor_key or (resolved_key and not resolved_key.startswith("generic")):
                         extractor_key = resolved_key or extractor_key
+                    admin_warp_off, admin_proxy_off = get_extractor_routing_overrides(extractor_key)
+                    routing_changed = False
+                    if admin_warp_off and not bypass_warp:
+                        bypass_warp = True
+                        BYPASS_WARP_CONTEXT.set(True)
+                        routing_changed = True
+                    if admin_proxy_off and not bypass_proxies:
+                        bypass_proxies = True
+                        BYPASS_PROXIES_CONTEXT.set(True)
+                        routing_changed = True
+                    if routing_changed:
+                        selected_proxy = None
+                        SELECTED_PROXY_CONTEXT.set(None)
+                        STRICT_PROXY_CONTEXT.set(False)
+                        self._retire_extractors([extractor])
+                        extractor = await self.get_extractor(
+                            target_url, combined_headers, host=forced_host, bypass_warp=bypass_warp
+                        )
+                        resolved_key = self._extractor_key_for_instance(extractor)
+                        if not extractor_key or (resolved_key and not resolved_key.startswith("generic")):
+                            extractor_key = resolved_key or extractor_key
 
-                # ✅ FIX CRITICO: Forza l'aggiornamento degli header dell'estrattore.
-                # Siccome gli estrattori vengono memorizzati in self.extractors (cache),
-                # se non aggiorniamo request_headers, i segmenti successivi userebbero
-                # gli header del primo manifest caricato, ignorando h_Referer/h_Origin.
-                if extractor:
-                    extractor.request_headers = combined_headers
+                    # ✅ FIX CRITICO: Forza l'aggiornamento degli header dell'estrattore.
+                    # Siccome gli estrattori vengono memorizzati in self.extractors (cache),
+                    # se non aggiorniamo request_headers, i segmenti successivi userebbero
+                    # gli header del primo manifest caricato, ignorando h_Referer/h_Origin.
+                    if extractor:
+                        extractor.request_headers = combined_headers
 
-
-                # Passa il flag force_refresh all'estrattore
-                result = await extractor.extract(
-                    target_url,
-                    force_refresh=force_refresh,
-                    request_headers=combined_headers,
-                    bypass_warp=bypass_warp,
-                    proxy=selected_proxy
-                )
+                    # Passa il flag force_refresh all'estrattore
+                    async with self.hold_extractor(extractor):
+                        result = await extractor.extract(
+                            target_url,
+                            force_refresh=force_refresh,
+                            request_headers=combined_headers,
+                            bypass_warp=bypass_warp,
+                            proxy=selected_proxy
+                        )
+                finally:
+                    self._retire_extractors([extractor])
                 resolved_key = self._extractor_key_for_instance(extractor)
                 if not extractor_key or (resolved_key and not resolved_key.startswith("generic")):
                     extractor_key = resolved_key or extractor_key
@@ -599,7 +602,6 @@ class HLSProxyManifestHandlerMixin:
                     stream_headers=stream_headers,
                     original_channel_url=original_channel_url,
                     api_password=api_password,
-                    get_extractor_func=lambda url, headers, host=None: self.get_extractor(url, headers, host, bypass_warp=bypass_warp),
                     no_bypass=no_bypass,
                     shorten_url_func=self.shorten_hls_url,
                     bypass_warp=bypass_warp,
@@ -825,19 +827,16 @@ class HLSProxyManifestHandlerMixin:
                 logger.warning("Proxy died during playlist fetch, re-extracting %s (orig URL: %s)", target_url, extraction_url)
                 extractor2 = None
                 try:
-                    extractor2 = await self.get_extractor(
+                    async with self.borrow_extractor(
                         extraction_url, combined_headers,
                         host=request.query.get("host"), bypass_warp=bypass_warp
-                    )
-                    if not extractor2:
-                        logger.warning("No extractor found for %s during re-extraction", extraction_url)
-                        return web.Response(text="Re-extraction failed: no extractor found", status=502)
-                    extractor2.request_headers = combined_headers
-                    result2 = await extractor2.extract(
-                        extraction_url, force_refresh=True,
-                        request_headers=combined_headers, bypass_warp=bypass_warp,
-                        proxy=None,
-                    )
+                    ) as extractor2:
+                        extractor2.request_headers = combined_headers
+                        result2 = await extractor2.extract(
+                            extraction_url, force_refresh=True,
+                            request_headers=combined_headers, bypass_warp=bypass_warp,
+                            proxy=None,
+                        )
                     stream_url2 = result2["destination_url"]
                     stream_headers2 = result2.get("request_headers", {})
                     selected_proxy2 = result2.get("selected_proxy")

@@ -48,6 +48,8 @@ _PROXY_ENV_KEYS = (
     "NO_PROXY", "no_proxy",
 )
 
+
+
 class HLSProxyPagesMixin:
 
     async def handle_playlist_request(self, request):
@@ -839,6 +841,8 @@ class HLSProxyPagesMixin:
             _SPEEDTEST_STATE["error"] = str(e)
         finally:
             _SPEEDTEST_STATE["running"] = False
+            # Release the freed pages instead of waiting for the 60s tick.
+            await self._compact_heap()
 
     @admin_guard
     async def handle_admin_api_test_extractors(self, request):
@@ -891,11 +895,13 @@ class HLSProxyPagesMixin:
                 async with sem:
                     entry = {"extractor": name, "url": url, "ok": False}
                     try:
-                        extractor = await self.get_extractor(url, headers, host=name)
-                        timeout = getattr(extractor, "REQUEST_TIMEOUT_TOTAL", 30)
-                        result = await asyncio.wait_for(
-                            extractor.extract(url), timeout=timeout
-                        )
+                        async with self.borrow_extractor(
+                            url, headers, host=name
+                        ) as extractor:
+                            timeout = getattr(extractor, "REQUEST_TIMEOUT_TOTAL", 30)
+                            result = await asyncio.wait_for(
+                                extractor.extract(url), timeout=timeout
+                            )
                         destination = (result or {}).get("destination_url") or ""
                         entry["ok"] = bool(destination)
                         entry["destination_url"] = destination
@@ -1014,6 +1020,7 @@ class HLSProxyPagesMixin:
             "--write-out", "%{size_upload}\\t%{speed_upload}\\t%{time_total}",
             url,
         ]
+        # communicate() closes stdin and would truncate the upload to a few KB.
         process = subprocess.Popen(
             command,
             stdin=subprocess.PIPE,
@@ -1040,12 +1047,15 @@ class HLSProxyPagesMixin:
         feeder = threading.Thread(target=feed_stdin, daemon=True)
         feeder.start()
         try:
-            stdout, stderr = process.communicate(timeout=duration + 15)
+            process.wait(timeout=duration + 15)
         except subprocess.TimeoutExpired:
             process.kill()
-            stdout, stderr = process.communicate()
+            process.wait()
+            feeder.join(timeout=2)
             raise RuntimeError("Speedtest upload timed out")
-        feeder.join(timeout=2)
+        feeder.join(timeout=5)
+        stdout = process.stdout.read()
+        stderr = process.stderr.read()
         if process.returncode not in (0, 28):
             message = stderr.decode(errors="replace").strip() or "connection failed"
             raise RuntimeError(f"Speedtest upload failed: {message[:180]}")
@@ -1105,7 +1115,8 @@ class HLSProxyPagesMixin:
                 last_error = exc
                 continue
             upload_bytes, upload_speed, upload_time = metrics.split("\t")
-            if float(upload_bytes) > 0:
+            # A rejected/closed upload reports a few KB: require a real stream.
+            if float(upload_bytes) > 128 * 1024:
                 upload = (upload_bytes, upload_speed, upload_time)
                 break
         if upload is None:

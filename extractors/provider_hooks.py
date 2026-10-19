@@ -1,4 +1,3 @@
-import re
 import urllib.parse
 
 
@@ -110,37 +109,6 @@ def extractor_name_for_log(extractor) -> str:
     return type(extractor).__name__
 
 
-def is_browser_key_request(key_url: str, original_channel_url: str | None) -> bool:
-    if re.search(r"/key/premium\d+/", key_url or ""):
-        return True
-    return bool(
-        original_channel_url
-        and re.search(r"/proxy/.+/premium\d+/mono\.\w+", original_channel_url)
-    )
-
-
-async def fetch_browser_backed_key(extractors: dict, key_url: str, original_channel_url: str | None, get_extractor):
-    extractor = extractors.get("dlstreams")
-    if extractor and hasattr(extractor, "_browser_key_cache"):
-        cached_key = extractor._browser_key_cache.get(key_url)
-        if cached_key:
-            return cached_key
-
-    if extractor and hasattr(extractor, "fetch_key_via_browser"):
-        fetch_url = original_channel_url or key_url
-        return await extractor.fetch_key_via_browser(key_url, fetch_url)
-
-    if original_channel_url:
-        extractor = await get_extractor(original_channel_url, {})
-        if hasattr(extractor, "fetch_key_via_browser"):
-            return await extractor.fetch_key_via_browser(key_url, original_channel_url)
-
-    return None
-
-
-
-
-
 __all__ = [
     "is_dynamic_warp_bypass_candidate",
     "prefer_default_family_for_url",
@@ -151,6 +119,4 @@ __all__ = [
     "should_use_short_manifest_urls",
     "is_expired_embed_error",
     "extractor_name_for_log",
-    "is_browser_key_request",
-    "fetch_browser_backed_key",
 ]

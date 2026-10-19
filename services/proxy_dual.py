@@ -340,12 +340,6 @@ class HLSProxyDualMixin:
         extractor = None
         extractor_key = None
         try:
-            extractor = await self.get_extractor(
-                target_url,
-                headers,
-                host=extractor_name,
-                bypass_warp=warp_off,
-            )
             extract_kwargs = {
                 "request_headers": headers,
                 "bypass_warp": warp_off,
@@ -353,7 +347,13 @@ class HLSProxyDualMixin:
             }
             if required_resolution > 0:
                 extract_kwargs["required_resolution"] = required_resolution
-            result = await extractor.extract(target_url, **extract_kwargs)
+            async with self.borrow_extractor(
+                target_url,
+                headers,
+                host=extractor_name,
+                bypass_warp=warp_off,
+            ) as extractor:
+                result = await extractor.extract(target_url, **extract_kwargs)
             extractor_key = self._extractor_key_for_instance(extractor)
             base_name = (extractor_key or extractor_name).replace("_direct", "").replace("_noproxy", "")
             selected_proxy = result.get("selected_proxy")

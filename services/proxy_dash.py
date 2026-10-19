@@ -10,8 +10,6 @@ from services.proxy_shared import (
     get_ssl_setting_for_url,
     get_proxy_for_url,
     decrypt_segment,
-    is_browser_key_request,
-    fetch_browser_backed_key,
     binascii,
 )
 from services.secure_state import open_state, seal_state
@@ -157,9 +155,6 @@ class HLSProxyDashMixin:
                 _dash_proxy_token = _shared.BYPASS_PROXIES_CONTEXT.set(True)
             else:
                 _dash_proxy_token = None
-
-            if hasattr(self, "_touch_extractor_activity"):
-                self._touch_extractor_activity(extractor_key, routing.get("stream_key"))
 
             session_kwargs = {
                 "bypass_warp": bypass_warp,
@@ -310,38 +305,6 @@ class HLSProxyDashMixin:
             # aiohttp already decodes query parameters once.
             # Avoid unquoting again or embedded encoded URLs may break.
 
-            original_channel_url = request.query.get("original_channel_url")
-
-            is_browser_key = is_browser_key_request(key_url, original_channel_url)
-            if is_browser_key:
-                try:
-                    browser_key = await fetch_browser_backed_key(
-                        self.extractors,
-                        key_url,
-                        original_channel_url,
-                        self.get_extractor,
-                    )
-                    if browser_key:
-                        logger.info("AES key served from browser-backed provider cache (%d bytes)", len(browser_key))
-                        return web.Response(
-                            body=browser_key,
-                            content_type="application/octet-stream",
-                            headers={
-                                "Access-Control-Allow-Origin": "*",
-                                "Access-Control-Allow-Headers": "*",
-                                "Cache-Control": "no-cache, no-store, must-revalidate",
-                            },
-                        )
-                except Exception as browser_key_exc:
-                    logger.warning(
-                        "Browser-backed key fetch failed, falling back to direct request: %s "
-                        "[extractor=%s source=%s]",
-                        browser_key_exc,
-                        request.query.get("extractor_key") or "unknown",
-                        _safe_endpoint(original_channel_url),
-                    )
-
-
             # Inizializza gli header esclusivamente da quelli passati dinamicamente
             headers = {}
             for param_name, param_value in request.query.items():
@@ -376,9 +339,6 @@ class HLSProxyDashMixin:
                         _key_proxy_token = _shared.BYPASS_PROXIES_CONTEXT.set(True)
             if bypass_warp and forced_proxy and _shared.is_warp_proxy_url(forced_proxy):
                 forced_proxy = None
-
-            if hasattr(self, "_touch_extractor_activity"):
-                self._touch_extractor_activity(extractor_key, request.query.get("stream_key"))
 
             _GLOBAL_PROXIES = _shared.GLOBAL_PROXIES
             _ENABLE_WARP = _shared.ENABLE_WARP
@@ -555,20 +515,6 @@ class HLSProxyDashMixin:
                             )
                             return web.Response(text="Proxy failed and strict mode prevents direct fallback", status=502)
                         logger.warning("AES key request giving up; direct fallback disabled (%s)", key_context)
-
-                        # --- LOGICA DI INVALIDAZIONE AUTOMATICA ---
-                        url_param = request.query.get("original_channel_url")
-                        if url_param:
-                            extractor = None
-                            try:
-                                extractor = await self.get_extractor(url_param, {})
-                                if hasattr(extractor, "invalidate_cache_for_url"):
-                                    await extractor.invalidate_cache_for_url(url_param)
-                            except Exception as cache_e:
-                                logger.error(
-                                    f"⚠️ Error during automatic cache invalidation: {cache_e}"
-                                )
-                        # --- FINE LOGICA ---
                         return web.Response(
                             text=f"Key fetch failed: {resp.status}", status=resp.status
                         )

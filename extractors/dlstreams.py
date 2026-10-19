@@ -238,6 +238,12 @@ class DLStreamsExtractor(BaseExtractor):
     # The recorded player preference must never override that pin.
     PLAYER1_FIRST_CHANNELS = frozenset({"861"})
 
+    # Shared across instances: the extractor instance is retired right after
+    # each extraction, so anti-rate-limit state must outlive it.
+    _stream_cache: dict = {}
+    _player_preference: dict = {}
+    _host_backoff: dict = {}
+
     def __init__(self, request_headers: dict = None, proxies: list = None, bypass_warp: bool = False):
         super().__init__(request_headers or {}, proxies, extractor_name="dlstreams", bypass_warp=bypass_warp)
         self.request_headers = request_headers or {}
@@ -252,17 +258,13 @@ class DLStreamsExtractor(BaseExtractor):
         self.proxies = proxies or []
         self.bypass_warp_active = bypass_warp
         self._inflight_extract_tasks: dict = {}
-        self._stream_cache: dict = {}
-        # channel_id -> player page URL that last validated, so a re-scrape
-        # keeps the same source instead of jumping to another player.
-        self._player_preference: dict[str, str] = {}
-        # host -> monotonic deadline: honour upstream Retry-After instead of
-        # scraping a host that already said "too many requests".
-        self._host_backoff: dict[str, float] = {}
 
     @staticmethod
     def _host_of(url: str) -> str:
         return (urlparse(url).hostname or "").lower()
+
+    def _route_key(self) -> tuple:
+        return (self._forced_proxy, self._force_direct, self.bypass_warp_active)
 
     @classmethod
     def _parse_retry_after(cls, value: str | None) -> float | None:
@@ -304,11 +306,8 @@ class DLStreamsExtractor(BaseExtractor):
     def _rate_limit_wait(self) -> float:
         """Longest remaining host backoff, dropping expired entries."""
         now = time.monotonic()
-        self._host_backoff = {
-            host: deadline
-            for host, deadline in self._host_backoff.items()
-            if deadline > now
-        }
+        for host in [h for h, deadline in self._host_backoff.items() if deadline <= now]:
+            self._host_backoff.pop(host, None)
         if not self._host_backoff:
             return 0.0
         return max(self._host_backoff.values()) - now
@@ -332,7 +331,7 @@ class DLStreamsExtractor(BaseExtractor):
         # mid-playback changes the media sequence, the PIDs and the parameter
         # sets, which players report as "media sequence changed unexpectedly"
         # plus "non-existing SPS/PPS" and a frozen/green picture.
-        pinned = self._player_preference.get(channel_id)
+        pinned = self._player_preference.get((channel_id, self._route_key()))
         if (
             pinned in players
             and players[0] != pinned
@@ -881,7 +880,7 @@ class DLStreamsExtractor(BaseExtractor):
                 ):
                     logger.info("DLStreams: working stream found via %s", candidate)
                     if channel_id not in self.PLAYER1_FIRST_CHANNELS:
-                        self._player_preference[channel_id] = candidate
+                        self._player_preference[(channel_id, self._route_key())] = candidate
                     result = self._build_result(stream_url, playback_headers)
                     result["_validated"] = True
                     return result
@@ -949,6 +948,7 @@ class DLStreamsExtractor(BaseExtractor):
         """Extracts the M3U8 URL and headers bypassing the public watch page."""
         self._sync_entry_origin_from_url(url)
         self._apply_routing_kwargs(url, kwargs)
+        self._prune_stream_cache()
         channel_id = self._extract_channel_id(url)
         requested_player = urlparse(url)._replace(query="", fragment="").geturl()
         req_mode = (
@@ -1013,6 +1013,12 @@ class DLStreamsExtractor(BaseExtractor):
         elif result:
             result.pop("_validated", None)
         return result
+
+    @classmethod
+    def _prune_stream_cache(cls) -> None:
+        now = time.monotonic()
+        for key in [k for k, v in cls._stream_cache.items() if v[1] <= now]:
+            cls._stream_cache.pop(key, None)
 
     def _backoff_cache_entry(self, channel_key, cached: tuple[float, float, dict]) -> None:
         """Delay the next scrape, honouring any Retry-After from the hosts."""

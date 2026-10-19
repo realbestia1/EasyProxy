@@ -203,34 +203,39 @@ class HLSProxyExtractorHandlerMixin:
             extractor = await self.get_extractor(
                 url, dict(request.headers), host=host_param, bypass_warp=bypass_warp
             )
+            try:
+                # Check if this extractor should bypass WARP or proxies based on admin config
+                extractor_key = self._extractor_key_for_instance(extractor)
+                if extractor_key:
+                    base_key = extractor_key.replace("_direct", "").replace("_noproxy", "")
 
-            # Check if this extractor should bypass WARP or proxies based on admin config
-            extractor_key = self._extractor_key_for_instance(extractor)
-            if extractor_key:
-                base_key = extractor_key.replace("_direct", "").replace("_noproxy", "")
-                
-                # Check WARP-off extractor policy.
-                warp_off_list = config_store.get("warp_off_extractors", [])
-                if base_key in warp_off_list:
-                    bypass_warp = True
-                    BYPASS_WARP_CONTEXT.set(True)
-                    logger.debug(f"WARP off for extractor: {base_key}")
-                    
-                # Check proxy off
-                proxy_off_list = config_store.get("proxy_off_extractors", [])
-                if base_key in proxy_off_list:
-                    BYPASS_PROXIES_CONTEXT.set(True)
-                    logger.debug(f"Proxy off for extractor: {base_key}")
-                    
-                if base_key in warp_off_list or base_key in proxy_off_list:
-                    extractor = await self.get_extractor(
-                        url, dict(request.headers), host=host_param, bypass_warp=bypass_warp
+                    # Check WARP-off extractor policy.
+                    warp_off_list = config_store.get("warp_off_extractors", [])
+                    if base_key in warp_off_list:
+                        bypass_warp = True
+                        BYPASS_WARP_CONTEXT.set(True)
+                        logger.debug(f"WARP off for extractor: {base_key}")
+
+                    # Check proxy off
+                    proxy_off_list = config_store.get("proxy_off_extractors", [])
+                    if base_key in proxy_off_list:
+                        BYPASS_PROXIES_CONTEXT.set(True)
+                        logger.debug(f"Proxy off for extractor: {base_key}")
+
+                    if base_key in warp_off_list or base_key in proxy_off_list:
+                        self._retire_extractors([extractor])
+                        extractor = await self.get_extractor(
+                            url, dict(request.headers), host=host_param, bypass_warp=bypass_warp
+                        )
+
+                extractor_timeout = getattr(extractor, "REQUEST_TIMEOUT_TOTAL", 30)
+                async with self.hold_extractor(extractor):
+                    result = await asyncio.wait_for(
+                        extractor.extract(url, **extractor_kwargs),
+                        timeout=extractor_timeout,
                     )
-
-            extractor_timeout = getattr(extractor, "REQUEST_TIMEOUT_TOTAL", 30)
-            result = await asyncio.wait_for(
-                extractor.extract(url, **extractor_kwargs), timeout=extractor_timeout
-            )
+            finally:
+                self._retire_extractors([extractor])
             result_query_params = _protected_extractor_params(result)
             extractor_key = getattr(extractor, "extractor_name", None) or self._extractor_key_for_instance(extractor)
             if extractor_key:
@@ -403,9 +408,6 @@ class HLSProxyExtractorHandlerMixin:
                     stream_headers=stream_headers,
                     original_channel_url=original_channel_url,
                     api_password=api_password,
-                    get_extractor_func=lambda url, headers, host=None: self.get_extractor(
-                        url, headers, host, bypass_warp=bypass_warp
-                    ),
                     no_bypass=no_bypass,
                     shorten_url_func=self.shorten_hls_url,
                     bypass_warp=bypass_warp,

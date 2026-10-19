@@ -18,7 +18,6 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     tar \
     nodejs \
     node-undici \
-    npm \
     netcat-openbsd \
     procps \
     ffmpeg \
@@ -77,11 +76,6 @@ ENV FLARESOLVERR_LOG_LEVEL=error
 
 # Copia esplicita
 COPY . .
-
-# Node dependencies for the VidXgo TLS-fingerprint runner (tls-client ->
-# ffi-napi, which ships prebuilds for linux-x64/arm64; --ignore-scripts keeps
-# the image build toolchain-free).
-RUN npm install --omit=dev --ignore-scripts --no-audit --no-fund
 
 # Windows checkouts may carry CRLF into shell scripts; Linux must execute LF.
 RUN sed -i 's/\r$//' entrypoint.sh scripts/wireproxy_ctl.sh

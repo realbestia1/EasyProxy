@@ -1,8 +1,13 @@
 import asyncio
 
 
-def retire_session(owner, session):
-    """Detach immediately; let requests already using the connector drain."""
+def retire_session(owner, session, grace: float = 30.0):
+    """Detach immediately; let requests already using the connector drain.
+
+    `grace` is the window that lets borrowers between session lookup and
+    request startup run before the drain check; it can be 0 when the caller
+    already removed every reference to the session (e.g. retired extractor).
+    """
     if session is None or session.closed:
         return
     tasks = getattr(owner, "_retired_session_tasks", None)
@@ -12,7 +17,7 @@ def retire_session(owner, session):
     async def drain():
         try:
             # Allow borrowers between session lookup and request startup to run.
-            await asyncio.sleep(30)
+            await asyncio.sleep(grace)
             while not session.closed:
                 connector = session.connector
                 if connector is None or not (

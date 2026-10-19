@@ -1,8 +1,0 @@
-{
-  "name": "easyproxy-node-helpers",
-  "private": true,
-  "description": "Node helpers used by some extractors (VidXgo TLS fingerprint runner).",
-  "dependencies": {
-    "tls-client": "0.0.5"
-  }
-}
