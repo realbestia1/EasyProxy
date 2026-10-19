@@ -29,6 +29,13 @@ from extractors.base import BaseExtractor, ExtractorError
 
 logger = logging.getLogger(__name__)
 
+
+def _consume_task_exception(task: asyncio.Task) -> None:
+    """Retrieve an abandoned task's exception to avoid noisy loop warnings."""
+    if not task.cancelled():
+        task.exception()
+
+
 # --- premium edge playlist tokens (dembed.st / strmd.st player) -------------
 # The premium edge only answers a playlist request that carries BOTH an allowed
 # Origin header and a short-lived viewer token bound to the caller's address.
@@ -224,6 +231,13 @@ class DLStreamsExtractor(BaseExtractor):
     # and turn concurrent requests into 500s.
     EXTRACT_BUDGET_SECONDS = 20.0
     CANDIDATE_TIMEOUT_SECONDS = 6
+    # Manifest polls join the extraction already running for the same channel.
+    # The player (AptvPlayer/APTV) abandons a manifest request after ~10-15s, so
+    # waiting for the whole extract budget produced aborted responses (logged as
+    # 200 with 0 bytes) while the shared task kept running. Bound the join: on
+    # timeout the caller falls back to the cached URL (or a 503 the player
+    # retries) and the next poll can still harvest the shared task's result.
+    INFLIGHT_JOIN_TIMEOUT_SECONDS = 8.0
     # Players poll the extractor every few seconds. Re-scraping the player
     # pages on every poll gets the iframe host to answer 429, so reuse a
     # validated stream URL for a short window instead. When a re-scrape fails,
@@ -964,18 +978,22 @@ class DLStreamsExtractor(BaseExtractor):
 
         try:
             existing_task = self._inflight_extract_tasks.get(channel_key)
-            if existing_task and not existing_task.done():
+            if existing_task is not None:
                 logger.debug("DLStreams: waiting for in-flight extraction of %s", channel_key)
-                result = await existing_task
+                try:
+                    result = await self._join_inflight_extraction(channel_key, existing_task)
+                finally:
+                    if existing_task.done():
+                        self._drop_inflight(channel_key, existing_task)
             else:
                 task = asyncio.create_task(self._extract_impl(url, channel_id=channel_id, **kwargs))
                 self._inflight_extract_tasks[channel_key] = task
+                task.add_done_callback(_consume_task_exception)
                 try:
-                    result = await task
+                    result = await self._join_inflight_extraction(channel_key, task)
                 finally:
-                    current_task = self._inflight_extract_tasks.get(channel_key)
-                    if current_task is task:
-                        self._inflight_extract_tasks.pop(channel_key, None)
+                    if task.done():
+                        self._drop_inflight(channel_key, task)
         except Exception:
             if cached and cached[1] > time.monotonic():
                 if await self._is_cached_still_alive(cached[2]):
@@ -1013,6 +1031,29 @@ class DLStreamsExtractor(BaseExtractor):
         elif result:
             result.pop("_validated", None)
         return result
+
+    async def _join_inflight_extraction(self, channel_key, task: asyncio.Task) -> Dict[str, Any]:
+        """Wait for a shared extraction without releasing or cancelling it.
+
+        ``shield`` keeps the shared task alive when the wait times out, so the
+        scrape can finish in the background instead of being cancelled by a
+        player that already gave up on the request.
+        """
+        try:
+            return await asyncio.wait_for(
+                asyncio.shield(task), timeout=self.INFLIGHT_JOIN_TIMEOUT_SECONDS
+            )
+        except asyncio.TimeoutError:
+            logger.warning(
+                "DLStreams: in-flight extraction of %s still running after %.1fs, releasing the request",
+                channel_key,
+                self.INFLIGHT_JOIN_TIMEOUT_SECONDS,
+            )
+            raise ExtractorError("timed out waiting for in-flight extraction")
+
+    def _drop_inflight(self, channel_key, task: asyncio.Task) -> None:
+        if self._inflight_extract_tasks.get(channel_key) is task:
+            self._inflight_extract_tasks.pop(channel_key, None)
 
     @classmethod
     def _prune_stream_cache(cls) -> None:
