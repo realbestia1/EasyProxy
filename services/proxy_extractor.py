@@ -390,6 +390,20 @@ class HLSProxyExtractorHandlerMixin:
                     f"{urllib.parse.quote(value, safe='')}"
                 )
 
+            # 1. URL COMPLETO (Solo per il redirect)
+            full_proxy_url = f"{proxy_base}{endpoint}?d={encoded_url}{header_params}"
+
+            # Carry over redirect_stream param for nested redirects
+            if redirect_stream:
+                full_proxy_url += "&redirect_stream=true"
+
+            # DLStreams extraction is slow and rate-limited: send the player to
+            # the stable proxy manifest instead of serving it from this endpoint,
+            # so HLS reloads never re-scrape the provider.
+            if redirect_stream and extractor_key == "dlstreams" and endpoint == "/proxy/hls/manifest.m3u8":
+                logger.info("[PLAY] Redirecting DLStreams manifest to the stable proxy URL")
+                return web.HTTPFound(full_proxy_url)
+
             if redirect_stream and captured_manifest and endpoint == "/proxy/hls/manifest.m3u8":
                 original_channel_url = request.query.get("orig_url") or request.query.get("url") or request.query.get("d", "")
                 no_bypass = request.query.get("no_bypass") == "1"
@@ -464,13 +478,6 @@ class HLSProxyExtractorHandlerMixin:
                     rel_url=URL(endpoint).with_query(proxy_query)
                 )
                 return await self.handle_proxy_request(proxy_request)
-
-            # 1. URL COMPLETO (Solo per il redirect)
-            full_proxy_url = f"{proxy_base}{endpoint}?d={encoded_url}{header_params}"
-
-            # Carry over redirect_stream param for nested redirects
-            if redirect_stream:
-                full_proxy_url += "&redirect_stream=true"
 
             if redirect_stream:
                 logger.info("[PLAY] Proxying stream directly without redirect")
