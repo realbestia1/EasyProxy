@@ -1044,7 +1044,7 @@ class DLStreamsExtractor(BaseExtractor):
                 asyncio.shield(task), timeout=self.INFLIGHT_JOIN_TIMEOUT_SECONDS
             )
         except asyncio.TimeoutError:
-            logger.info(
+            logger.warning(
                 "DLStreams: in-flight extraction of %s still running after %.1fs, releasing the request",
                 channel_key,
                 self.INFLIGHT_JOIN_TIMEOUT_SECONDS,
