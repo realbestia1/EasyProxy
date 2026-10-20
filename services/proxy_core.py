@@ -755,7 +755,7 @@ class HLSProxyCoreMixin:
         if is_image:
             unwrapped = HLSProxyCoreMixin._unwrap_image_ts_payload(content)
             if unwrapped is not None:
-                logger.warning(
+                logger.debug(
                     "🔓 Unwrapped TS payload from image segment (%d -> %d bytes)",
                     len(content), len(unwrapped),
                 )

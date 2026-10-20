@@ -477,6 +477,8 @@ class MPDToHLSConverter:
         lines = ['#EXTM3U', '#EXT-X-VERSION:6']
         if not is_live:
             lines.append('#EXT-X-PLAYLIST-TYPE:VOD')
+        else:
+            lines.append('#EXT-X-START:TIME-OFFSET=-18.0')
         lines.append(f'#EXT-X-TARGETDURATION:{max(1, int(max(durations)) + 1)}')
         lines.append('#EXT-X-MEDIA-SEQUENCE:0')
 
@@ -568,7 +570,12 @@ class MPDToHLSConverter:
             # fMP4 richiede HLS versione 6 o 7, ma per .ts output usiamo v3 per compatibilità
             # Per LIVE: non usare VOD e non aggiungere ENDLIST
             if is_live:
-                lines = ['#EXTM3U', '#EXT-X-VERSION:3', '#EXT-X-INDEPENDENT-SEGMENTS']
+                lines = [
+                    '#EXTM3U',
+                    '#EXT-X-VERSION:3',
+                    '#EXT-X-INDEPENDENT-SEGMENTS',
+                    '#EXT-X-START:TIME-OFFSET=-18.0',
+                ]
             else:
                 # Target duration is emitted once below from the actual segment
                 # durations.  A duplicate tag makes some HLS.js versions treat

@@ -646,15 +646,18 @@ class HLSProxyStreamingMixin:
                 elif key.lower() == "cookie":
                     headers["Cookie"] = headers.pop(key)
 
-            # Pass through range and validation headers from client
+            # Image-wrapped segments must be fetched whole: a partial PNG
+            # cannot be unwrapped and would be dropped as 204, stalling iOS
+            # players that probe with a byte range.
+            image_segment = self._is_image_url(segment_url)
             for header in ["range", "if-none-match", "if-modified-since"]:
-                if header in request.headers:
+                if header in request.headers and not (header == "range" and image_segment):
                     headers[header] = request.headers[header]
 
             # DASH SegmentList relays carry the source byte-range in the
             # generated URL. Forward it when the player sends no Range header.
             source_range = request.query.get("range")
-            if source_range and re.fullmatch(r"\d+-\d+", source_range):
+            if source_range and not image_segment and re.fullmatch(r"\d+-\d+", source_range):
                 headers["Range"] = f"bytes={source_range}"
 
             # Media segments must not be content-encoded in transit.  aiohttp
@@ -1012,8 +1015,9 @@ class HLSProxyStreamingMixin:
 
             # Passa attraverso alcuni headers del client, ma FILTRA quelli che potrebbero leakare l'IP
             # Rimuoviamo specificamente i condizionali che possono causare 412/416 con URL dinamici
+            image_segment = self._is_image_url(stream_url)
             for header in ["range", "if-none-match", "if-modified-since"]:
-                if header in request.headers:
+                if header in request.headers and not (header == "range" and image_segment):
                     headers[header] = request.headers[header]
 
             # ✅ FIX: Esplicita rimozione di If-Match e If-Range che spesso causano 416 su CDNs dinamici
@@ -2233,6 +2237,31 @@ class HLSProxyStreamingMixin:
                     stream_url,
                     new_stream_url,
                     "Updated CDN token via manifest refresh",
+                )
+
+            # Signed provider URLs (e.g. Vavoo) expire. Send the player to a
+            # fresh stable manifest URL so it stops retrying the expired one.
+            if "manifest.m3u8" in request.path and new_stream_url != stream_url:
+                query = {"d": new_stream_url}
+                for key, value in (new_headers or {}).items():
+                    query[f"h_{key}"] = str(value)
+                for name in (
+                    "api_password", "disable_ssl", "warp", "proxy", "direct",
+                ):
+                    value = request.query.get(name)
+                    if value:
+                        query[name] = value
+                if refreshed.get("disable_ssl") or (new_headers or {}).get("X-EasyProxy-Disable-SSL") == "1":
+                    query["disable_ssl"] = "1"
+                if extractor_key:
+                    query["extractor_key"] = extractor_key
+                if stream_key:
+                    query["stream_key"] = stream_key
+                query["orig_url"] = orig_url
+                logger.info("↪️ [Manifest Refresh] Redirecting to fresh stable URL")
+                return web.HTTPFound(
+                    f"{get_public_base_url(request)}/proxy/hls/manifest.m3u8?"
+                    f"{urllib.parse.urlencode(query)}"
                 )
 
             return await self._proxy_stream(

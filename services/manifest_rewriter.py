@@ -1,4 +1,5 @@
 import logging
+import math
 import re
 import urllib.parse
 import xml.etree.ElementTree as ET
@@ -904,4 +905,26 @@ class ManifestRewriter:
                 # Tutti gli altri tag (es. #EXTINF, #EXT-X-ENDLIST)
                 rewritten_lines.append(line)
 
-        return ManifestRewriter._ensure_hls_version("\n".join(rewritten_lines))
+        # Native players (AVPlayer) trust TARGETDURATION for reload cadence.
+        # Some providers declare 6 while occasionally serving 6.4s segments.
+        text = "\n".join(rewritten_lines)
+        durations = [float(v) for v in re.findall(r"#EXTINF:\s*([0-9]+(?:\.[0-9]+)?)", text)]
+        if durations:
+            existing = max((int(v) for v in re.findall(r"#EXT-X-TARGETDURATION:\s*(\d+)", text)), default=0)
+            target = max(existing, math.ceil(max(durations)))
+            text = re.sub(r"#EXT-X-TARGETDURATION:\s*\d+", f"#EXT-X-TARGETDURATION:{target}", text)
+        if (
+            "#EXTINF" in text
+            and "#EXT-X-ENDLIST" not in text
+            and "#EXT-X-PLAYLIST-TYPE:VOD" not in text
+            and "#EXT-X-START:" not in text
+        ):
+            # Start live playback behind the edge: gives native players a
+            # multi-segment cushion instead of starting with an empty buffer.
+            text = text.replace(
+                "#EXTM3U",
+                "#EXTM3U\n#EXT-X-START:TIME-OFFSET=-18.0",
+                1,
+            )
+
+        return ManifestRewriter._ensure_hls_version(text)

@@ -115,7 +115,7 @@ class PlaylistBuilder:
                 # Mirror frontend mediahubmx: stesso rewrite delle vavoo.to
                 elif any(d in logical_line for d in ('vavoo.to', 'kool.to', 'vavoo.net', 'kool.ws', 'huhu.to', 'oha.to', 'voltop.net')):
                     encoded_url = urllib.parse.quote(logical_line, safe='')
-                    processed_url_content = f"{base_url}/proxy/manifest.m3u8?url={encoded_url}"
+                    processed_url_content = f"{base_url}/extractor/video.m3u8?host=vavoo&redirect_stream=true&d={encoded_url}"
                 elif 'livetv.sx' in logical_line or 'livetv' in logical_line:
                     encoded_url = urllib.parse.quote(logical_line, safe='')
                     processed_url_content = f"{base_url}/extractor/video.m3u8?host=livetv&redirect_stream=true&d={encoded_url}"

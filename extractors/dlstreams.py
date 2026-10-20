@@ -4,9 +4,9 @@ import asyncio
 import base64
 import json
 import math
+import shutil
 import time
 
-from html.parser import HTMLParser
 import urllib.parse
 from urllib.parse import urlparse, urljoin
 from typing import Dict, Any
@@ -27,6 +27,22 @@ import config as _cfg
 from extractors.base import BaseExtractor, ExtractorError
 
 logger = logging.getLogger(__name__)
+
+# A valid TS container can still carry an undecodable video track (dlive.sx
+# Player 2: green/black picture, working audio). Decode one frame with the
+# ffmpeg already present in the Docker image; container-only checks cannot
+# detect this, while a manual user would switch players.
+_VIDEO_PROBE_MIN_BYTES = 1024 * 1024
+_VIDEO_PROBE_MAX_ERRORS = 3
+_VIDEO_PROBE_TIMEOUT = 6.0
+_VIDEO_PROBE_MARKERS = (
+    "error while decoding",
+    "top block unavailable",
+    "Reference ",
+    "decode_slice_header error",
+    "Invalid data",
+    "corrupt",
+)
 
 # --- premium edge playlist tokens (dembed.st / strmd.st player) -------------
 # The premium edge only answers a playlist request that carries BOTH an allowed
@@ -171,16 +187,6 @@ async def ensure_premium_playlist_url(
     return f"{base}?{urllib.parse.urlencode(params)}"
 
 
-class _WatchPlayerParser(HTMLParser):
-    def __init__(self):
-        super().__init__()
-        self.player_src = None
-
-    def handle_starttag(self, tag, attrs):
-        attrs = dict(attrs)
-        if tag == "iframe" and attrs.get("id") == "playerFrame":
-            self.player_src = attrs.get("src")
-
 def _decode_barecrop_econfig(enc: str) -> str | None:
     """Decode window._econfig payload used by barecrop.net embeds (Player 2).
 
@@ -226,10 +232,6 @@ class DLStreamsExtractor(BaseExtractor):
     # No resolved-URL cache and no host backoff: the extractor endpoint answers
     # with a redirect to the stable /proxy manifest URL, so manifest reloads go
     # to the proxy and the extractor runs once per playback (plus 403 re-extracts).
-    # Channels whose first player is pinned by hand (see _build_player_urls).
-    # The recorded player preference must never override that pin.
-    PLAYER1_FIRST_CHANNELS = frozenset({"861"})
-
     # Shared across instances: the extractor instance is retired right after
     # each extraction, so the last validated player must outlive it.
     _player_preference: dict = {}
@@ -252,20 +254,15 @@ class DLStreamsExtractor(BaseExtractor):
     def _route_key(self) -> tuple:
         return (self._forced_proxy, self._force_direct, self.bypass_warp_active)
 
-    def _prioritize_player_urls(self, channel_id: str, requested_url: str = "", watch_html: str = "") -> list[str]:
-        players = self._build_player_urls(channel_id, requested_url=requested_url)
-        # Honour an explicit player, otherwise use the site's active iframe.
+    def _prioritize_player_urls(
+        self, channel_id: str, requested_url: str = ""
+    ) -> list[str]:
+        players = self._build_player_urls(channel_id)
+        # Honour an explicit player request.
         requested_player = urlparse(requested_url)._replace(query="", fragment="").geturl()
         if requested_player in players:
-            preferred = requested_player
-        else:
-            parser = _WatchPlayerParser()
-            parser.feed(watch_html)
-            preferred = urljoin(requested_url, parser.player_src or "")
-        # Only reorder known players for this channel on the entry origin.
-        if preferred in players:
-            players.remove(preferred)
-            players.insert(0, preferred)
+            players.remove(requested_player)
+            players.insert(0, requested_player)
         # Re-scrapes (playlist refreshes, token expiry, 429s) must keep the
         # player that was already validated for this channel: switching source
         # mid-playback changes the media sequence, the PIDs and the parameter
@@ -276,7 +273,6 @@ class DLStreamsExtractor(BaseExtractor):
             pinned in players
             and players[0] != pinned
             and requested_player not in players
-            and channel_id not in self.PLAYER1_FIRST_CHANNELS
         ):
             players.remove(pinned)
             players.insert(0, pinned)
@@ -337,34 +333,13 @@ class DLStreamsExtractor(BaseExtractor):
             channel_id = channel_id.replace("premium", "")
         return channel_id
 
-    def _build_player_urls(self, channel_id: str, requested_url: str = "") -> list[str]:
+    def _build_player_urls(self, channel_id: str) -> list[str]:
         origin = self.entry_origin.rstrip("/")
-        req_lower = (requested_url or "").lower()
-        if "/stream/stream-" in req_lower:
-            # User explicitly requested Player 1 (/stream/)
-            return [
-                f"{origin}/stream/stream-{channel_id}.php",
-                f"{origin}/cast/stream-{channel_id}.php",
-                f"{origin}/watch/stream-{channel_id}.php",
-                f"{origin}/plus/stream-{channel_id}.php",
-                f"{origin}/casting/stream-{channel_id}.php",
-                f"{origin}/player/stream-{channel_id}.php",
-                f"{origin}/hub/stream-{channel_id}.php",
-            ]
-        # Default: prioritize Player 2 (/cast/) because it provides clean native MPEG-TS (.ts)
-        # without the heavy (7MB+) PNG-wrapped TikTok CDN overhead and frequent 403s of Player 1.
-        # Exception: 861 always tries Player 1 first, even when its Player 2 looks
-        # online in a browser. That backend serves a technically valid stream (HTTP 200,
-        # valid MPEG-TS container, advancing timestamps, decodable-looking frames) whose
-        # video track is unplayable, so every cheap liveness probe promotes it while
-        # playback shows green/black with working audio. The failure only surfaces at
-        # decode time, which no proxy-side check can afford to replicate -- every
-        # simpler approach was tried and discarded, this pin is the fix.
-        first = "stream" if channel_id in self.PLAYER1_FIRST_CHANNELS else "cast"
-        second = "cast" if channel_id == "861" else "stream"
+        # Player 1 first, like the site. The decode probe rejects a broken
+        # video track and the caller tries the next player automatically.
         return [
-            f"{origin}/{first}/stream-{channel_id}.php",
-            f"{origin}/{second}/stream-{channel_id}.php",
+            f"{origin}/stream/stream-{channel_id}.php",
+            f"{origin}/cast/stream-{channel_id}.php",
             f"{origin}/watch/stream-{channel_id}.php",
             f"{origin}/plus/stream-{channel_id}.php",
             f"{origin}/casting/stream-{channel_id}.php",
@@ -449,11 +424,69 @@ class DLStreamsExtractor(BaseExtractor):
                 unknown = True
         return False if audio and not unknown else None
 
+    async def _ts_video_decodes(self, ts: bytes) -> bool:
+        """Decode one video frame with ffmpeg.
+
+        A valid MPEG-TS container can still hold an undecodable video track
+        (dlive.sx Player 2: working audio, green/black picture). Container
+        checks cannot see that, so probe a bounded prefix and reject only
+        repeated decode errors. When ffmpeg is unavailable or the probe is
+        inconclusive, do not reject the stream.
+        """
+        ffmpeg = shutil.which("ffmpeg")
+        if not ffmpeg:
+            logger.debug("DLStreams: ffmpeg not found, skipping video decode probe")
+            return True
+        probe = bytes(ts[:16 * 1024 * 1024])
+        if len(probe) <= 188:
+            return True
+        proc = None
+        try:
+            proc = await asyncio.create_subprocess_exec(
+                ffmpeg,
+                "-hide_banner",
+                "-v", "error",
+                "-f", "mpegts",
+                "-threads", "1",
+                "-i", "pipe:0",
+                "-frames:v", "1",
+                "-f", "null",
+                "-",
+                stdin=asyncio.subprocess.PIPE,
+                stdout=asyncio.subprocess.DEVNULL,
+                stderr=asyncio.subprocess.PIPE,
+            )
+            _, stderr = await asyncio.wait_for(
+                proc.communicate(input=probe), timeout=_VIDEO_PROBE_TIMEOUT
+            )
+        except asyncio.TimeoutError:
+            if proc is not None and proc.returncode is None:
+                proc.kill()
+                await proc.wait()
+            logger.debug("DLStreams: video decode probe timed out")
+            return True
+        except OSError as exc:
+            logger.debug("DLStreams: video decode probe failed: %s", exc)
+            return True
+        errors = [
+            line
+            for line in stderr.decode("utf-8", "replace").splitlines()
+            if any(marker in line for marker in _VIDEO_PROBE_MARKERS)
+        ]
+        if len(errors) >= _VIDEO_PROBE_MAX_ERRORS:
+            logger.info(
+                "DLStreams: video decode probe rejected segment (%d errors): %s",
+                len(errors),
+                errors[0][:160],
+            )
+            return False
+        return True
+
     async def _segment_carries_video(
         self, session, segment_url: str, headers: dict, timeout: float,
         encrypted: bool = False,
     ) -> bool:
-        """Bounded probe; stop downloading native TS as soon as video is found."""
+        """Bounded probe; verify the segment carries a decodable video track."""
         max_bytes = 16 * 1024 * 1024
         async with session.get(
             segment_url, headers=headers, timeout=ClientTimeout(total=timeout)
@@ -478,18 +511,22 @@ class DLStreamsExtractor(BaseExtractor):
                 unwrapped = await asyncio.to_thread(
                     HLSProxyCoreMixin._strip_fake_png_header_from_ts, bytes(body)
                 )
-                return (
+                if not (
                     len(unwrapped) > 188 and unwrapped[0] == 0x47
                     and unwrapped[188] == 0x47
                     and self._ts_video_payload(unwrapped) is not False
-                )
+                ):
+                    return False
+                return await self._ts_video_decodes(unwrapped)
             if head[0] != 0x47:
                 # fMP4 and other containers retain the existing HTTP probe.
                 return True
             pending = b""
             body = bytearray()
+            video_found = False
             # Native TS can start with a long audio run. A missing video PES
             # is only conclusive once the complete segment has been examined.
+            # Keep reading after the first video PES so a decoder can check it.
             async def chunks():
                 yield head
                 async for chunk in resp.content.iter_chunked(65536):
@@ -501,13 +538,19 @@ class DLStreamsExtractor(BaseExtractor):
                 if len(body) > max_bytes:
                     return False
                 complete = len(pending) // 188 * 188
-                evidence = self._ts_video_payload(pending[:complete])
-                if evidence is True:
-                    return True
+                if self._ts_video_payload(pending[:complete]) is True:
+                    video_found = True
                 pending = pending[complete:]
-            if resp.status == 200 and not pending and self._ts_video_payload(bytes(body)) is False:
+                if video_found and len(body) >= _VIDEO_PROBE_MIN_BYTES:
+                    break
+            if (
+                resp.status == 200 and not pending and not video_found
+                and self._ts_video_payload(bytes(body)) is False
+            ):
                 logger.info("DLStreams: segment contains audio PES but no video payload")
                 return False
+            if video_found:
+                return await self._ts_video_decodes(bytes(body))
             return True
 
     async def _with_premium_token(self, session, stream_url: str, headers: dict) -> str:
@@ -523,7 +566,9 @@ class DLStreamsExtractor(BaseExtractor):
             logger.debug("DLStreams: premium token refresh failed for %s: %s", stream_url, exc)
             return stream_url
 
-    async def _is_stream_alive(self, session, stream_url: str, headers: dict, budget: float | None = None) -> bool:
+    async def _is_stream_alive(
+        self, session, stream_url: str, headers: dict, budget: float | None = None
+    ) -> bool:
         """Validate the full chain: master -> variant -> first segment (+ AES key).
 
         Some CDNs serve the manifest (200) while segments 403 (IP-bound
@@ -642,20 +687,11 @@ class DLStreamsExtractor(BaseExtractor):
         def _timeout(default: float) -> float:
             return max(1.0, min(default, _remaining()))
 
-        watch_html = ""
-        pinned = self._player_preference.get((channel_id, self._route_key()))
-        if urlparse(url).path == "/watch.php" and not pinned:
-            try:
-                async with session.get(
-                    url, headers=self.base_headers, timeout=_timeout(3)
-                ) as resp:
-                    if resp.status == 200:
-                        watch_html = await resp.text()
-            except Exception as exc:
-                logger.debug("DLStreams: default player unavailable: %s", exc)
-        player_urls = self._prioritize_player_urls(
-            channel_id, requested_url=url, watch_html=watch_html
-        )
+        # The site always shows Player 1 first, even when it is broken, so the
+        # watch page is not evidence. Try players in order, Player 1 first.
+        # Every candidate gets the one-frame video decode probe, so a broken
+        # video track is skipped even when its TS container is valid.
+        player_urls = self._prioritize_player_urls(channel_id, requested_url=url)
 
         for candidate_index, candidate in enumerate(player_urls):
             if _remaining() <= 2.0:
@@ -798,8 +834,7 @@ class DLStreamsExtractor(BaseExtractor):
                     session, stream_url, playback_headers, budget=_remaining()
                 ):
                     logger.info("DLStreams: working stream found via %s", candidate)
-                    if channel_id not in self.PLAYER1_FIRST_CHANNELS:
-                        self._player_preference[(channel_id, self._route_key())] = candidate
+                    self._player_preference[(channel_id, self._route_key())] = candidate
                     return self._build_result(stream_url, playback_headers)
                 logger.info("DLStreams: stream from %s is dead, trying next player", candidate)
                 continue

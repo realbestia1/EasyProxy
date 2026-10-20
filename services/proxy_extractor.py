@@ -7,8 +7,6 @@ from services.proxy_shared import (
     BYPASS_PROXIES_CONTEXT,
     SELECTED_PROXY_CONTEXT,
     STRICT_PROXY_CONTEXT,
-    check_vavoo_request,
-    ManifestRewriter,
     get_public_base_url,
     get_extractor_routing_overrides,
     request_log_context,
@@ -17,7 +15,6 @@ from services.proxy_shared import (
 import config_store
 import asyncio
 import base64
-import gzip
 import urllib.parse
 import config as _config
 from yarl import URL
@@ -252,7 +249,6 @@ class HLSProxyExtractorHandlerMixin:
             stream_url = result["destination_url"]
             stream_headers = result.get("request_headers", {})
             mediaflow_endpoint = result.get("mediaflow_endpoint", "hls_proxy")
-            captured_manifest = result.get("captured_manifest")
             force_disable_ssl = result.get("disable_ssl", False)
             selected_proxy = result.get("selected_proxy") or selected_proxy
             if not selected_proxy and extractor:
@@ -337,7 +333,9 @@ class HLSProxyExtractorHandlerMixin:
             path_lower = urllib.parse.urlparse(stream_url).path.lower()
             is_direct_video = any(path_lower.endswith(ext) for ext in [".mp4", ".mkv", ".avi", ".mov", ".flv", ".wmv"])
 
-            if mediaflow_endpoint == "proxy_stream_endpoint" or is_direct_video:
+            if path_lower.endswith(".m3u8"):
+                endpoint = "/proxy/hls/manifest.m3u8"
+            elif mediaflow_endpoint == "proxy_stream_endpoint" or is_direct_video:
                 endpoint = "/proxy/stream"
             elif (
                 mediaflow_endpoint == "mpd_manifest_proxy"
@@ -397,55 +395,15 @@ class HLSProxyExtractorHandlerMixin:
             if redirect_stream:
                 full_proxy_url += "&redirect_stream=true"
 
-            # DLStreams extraction is slow and rate-limited: send the player to
-            # the stable proxy manifest instead of serving it from this endpoint,
-            # so HLS reloads never re-scrape the provider.
-            if redirect_stream and extractor_key == "dlstreams" and endpoint == "/proxy/hls/manifest.m3u8":
-                logger.info("[PLAY] Redirecting DLStreams manifest to the stable proxy URL")
-                return web.HTTPFound(full_proxy_url)
-
-            if redirect_stream and captured_manifest and endpoint == "/proxy/hls/manifest.m3u8":
-                original_channel_url = request.query.get("orig_url") or request.query.get("url") or request.query.get("d", "")
-                no_bypass = request.query.get("no_bypass") == "1"
-                is_vavoo_req = check_vavoo_request(stream_headers, request, stream_url)
-                disable_ssl = request.query.get("disable_ssl") == "1" or force_disable_ssl or is_vavoo_req
-
-                # Variant selection (all variants or only the highest one)
-                # happens in rewrite_manifest_urls via max_res.
-                manifest_content = captured_manifest
-                manifest_base_url = stream_url
-
-                rewritten_manifest = await ManifestRewriter.rewrite_manifest_urls(
-                    manifest_content=manifest_content,
-                    base_url=manifest_base_url,
-                    proxy_base=proxy_base,
-                    stream_headers=stream_headers,
-                    original_channel_url=original_channel_url,
-                    api_password=api_password,
-                    no_bypass=no_bypass,
-                    shorten_url_func=self.shorten_hls_url,
-                    bypass_warp=bypass_warp,
-                    bypass_proxies=bypass_proxies,
-                    disable_ssl=disable_ssl,
-                    selected_proxy=selected_proxy,
-                    force_direct=force_direct,
-                    extractor_key=extractor_key,
-                    stream_key=stream_key,
-                    max_res=forced_max_res,
+            # Always send HLS playback to the stable proxy manifest instead of
+            # serving the playlist from this endpoint. This keeps reloads off
+            # the extractor (and avoids re-resolving signed provider URLs).
+            if redirect_stream and endpoint == "/proxy/hls/manifest.m3u8":
+                logger.info(
+                    "[PLAY] Redirecting %s manifest to the stable proxy URL",
+                    extractor_key or "HLS",
                 )
-                response_headers = {
-                    "Content-Type": "application/vnd.apple.mpegurl",
-                    "Access-Control-Allow-Origin": "*",
-                    "Cache-Control": "no-cache",
-                }
-                if "gzip" in request.headers.get("Accept-Encoding", "").lower():
-                    response_headers["Content-Encoding"] = "gzip"
-                    response_headers["Vary"] = "Accept-Encoding"
-                    return web.Response(
-                        body=gzip.compress(rewritten_manifest.encode("utf-8"), mtime=0),
-                        headers=response_headers,
-                    )
-                return web.Response(text=rewritten_manifest, headers=response_headers)
+                return web.HTTPFound(full_proxy_url)
 
             if redirect_stream and endpoint == "/proxy/mpd/manifest.m3u8":
                 proxy_query = {

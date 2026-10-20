@@ -1,5 +1,6 @@
 import asyncio
 import secrets
+import time
 import urllib.parse
 import aiohttp
 import config as _config
@@ -30,6 +31,10 @@ from services.proxy_shared import (
     request_log_context,
     safe_log_route,
 )
+
+
+_LEGACY_REDIRECT_CACHE: dict = {}
+_LEGACY_REDIRECT_TTL = 120.0
 
 
 class HLSProxyManifestHandlerMixin:
@@ -306,6 +311,22 @@ class HLSProxyManifestHandlerMixin:
                     header_name = param_name[2:]
                     combined_headers[header_name] = param_value
 
+            cache_key = (
+                target_url,
+                request.query.get("host"),
+                bypass_warp,
+                bypass_proxies,
+                selected_proxy or "",
+                force_direct,
+                request.query.get("api_password") or "",
+                *get_extractor_routing_overrides("dlstreams"),
+            )
+            if request.path == "/proxy/manifest.m3u8" and redirect_stream:
+                cached = _LEGACY_REDIRECT_CACHE.get(cache_key)
+                if cached and time.monotonic() - cached[0] < _LEGACY_REDIRECT_TTL:
+                    logger.info("[PLAY] Reusing resolved DLStreams manifest")
+                    return web.HTTPFound(cached[1])
+
             # DUAL's browser test already resolved the final media URL and its
             # required headers. Do not run GenericHLSExtractor again: providers
             # can reject the Referer it guesses even though the raw URL works.
@@ -465,6 +486,55 @@ class HLSProxyManifestHandlerMixin:
                         stream_url += "&disable_ssl=1"
                     else:
                         stream_url += "?disable_ssl=1"
+
+                # Legacy /proxy/manifest.m3u8 requests for dlstreams pages must
+                # redirect to the stable HLS proxy URL instead of serving the
+                # playlist and re-extracting on every player reload.
+                if (
+                    request.path == "/proxy/manifest.m3u8"
+                    and redirect_stream
+                    and extractor_key in {"dlstreams", "vavoo"}
+                ):
+                    proxy_base = get_public_base_url(request)
+                    query = {"d": stream_url}
+                    query.update(
+                        {f"h_{key}": value for key, value in stream_headers.items()}
+                    )
+                    api_password = request.query.get("api_password")
+                    if api_password:
+                        query["api_password"] = api_password
+                    if force_disable_ssl or request.query.get("disable_ssl") == "1":
+                        query["disable_ssl"] = "1"
+                    if bypass_warp:
+                        query["warp"] = "off"
+                    if bypass_proxies:
+                        query["proxy"] = "off"
+                    elif selected_proxy:
+                        query["proxy"] = selected_proxy
+                    if force_direct:
+                        query["direct"] = "1"
+                    query["extractor_key"] = extractor_key
+                    if stream_key:
+                        query["stream_key"] = stream_key
+                    query["orig_url"] = (
+                        request.query.get("orig_url")
+                        or request.query.get("url")
+                        or request.query.get("d", "")
+                    )
+                    full_proxy_url = (
+                        f"{proxy_base}/proxy/hls/manifest.m3u8?{urllib.parse.urlencode(query)}"
+                    )
+                    if extractor_key == "dlstreams":
+                        now = time.monotonic()
+                        for key, (ts, _) in list(_LEGACY_REDIRECT_CACHE.items()):
+                            if now - ts >= _LEGACY_REDIRECT_TTL:
+                                _LEGACY_REDIRECT_CACHE.pop(key, None)
+                        _LEGACY_REDIRECT_CACHE[cache_key] = (now, full_proxy_url)
+                    logger.info(
+                        "[PLAY] Redirecting %s legacy manifest to the stable proxy URL",
+                        extractor_key,
+                    )
+                    return web.HTTPFound(full_proxy_url)
 
 
             # --- DASH NATIVO: Riscrive il manifest per segmenti proxati (senza conversione) ---
