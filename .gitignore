@@ -1,9 +1,14 @@
-*.pyc
+*.py[cod]
+__pycache__/
 /.venv/
+.venv/
+venv/
+ENV/
 extractors/.dlhd_cache
 flaresolverr/
 byparr/
 .env
+.env.local
 /scratch
 /.shared_chromium_profile
 dlstreams_activity.txt
@@ -26,3 +31,8 @@ config.json
 /output
 /node_modules
 package-lock.json
+.DS_Store
+Thumbs.db
+desktop.ini
+._*
+*.log
