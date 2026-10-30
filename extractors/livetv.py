@@ -3,6 +3,7 @@ from urllib.parse import urljoin, urlparse, unquote
 from aiohttp import FormData
 from extractors.base import BaseExtractor, ExtractorError
 
+
 class LiveTVExtractor(BaseExtractor):
     """LiveTV URL extractor for both M3U8 and MPD streams."""
 
@@ -19,11 +20,33 @@ class LiveTVExtractor(BaseExtractor):
             re.IGNORECASE,
         )
 
+    def _result(
+        self,
+        destination_url: str,
+        request_headers: dict = None,
+        mediaflow_endpoint: str = "hls_proxy",
+        **kwargs,
+    ) -> dict:
+        result = {
+            "destination_url": destination_url,
+            "request_headers": request_headers or self.base_headers,
+            "mediaflow_endpoint": mediaflow_endpoint,
+            "selected_proxy": self.last_used_proxy,
+            "force_direct": self._force_direct,
+            "bypass_warp": self.bypass_warp_active,
+        }
+        result.update(kwargs)
+        return result
+
     async def extract(self, url: str, stream_title: str = None, **kwargs) -> dict:
         """Extract LiveTV URL and required headers."""
         self._apply_routing_kwargs(url, kwargs)
         try:
-            if "livetv.sx" in url.lower() or "webplayer" in url.lower() or "emb.apl" in url.lower():
+            is_livetv = (
+                bool(re.search(r"livetv\d*\.(?:sx|me|ru|org)", url.lower()))
+                or any(k in url.lower() for k in ["webplayer", "/eventinfo/", "emb.apl", "alieztv"])
+            )
+            if is_livetv:
                 return await self._extract_livetvsx(url, stream_title, **kwargs)
 
             resp = await self._make_request(url, ssl=False)
@@ -36,7 +59,6 @@ class LiveTVExtractor(BaseExtractor):
             if not player_api_base:
                 # Fallback to livetv.sx logic if player_api is missing
                 return await self._extract_livetvsx(url, stream_title, **kwargs)
-
 
             # Get player options
             options_data = await self._get_player_options(response_text)
@@ -59,14 +81,11 @@ class LiveTVExtractor(BaseExtractor):
                     if not stream_url:
                         continue
 
-                    result = {
-                        "destination_url": stream_url,
-                        "request_headers": self.base_headers,
-                        "mediaflow_endpoint": self.mediaflow_endpoint,
-                        "selected_proxy": self.last_used_proxy,
-                        "force_direct": self._force_direct,
-                        "bypass_warp": self.bypass_warp_active,
-                    }
+                    result = self._result(
+                        stream_url,
+                        self.base_headers,
+                        mediaflow_endpoint=self.mediaflow_endpoint,
+                    )
 
                     # Set endpoint based on stream type
                     if stream_data.get("type") == "mpd":
@@ -122,65 +141,122 @@ class LiveTVExtractor(BaseExtractor):
                 chosen_url = urljoin(url, matches[0])
             url = chosen_url
 
-        # Now url is a webplayer URL
-        resp_wp = await self._make_request(url, ssl=False, headers={"Referer": "https://livetv.sx/"})
-        wp_html = resp_wp.text
+        # Queue for multi-level iframe extraction
+        queue = [(url, "https://livetv.sx/", 0)]
+        visited = set()
+        ad_domains = ["banner", "getbanner", "ads.", "cpxinteractive", "histats", "facebook", "twitter", "lshls.st", "links"]
 
-        # 1. Check for dlive / ifr
-        dlive_match = re.search(r'<iframe[^>]+src=["\']((?:https?:)?//(?:www\.)?dlive\.sx/[^"\']+)["\']', wp_html, re.I)
-        if dlive_match:
-            dlive_url = dlive_match.group(1).replace("\n", "").replace("\r", "").strip()
-            if dlive_url.startswith("//"):
-                dlive_url = "https:" + dlive_url
-            from extractors.dlstreams import DLStreamsExtractor
-            dl_extractor = DLStreamsExtractor(
-                self.request_headers,
-                proxies=self.proxies,
-                bypass_warp=bool(self.bypass_warp_active),
-            )
+        # Fast-track AliezTV if cid is in URL
+        aliez_url_m = re.search(r'[?&]c=(\d+)', url)
+        if ("alieztv" in url.lower() or "emb.apl" in url.lower()) and aliez_url_m:
+            cid = aliez_url_m.group(1)
+            queue.insert(0, (f"https://emb.apl625.online/player/live.php?id={cid}&w=700&h=480", "https://livetv.sx/", 1))
+
+        while queue:
+            curr_url, ref, depth = queue.pop(0)
+            if curr_url in visited or depth > 4:
+                continue
+            visited.add(curr_url)
+
+            # Skip ad domains
+            if any(ad in curr_url.lower() for ad in ad_domains):
+                continue
+
+            # Automatically update outdated AliezTV domains (e.g. apl620.online -> apl625.online)
+            if re.search(r'apl\d+\.online', curr_url):
+                curr_url = re.sub(r'apl\d+\.online', 'apl625.online', curr_url)
+
+            # Check if current URL is dlive / thedaddy / daddylive
+            if any(d in curr_url.lower() for d in ["thedaddy.pk", "dlive.sx", "daddylive"]):
+                from extractors.dlstreams import DLStreamsExtractor
+                dl_extractor = DLStreamsExtractor(
+                    self.request_headers,
+                    proxies=self.proxies,
+                    bypass_warp=bool(self.bypass_warp_active),
+                )
+                try:
+                    return await dl_extractor.extract(curr_url, **kwargs)
+                finally:
+                    await dl_extractor.close()
+
             try:
-                return await dl_extractor.extract(dlive_url, **kwargs)
-            finally:
-                await dl_extractor.close()
+                resp = await self._make_request(curr_url, ssl=False, headers={"Referer": ref})
+                curr_html = resp.text
+            except Exception:
+                continue
 
-        # 2. Check for alieztv / emb.*
-        emb_match = re.search(r'<iframe[^>]+src=["\']((?:https?:)?//emb\.[^"\']+)["\']', wp_html, re.I)
-        if emb_match:
-            emb_url = emb_match.group(1).replace("\n", "").replace("\r", "").strip()
-            if emb_url.startswith("//"):
-                emb_url = "https:" + emb_url
-            resp_emb = await self._make_request(emb_url, ssl=False, headers={"Referer": "https://livetv.sx/"})
-            m3u8_match = re.search(r'pl\.init\([\'\"](//[^\'\"]+\.m3u8[^\'\"]*)[\'\"]', resp_emb.text)
+            # Check for API-based player loaders (e.g. virazo.sx/ch.php?id=.. -> api/player.php?id=..)
+            if "api/player.php" in curr_html or "ch.php?id=" in curr_url:
+                ch_m = re.search(r'ch\.php\?id=(\d+)', curr_url) or re.search(r'[?&]id=(\d+)', curr_url)
+                if ch_m:
+                    ch_id = ch_m.group(1)
+                    api_player_url = urljoin(curr_url, f"api/player.php?id={ch_id}")
+                    try:
+                        resp_api = await self._make_request(api_player_url, ssl=False, headers={"Referer": curr_url})
+                        api_json = resp_api.json
+                        if isinstance(api_json, dict) and api_json.get("url"):
+                            player_url = api_json["url"]
+                            if player_url not in visited:
+                                queue.append((player_url, curr_url, depth + 1))
+                    except Exception:
+                        pass
+
+            # 1. Check for dlive / thedaddy iframe
+            dlive_match = re.search(r'<iframe[^>]+src=["\']((?:https?:)?//(?:www\.)?(?:thedaddy\.pk|dlive\.sx|daddylive)[^"\']+)["\']', curr_html, re.I)
+            if dlive_match:
+                dlive_url = dlive_match.group(1).replace("\n", "").replace("\r", "").strip()
+                if dlive_url.startswith("//"):
+                    dlive_url = "https:" + dlive_url
+                from extractors.dlstreams import DLStreamsExtractor
+                dl_extractor = DLStreamsExtractor(
+                    self.request_headers,
+                    proxies=self.proxies,
+                    bypass_warp=bool(self.bypass_warp_active),
+                )
+                try:
+                    return await dl_extractor.extract(dlive_url, **kwargs)
+                finally:
+                    await dl_extractor.close()
+
+            # 2. Check for direct m3u8 in html (including protocol-relative //)
+            m3u8_matches = re.findall(r'[\'"]((?:https?:)?//[^\s\'"<>]+?\.m3u8[^\s\'"<>]*)[\'"]', curr_html)
+            for m in m3u8_matches:
+                clean_m = m.replace(r'\/', '/').replace(r'\u0026', '&').replace('\\', '')
+                if clean_m.startswith("//"):
+                    clean_m = "https:" + clean_m
+                if 'dummy' not in clean_m and not any(ad in clean_m.lower() for ad in ad_domains):
+                    return self._result(
+                        clean_m,
+                        {"User-Agent": self.base_headers["User-Agent"], "Referer": curr_url},
+                        mediaflow_endpoint="hls_proxy",
+                    )
+
+            # 3. Check for alieztv / emb.* pl.init
+            m3u8_match = re.search(r'pl\.init\([\'\"](//[^\'\"]+\.m3u8[^\'\"]*)[\'\"]', curr_html)
             if not m3u8_match:
-                m3u8_match = re.search(r'[\'\"](//[^\'\"]+\.m3u8[^\'\"]*)[\'\"]', resp_emb.text) or re.search(r'[\'\"](https?://[^\'\"]+\.m3u8[^\'\"]*)[\'\"]', resp_emb.text)
+                m3u8_match = re.search(r'[\'\"](//[^\'\"]+\.m3u8[^\'\"]*)[\'\"]', curr_html)
             if m3u8_match:
                 final_m3u8 = m3u8_match.group(1).replace("\n", "").replace("\r", "").strip()
                 if final_m3u8.startswith("//"):
                     final_m3u8 = "https:" + final_m3u8
-                return self._result(final_m3u8, {"User-Agent": self.base_headers["User-Agent"], "Referer": emb_url}, mediaflow_endpoint="hls_proxy")
+                return self._result(
+                    final_m3u8,
+                    {"User-Agent": self.base_headers["User-Agent"], "Referer": curr_url},
+                    mediaflow_endpoint="hls_proxy",
+                )
 
-        # 3. Direct m3u8 in html
-        any_m3u8 = re.search(r'["\'](https?://[^\s"\'<>]+\.m3u8[^\s"\'<>]*)["\']', wp_html)
-        if any_m3u8:
-            return self._result(any_m3u8.group(1), self.base_headers, mediaflow_endpoint="hls_proxy")
-
-        # 4. Check other player iframes
-        player_iframes = re.findall(r'<iframe[^>]+src=["\']([^"\']+)["\']', wp_html, re.I)
-        for ifr in player_iframes:
-            ifr_clean = ifr.replace("\n", "").replace("\r", "").strip()
-            if any(ad in ifr_clean.lower() for ad in ["banner", "getbanner", "ads.", "links", "cpxinteractive"]):
-                continue
-            if ifr_clean.startswith("//"):
-                ifr_clean = "https:" + ifr_clean
-            elif ifr_clean.startswith("/"):
-                ifr_clean = urljoin(url, ifr_clean)
-            try:
-                resp_sub = await self._make_request(ifr_clean, ssl=False, headers={"Referer": url})
-                sub_m3u8 = re.search(r'["\'](https?://[^\s"\'<>]+\.m3u8[^\s"\'<>]*)["\']', resp_sub.text)
-                if sub_m3u8:
-                    return self._result(sub_m3u8.group(1), {"User-Agent": self.base_headers["User-Agent"], "Referer": ifr_clean}, mediaflow_endpoint="hls_proxy")
-            except Exception:
-                pass
+            # 4. Enqueue nested iframes
+            iframes = re.findall(r'<iframe[^>]+src=["\']([^"\']+)["\']', curr_html, re.I)
+            for ifr in iframes:
+                ifr_clean = ifr.replace("\n", "").replace("\r", "").strip()
+                if ifr_clean.startswith("//"):
+                    ifr_clean = "https:" + ifr_clean
+                elif ifr_clean.startswith("/"):
+                    ifr_clean = urljoin(curr_url, ifr_clean)
+                if re.search(r'apl\d+\.online', ifr_clean):
+                    ifr_clean = re.sub(r'apl\d+\.online', 'apl625.online', ifr_clean)
+                if ifr_clean not in visited and not any(ad in ifr_clean.lower() for ad in ad_domains):
+                    queue.append((ifr_clean, curr_url, depth + 1))
 
         raise ExtractorError("Could not extract stream from livetv.sx")
 
@@ -346,4 +422,3 @@ class LiveTVExtractor(BaseExtractor):
 
         except Exception:
             return {}
-
