@@ -579,8 +579,11 @@ class DLStreamsExtractor(BaseExtractor):
                     and unwrapped[188] == 0x47
                     and self._ts_video_payload(unwrapped) is not False
                 ):
+                    self._content_broken = True  # placeholder image, no TS inside
                     return False
-                return await self._ts_video_decodes(unwrapped)
+                decodes = await self._ts_video_decodes(unwrapped)
+                self._content_broken = not decodes
+                return decodes
             if head[0] != 0x47:
                 # fMP4 and other containers retain the existing HTTP probe.
                 return True
@@ -612,9 +615,12 @@ class DLStreamsExtractor(BaseExtractor):
                 and self._ts_video_payload(bytes(body)) is False
             ):
                 logger.info("DLStreams: segment contains audio PES but no video payload")
+                self._content_broken = True
                 return False
             if video_found:
-                return await self._ts_video_decodes(bytes(body))
+                decodes = await self._ts_video_decodes(bytes(body))
+                self._content_broken = not decodes
+                return decodes
             return True
 
     async def _with_premium_token(self, session, stream_url: str, headers: dict) -> str:
@@ -648,6 +654,9 @@ class DLStreamsExtractor(BaseExtractor):
         than only announcing a video PID in its program map.
         """
         deadline = time.monotonic() + (budget if budget is not None else self.EXTRACT_BUDGET_SECONDS)
+        # Set when the player answers with content that cannot play (placeholder
+        # image, no or undecodable video): unlike a timeout, a retry won't fix it.
+        self._content_broken = False
 
         def _timeout(default: float) -> float:
             remaining = deadline - time.monotonic()
@@ -775,12 +784,15 @@ class DLStreamsExtractor(BaseExtractor):
         slow_players = 0
         pin_attempts = 0
         pin_tries = 1
+        pin_broken = False
         if sticky and player_urls and player_urls[0] == sticky:
             player_urls[1:1] = [sticky] * self.PIN_RETRIES
             pin_tries += self.PIN_RETRIES
 
         for candidate_index, candidate in enumerate(player_urls):
             is_pin = candidate == sticky
+            if is_pin and pin_broken:
+                continue
             if is_pin:
                 pin_attempts += 1
                 if pin_attempts > 1:
@@ -933,6 +945,7 @@ class DLStreamsExtractor(BaseExtractor):
                     session, stream_url, playback_headers, budget=budget
                 ):
                     logger.info("DLStreams: stream from %s is dead, trying next player", candidate)
+                    pin_broken = is_pin and getattr(self, "_content_broken", False)
                     continue
                 lag, load_ratio = self._last_health
                 rank = self._player_rank(lag, load_ratio)
