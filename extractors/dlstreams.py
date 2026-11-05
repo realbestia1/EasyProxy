@@ -242,8 +242,15 @@ class DLStreamsExtractor(BaseExtractor):
     _player_preference: dict = {}
     # A re-extraction inside this window keeps the pinned player even when it
     # is not ideal (no mid-playback switch); every accepted extraction renews
-    # it, so an ongoing playback stays put while new viewers get a fresh ranking.
-    PIN_STICKY_SECONDS = 300.0
+    # it. Playback through the stable proxy URL does not re-extract, so the
+    # window must outlast a whole match/film: a stall after it would otherwise
+    # re-rank and jump to a player with a different delay.
+    PIN_STICKY_SECONDS = 4 * 3600.0
+    # A sticky player that fails once is probed again before switching: a stall
+    # of a few seconds (WARP/CDN hiccup) must not move playback to another player.
+    PIN_RETRIES = 2
+    PIN_RETRY_DELAY = 2.0
+    PIN_ATTEMPT_BUDGET = 6.0
 
     def __init__(self, request_headers: dict = None, proxies: list = None, bypass_warp: bool = False):
         super().__init__(request_headers or {}, proxies, extractor_name="dlstreams", bypass_warp=bypass_warp)
@@ -743,8 +750,14 @@ class DLStreamsExtractor(BaseExtractor):
         session = await self._get_session(url)
         seen_iframes: set[str] = set()
         
+        pin = self._player_preference.get((channel_id, self._route_key()))
+        sticky = (
+            pin[0] if pin and time.monotonic() - pin[1] <= self.PIN_STICKY_SECONDS else None
+        )
         loop = asyncio.get_running_loop()
-        deadline = loop.time() + self.EXTRACT_BUDGET_SECONDS
+        deadline = loop.time() + self.EXTRACT_BUDGET_SECONDS + (
+            self.PIN_RETRIES * (self.PIN_ATTEMPT_BUDGET + self.PIN_RETRY_DELAY) if sticky else 0.0
+        )
 
         def _remaining() -> float:
             return deadline - loop.time()
@@ -760,12 +773,23 @@ class DLStreamsExtractor(BaseExtractor):
         # Alive but delayed or stuttering players: kept to fall back on the best.
         fallback = None
         slow_players = 0
-        pin = self._player_preference.get((channel_id, self._route_key()))
-        sticky = (
-            pin[0] if pin and time.monotonic() - pin[1] <= self.PIN_STICKY_SECONDS else None
-        )
+        pin_attempts = 0
+        pin_tries = 1
+        if sticky and player_urls and player_urls[0] == sticky:
+            player_urls[1:1] = [sticky] * self.PIN_RETRIES
+            pin_tries += self.PIN_RETRIES
 
         for candidate_index, candidate in enumerate(player_urls):
+            is_pin = candidate == sticky
+            if is_pin:
+                pin_attempts += 1
+                if pin_attempts > 1:
+                    logger.info(
+                        "DLStreams: pinned player %s failed, retry %d/%d before switching",
+                        candidate, pin_attempts - 1, self.PIN_RETRIES,
+                    )
+                    await asyncio.sleep(self.PIN_RETRY_DELAY)
+            last_pin_try = is_pin and pin_attempts >= pin_tries
             if _remaining() <= 2.0:
                 logger.warning(
                     "DLStreams: extraction budget of %.0fs exhausted after %d/%d players",
@@ -817,7 +841,7 @@ class DLStreamsExtractor(BaseExtractor):
                     iframe_src = urljoin(candidate + "/", iframe_src)
                 
                 logger.debug("DLStreams: found player iframe: %s", iframe_src)
-                if iframe_src in seen_iframes:
+                if iframe_src in seen_iframes and not is_pin:
                     logger.debug("DLStreams: iframe %s already attempted, skipping", iframe_src)
                     continue
                 seen_iframes.add(iframe_src)
@@ -902,8 +926,11 @@ class DLStreamsExtractor(BaseExtractor):
                 # The premium edge needs a per-viewer token on the playlist URL,
                 # so hand over the tokenized URL (validation bundles it too).
                 stream_url = await self._with_premium_token(session, stream_url, playback_headers)
+                budget = _remaining()
+                if is_pin and not last_pin_try:
+                    budget = min(budget, self.PIN_ATTEMPT_BUDGET)
                 if not await self._is_stream_alive(
-                    session, stream_url, playback_headers, budget=_remaining()
+                    session, stream_url, playback_headers, budget=budget
                 ):
                     logger.info("DLStreams: stream from %s is dead, trying next player", candidate)
                     continue
@@ -934,7 +961,7 @@ class DLStreamsExtractor(BaseExtractor):
                 
             except Exception as e:
                 logger.debug("DLStreams: direct extraction candidate %s failed: %s", candidate, e)
-                if candidate_index == 0 and isinstance(e, asyncio.TimeoutError):
+                if candidate_index == 0 and not is_pin and isinstance(e, asyncio.TimeoutError):
                     # Every candidate shares the dlive.sx origin: when the first
                     # page does not answer, the others will not either.
                     logger.warning("DLStreams: site page timed out, aborting candidate loop")
