@@ -25,6 +25,14 @@ from routes.tor_proxy import setup_tor_proxy_routes
 
 logger = logging.getLogger(__name__)
 
+EXPOSED_HEADERS = "Content-Length, Content-Range, Accept-Ranges"
+
+
+async def expose_range_headers(request, response):
+    # Without this, cross-origin JS (web players, diagnostics) cannot read Content-Range.
+    if "Access-Control-Allow-Origin" in response.headers:
+        response.headers.setdefault("Access-Control-Expose-Headers", EXPOSED_HEADERS)
+
 # --- Logica di Avvio ---
 def create_app():
     """Crea e configura l'applicazione aiohttp."""
@@ -36,6 +44,7 @@ def create_app():
         middlewares=[dual_service.dual_middleware],
         client_max_size=4 * 1024 * 1024,
     )
+    app.on_response_prepare.append(expose_range_headers)
     app['proxy'] = proxy
     app['dual_service'] = dual_service
     dual_service.install(app, dual_cache_dir)
