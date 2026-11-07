@@ -72,6 +72,51 @@ PREMIUM_TOKEN_RENEW_FRACTION = 0.5
 # caller's address, so the egress route is part of the key.
 _premium_tokens: Dict[tuple, tuple] = {}
 _premium_token_locks: Dict[tuple, asyncio.Lock] = {}
+# The edge lists each segment as base64url(AES-128-CTR(url)): key = base64url
+# "k" returned with the token, counter = the segment's media sequence number
+# (big-endian, 16 bytes). token -> key, so a playlist is decrypted with the key
+# of the token it was fetched with even if the cache was renewed meanwhile.
+_premium_segment_keys: Dict[str, bytes] = {}
+_PREMIUM_SEGMENT_KEYS_MAX = 512
+
+
+def _b64url_decode(value: str) -> bytes:
+    return base64.urlsafe_b64decode(value + "=" * (-len(value) % 4))
+
+
+def decrypt_premium_playlist(body: str, playlist_url: str) -> str:
+    """Replace encrypted premium segment URIs with the real (TikTok CDN) URLs."""
+    if not body or premium_playlist_parts(playlist_url) is None:
+        return body
+    token = dict(urllib.parse.parse_qsl(urlparse(playlist_url).query)).get("t", "")
+    key = _premium_segment_keys.get(token)
+    if not key:
+        return body
+    from Crypto.Cipher import AES
+
+    seq = 0
+    out = []
+    for line in body.splitlines():
+        stripped = line.strip()
+        if stripped.startswith("#EXT-X-MEDIA-SEQUENCE:"):
+            try:
+                seq = int(stripped.split(":", 1)[1])
+            except ValueError:
+                pass
+        elif stripped and not stripped.startswith("#"):
+            if not stripped.lower().startswith("http") and "." not in stripped:
+                try:
+                    cipher = AES.new(
+                        key, AES.MODE_CTR, nonce=b"", initial_value=seq.to_bytes(16, "big")
+                    )
+                    plain = cipher.decrypt(_b64url_decode(stripped)).decode("utf-8")
+                    if plain.startswith("http"):
+                        line = plain
+                except Exception:
+                    pass
+            seq += 1
+        out.append(line)
+    return "\n".join(out) + ("\n" if body.endswith("\n") else "")
 
 
 def premium_playlist_parts(url: str) -> tuple | None:
@@ -163,6 +208,14 @@ async def premium_playlist_token(
         token = str((data or {}).get("token") or "").strip()
         if not token:
             return None
+        seg_key = str((data or {}).get("k") or "").strip()
+        if seg_key:
+            try:
+                if len(_premium_segment_keys) >= _PREMIUM_SEGMENT_KEYS_MAX:
+                    _premium_segment_keys.pop(next(iter(_premium_segment_keys)))
+                _premium_segment_keys[token] = _b64url_decode(seg_key)
+            except Exception:
+                logger.debug("DLStreams: invalid premium segment key for %s", slug)
         ttl = float((data or {}).get("ttl") or 0) or PREMIUM_TOKEN_DEFAULT_TTL
         ttl = max(PREMIUM_TOKEN_MIN_TTL, ttl)
         _premium_tokens[key] = (token, now + ttl * PREMIUM_TOKEN_RENEW_FRACTION)
@@ -691,6 +744,7 @@ class DLStreamsExtractor(BaseExtractor):
                 current_url = variant
                 if "#EXTM3U" not in current_body[:8000]:
                     return False
+            current_body = decrypt_premium_playlist(current_body, current_url)
             # Variant -> segment. Do not use Range for a TS video probe: an
             # audio-only prefix cannot establish whether video exists later.
             segment = self._first_media_uri(current_body, current_url, want_playlist=False)

@@ -1197,6 +1197,7 @@ class HLSProxyStreamingMixin:
             # it dies. Refresh it here, with the session that fetches the
             # playlist, so the token matches this egress address.
             from extractors.dlstreams import (
+                decrypt_premium_playlist,
                 ensure_premium_playlist_url,
                 invalidate_premium_playlist_token,
                 premium_playlist_parts,
@@ -1768,6 +1769,8 @@ class HLSProxyStreamingMixin:
 
                 if manifest_content:
                     logger.info(f"📄 HLS manifest detected: {stream_url}")
+                    if is_premium_manifest:
+                        manifest_content = decrypt_premium_playlist(manifest_content, stream_url)
                     proxy_base = get_public_base_url(request)
                     original_url = request.query.get("orig_url") or request.query.get("url") or request.query.get("d", "")
                     use_short_hls_urls = should_use_short_manifest_urls(
