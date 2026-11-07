@@ -743,9 +743,12 @@ class HLSProxyStreamingMixin:
 
                 for header in [
                     "content-type",
-                    "content-length",
-                    "content-range",
-                    "accept-ranges",
+                    # Canonical casing: Samsung AVPlay matches these names
+                    # case-sensitively and ignores lowercase Content-Range,
+                    # so non-faststart MP4s never seek to their moov box.
+                    "Content-Length",
+                    "Content-Range",
+                    "Accept-Ranges",
                     "last-modified",
                     "etag",
                 ]:
@@ -1685,7 +1688,7 @@ class HLSProxyStreamingMixin:
                         "Access-Control-Allow-Methods": "GET, HEAD, OPTIONS",
                         "Access-Control-Allow-Headers": "Range, Content-Type",
                     }
-                    for h in ["content-length", "content-range", "accept-ranges"]:
+                    for h in ["Content-Length", "Content-Range", "Accept-Ranges"]:
                         if h in resp.headers: response_headers[h] = resp.headers[h]
 
                     response = web.StreamResponse(status=resp.status, headers=response_headers)
@@ -1954,9 +1957,12 @@ class HLSProxyStreamingMixin:
 
                 for header in [
                     "content-type",
-                    "content-length",
-                    "content-range",
-                    "accept-ranges",
+                    # Canonical casing: Samsung AVPlay matches these names
+                    # case-sensitively and ignores lowercase Content-Range,
+                    # so non-faststart MP4s never seek to their moov box.
+                    "Content-Length",
+                    "Content-Range",
+                    "Accept-Ranges",
                     "last-modified",
                     "etag",
                 ]:
