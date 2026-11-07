@@ -922,7 +922,21 @@ class DLStreamsExtractor(BaseExtractor):
                         logger.debug("DLStreams: iframe %s returned status %s", iframe_src, resp.status)
                         continue
                     iframe_html = await resp.text()
-                
+
+                # wideiptv.top wraps the real player in one more iframe.
+                if ".m3u8" not in iframe_html and "_econfig" not in iframe_html and "atob(" not in iframe_html:
+                    nested = re.search(r'<iframe\s+[^>]*src=["\']([^"\']+)["\']', iframe_html, re.I)
+                    if nested:
+                        nested_src = urljoin(iframe_src, nested.group(1).strip())
+                        iframe_headers["Referer"] = iframe_src
+                        async with session.get(nested_src, headers=iframe_headers, timeout=_timeout(self.CANDIDATE_TIMEOUT_SECONDS)) as resp:
+                            if resp.status == 200:
+                                logger.debug("DLStreams: following nested iframe %s", nested_src)
+                                iframe_src = nested_src
+                                iframe_html = await resp.text()
+                # JSON-escaped URLs ("https:\/\/...") in inline player configs.
+                iframe_html = iframe_html.replace("\\/", "/")
+
                 # Extract stream URL from iframe HTML.
                 # Supported formats:
                 #  1) barecrop.net Player 2: window._econfig='...' (Clappr, scrambled base64)
