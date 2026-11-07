@@ -8,6 +8,10 @@ on:
         required: false
         default: ''
   push:
+    branches:
+      - main
+    paths:
+      - config.py
     tags:
       - 'v*'
 
@@ -16,8 +20,43 @@ env:
   IMAGE_NAME: realbestia1/easyproxy
 
 jobs:
+  check-version:
+    name: Check APP_VERSION bump
+    runs-on: ubuntu-latest
+    outputs:
+      changed: ${{ steps.check.outputs.changed }}
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Compare APP_VERSION with previous commit
+        id: check
+        shell: bash
+        run: |
+          if [ "${{ github.event_name }}" != "push" ] || [ "${{ github.ref_type }}" = "tag" ]; then
+            echo "changed=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          BASE="${{ github.event.before }}"
+          OLD=""
+          if [ -n "$BASE" ] && [ "$BASE" != "0000000000000000000000000000000000000000" ]; then
+            OLD=$(git show "$BASE:config.py" 2>/dev/null | grep -m1 '^APP_VERSION' || true)
+          fi
+          NEW=$(grep -m1 '^APP_VERSION' config.py || true)
+          echo "old: ${OLD:-<none>}"
+          echo "new: ${NEW:-<none>}"
+          if [ -n "$NEW" ] && [ "$OLD" != "$NEW" ]; then
+            echo "changed=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "changed=false" >> "$GITHUB_OUTPUT"
+          fi
+
   build-and-push-docker:
     name: Build & Push Docker Image
+    needs: check-version
+    if: needs.check-version.outputs.changed == 'true'
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -67,6 +106,8 @@ jobs:
 
   build-windows:
     name: Build Windows Standalone Executable
+    needs: check-version
+    if: needs.check-version.outputs.changed == 'true'
     runs-on: windows-latest
     steps:
       - name: Checkout repository
