@@ -50,6 +50,7 @@ from config import (
     get_connector_for_proxy,
     API_PASSWORD,
     check_password,
+    check_admin_password,
     get_client_ip,
     APP_VERSION,
     BYPASS_WARP_CONTEXT,
@@ -87,11 +88,24 @@ def unauthorized():
 
 
 def admin_guard(handler):
-    """Answer 401 before running a handler without a valid API password.
+    """Answer 401 before running a handler without a valid admin password.
 
     Works for plain handlers and for mixin methods (the request is located
     among the arguments, so ``self`` does not confuse the guard).
     """
+
+    @functools.wraps(handler)
+    async def wrapper(*args, **kwargs):
+        request = next((arg for arg in args if isinstance(arg, web.Request)), None)
+        if request is not None and not check_admin_password(request):
+            return unauthorized()
+        return await handler(*args, **kwargs)
+
+    return wrapper
+
+
+def api_guard(handler):
+    """Answer 401 before running a handler without a valid API password."""
 
     @functools.wraps(handler)
     async def wrapper(*args, **kwargs):

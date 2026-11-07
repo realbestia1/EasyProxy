@@ -1,10 +1,11 @@
 """Admin panel and API for the local Tor SOCKS5 proxy."""
 
 import functools
+import urllib.parse
 
 from aiohttp import web
 
-from config import check_password
+from config import check_admin_password
 from services.proxy_shared import admin_guard as admin, json_response
 from services import tor_proxy
 from services.proxy_shared import read_template
@@ -12,8 +13,8 @@ from services.proxy_shared import read_template
 
 def setup_tor_proxy_routes(app: web.Application) -> None:
     async def page(request):
-        if not check_password(request):
-            raise web.HTTPFound("/admin/login")
+        if not check_admin_password(request):
+            raise web.HTTPFound("/admin/login?next=" + urllib.parse.quote(request.path))
         return web.Response(text=read_template("torproxy.html"), content_type="text/html")
 
     @admin

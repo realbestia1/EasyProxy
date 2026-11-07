@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width,initial-scale=1.0">
-<title>EasyProxy Admin</title>
+<title>EasyProxy Login</title>
 <style>
     :root {
         --bg-primary: #0a0a1a;
@@ -110,7 +110,15 @@ async function login() {
     try {
         const r = await fetch('/api/admin/login', {method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({password:pwd})});
         if (!r.ok) { err.textContent='Password errata'; err.style.display='block'; return; }
-        window.location.href = '/admin';
+        const data = await r.json().catch(() => ({}));
+        const next = new URLSearchParams(window.location.search).get('next');
+        const safeNext = next && next.startsWith('/') && !next.startsWith('//') && !next.includes('\\') ? next : '';
+        if (data.scope === 'api' && (safeNext === '/admin' || safeNext.startsWith('/admin/'))) {
+            err.textContent = 'Questa è la password API. Per /admin serve la password admin.';
+            err.style.display = 'block';
+            return;
+        }
+        window.location.href = safeNext || (data.scope === 'api' ? '/builder' : '/admin');
     } catch(e) { err.textContent='Errore di connessione'; err.style.display='block'; }
 }
 </script>

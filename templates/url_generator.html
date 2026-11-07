@@ -93,46 +93,6 @@
             50% { background-position: 100% 50%; }
         }
 
-        .api-password-card {
-            background: var(--surface-glass);
-            border: 1px solid var(--border-primary);
-            border-radius: var(--border-radius);
-            padding: 1.25rem 1.5rem;
-            backdrop-filter: blur(20px);
-            margin-bottom: 1.5rem;
-            transition: var(--transition-normal);
-        }
-
-        .api-password-card:focus-within {
-            border-color: var(--accent-primary);
-            box-shadow: var(--glow-primary);
-        }
-
-        .api-password-card label {
-            display: block;
-            font-size: 0.8rem;
-            font-weight: 600;
-            color: var(--text-secondary);
-            margin-bottom: 0.5rem;
-            text-transform: uppercase;
-            letter-spacing: 0.05em;
-        }
-
-        .api-password-card input {
-            width: 100%;
-            background: transparent;
-            border: none;
-            outline: none;
-            color: var(--text-primary);
-            font-family: 'Inter', sans-serif;
-            font-size: 0.95rem;
-            padding: 0.25rem 0;
-        }
-
-        .api-password-card input::placeholder {
-            color: var(--text-muted);
-        }
-
         .tabs {
             display: flex;
             gap: 8px;
@@ -539,11 +499,6 @@
         <h1 class="page-title">URL Generator</h1>
         <p class="page-subtitle">Generate proxy URLs, extractor links, and batch requests compatible with EasyProxy.</p>
 
-        <div class="api-password-card">
-            <label>API Password</label>
-            <input id="apiPassword" type="password" placeholder="Optional — only if the server is password-protected">
-        </div>
-
         <div class="tabs">
             <button class="tab-btn active" data-tab="proxy">Proxy URL</button>
             <button class="tab-btn" data-tab="extractor">Extractor URL</button>
@@ -888,6 +843,8 @@
 
     <script>
 
+        const API_PASSWORD = {{API_PASSWORD}};
+
         // Tab switching
         const tabBtns = document.querySelectorAll('.tab-btn');
         const tabPanels = {
@@ -977,7 +934,7 @@
         async function generateProxyUrl() {
             let endpoint = document.getElementById('proxyEndpoint').value;
             const destinationUrl = document.getElementById('destinationUrl').value.trim();
-            const apiPassword = document.getElementById('apiPassword').value.trim();
+            const apiPassword = API_PASSWORD;
             const redirectStream = document.getElementById('proxyRedirectStream').checked;
             const bypassWarp = document.getElementById('proxyBypassWarp').checked;
             const proxyMode = document.getElementById('proxyMode').value;
@@ -1053,7 +1010,7 @@
             const host = document.getElementById('extractorHost').value.trim();
             const url = document.getElementById('extractorUrl').value.trim();
             const extension = document.getElementById('extractorExtension').value;
-            const apiPassword = document.getElementById('apiPassword').value.trim();
+            const apiPassword = API_PASSWORD;
             const redirectStream = document.getElementById('extractorRedirectStream').checked;
             const bypassWarp = document.getElementById('extractorBypassWarp').checked;
             const proxyMode = document.getElementById('extractorProxyMode').value;
@@ -1119,7 +1076,7 @@
             const audioExtractor = document.getElementById('dualAudioExtractor').value.trim();
             const audioLanguage = document.getElementById('dualAudioLanguage').value;
             const bypassAudioLanguage = document.getElementById('dualBypassAudioLanguage').checked;
-            const apiPassword = document.getElementById('apiPassword').value.trim();
+            const apiPassword = API_PASSWORD;
             const result = document.getElementById('dualResult');
 
             if (!videoUrl || !audioUrl) {
@@ -1156,7 +1113,7 @@
         }
 
         async function generateBatch() {
-            const apiPassword = document.getElementById('apiPassword').value.trim();
+            const apiPassword = API_PASSWORD;
             const source = document.getElementById('batchPayload').value.trim();
             const result = document.getElementById('batchResult');
 
@@ -1263,7 +1220,6 @@
             el.addEventListener('input', autoDual);
             if (el.type === 'checkbox' || el.tagName === 'SELECT') el.addEventListener('change', autoDual);
         });
-        document.getElementById('apiPassword').addEventListener('input', () => { autoProxy(); autoExtractor(); autoDual(); });
         document.getElementById('batchPayload').addEventListener('input', debounce(generateBatch, 500));
         document.getElementById('copyProxyResult').addEventListener('click', (e) => copyFrom('proxyResult', e.target));
         document.getElementById('copyExtractorResult').addEventListener('click', (e) => copyFrom('extractorResult', e.target));

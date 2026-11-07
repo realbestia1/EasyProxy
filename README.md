@@ -104,7 +104,8 @@ Only basic environment variables need to be set in your `.env` file or container
 | Variable | Description | Default |
 | :--- | :--- | :--- |
 | `PORT` | Server port | `7860` |
-| `API_PASSWORD` | Password to protect the proxy API and admin panel | `ep` |
+| `API_PASSWORD` | Password to protect the proxy API and the API-facing pages (builder, URL generator, recordings) | `ep` |
+| `ADMIN_PASSWORD` | Password for the admin panel and `/api/admin/*`. When set, it overrides `API_PASSWORD` for admin access | `API_PASSWORD` |
 
 ### 🛡️ Cloudflare WARP Integration
 The Docker image includes a pinned WARP registration script and `wireproxy`, providing a

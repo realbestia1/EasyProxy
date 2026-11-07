@@ -8,7 +8,7 @@ import config
 from config import check_password, APP_VERSION
 from services.updater import is_newer_version
 import config_store
-from services.proxy_shared import admin_guard as admin
+from services.proxy_shared import api_guard
 from services.proxy_shared import get_public_base_url, read_template
 
 logger = logging.getLogger(__name__)
@@ -28,7 +28,7 @@ def setup_recording_routes(app, recording_manager):
     async def handle_recordings_page(request):
         """Serve the recordings UI page."""
         if not check_password(request):
-            raise web.HTTPFound('/admin/login')
+            raise web.HTTPFound('/admin/login?next=/recordings')
         try:
             html_content = read_template('recordings.html')
             proxy = app.get('proxy')
@@ -44,7 +44,7 @@ def setup_recording_routes(app, recording_manager):
             return web.Response(text="Recordings template not found",
                                status=404)
 
-    @admin
+    @api_guard
     async def handle_list_recordings(request):
         """GET /api/recordings - List all recordings."""
 
@@ -58,7 +58,7 @@ def setup_recording_routes(app, recording_manager):
             "system_stats": system_stats
         })
 
-    @admin
+    @api_guard
     async def handle_get_recording(request):
         """GET /api/recordings/{id} - Get a specific recording."""
 
@@ -71,7 +71,7 @@ def setup_recording_routes(app, recording_manager):
 
         return web.json_response(recording)
 
-    @admin
+    @api_guard
     async def handle_start_recording(request):
         """POST /api/recordings/start - Start a new recording."""
 
@@ -130,7 +130,7 @@ def setup_recording_routes(app, recording_manager):
             return web.json_response(
                 {"error": "Failed to start recording"}, status=500)
 
-    @admin
+    @api_guard
     async def handle_stop_recording(request):
         """POST /api/recordings/{id}/stop - Stop an active recording."""
 
@@ -145,7 +145,7 @@ def setup_recording_routes(app, recording_manager):
                 {"error": "Recording not found or already stopped"},
                 status=404)
 
-    @admin
+    @api_guard
     async def handle_delete_recording(request):
         """DELETE /api/recordings/{id} - Delete a recording."""
 
@@ -158,7 +158,7 @@ def setup_recording_routes(app, recording_manager):
             return web.json_response({"error": "Recording not found"},
                                     status=404)
 
-    @admin
+    @api_guard
     async def handle_delete_recording_get(request):
         """GET /api/recordings/{id}/delete - Delete a recording via GET (for Stremio).
 
@@ -179,7 +179,7 @@ def setup_recording_routes(app, recording_manager):
         else:
             return web.json_response({"error": "Recording not found"}, status=404)
 
-    @admin
+    @api_guard
     async def handle_delete_all_recordings(request):
         """DELETE /api/recordings - Delete all recordings."""
 
@@ -194,7 +194,7 @@ def setup_recording_routes(app, recording_manager):
 
         return web.json_response({"success": True, "deleted": deleted})
 
-    @admin
+    @api_guard
     async def handle_download_recording(request):
         """GET /api/recordings/{id}/download - Download a recording file."""
 
@@ -237,7 +237,7 @@ def setup_recording_routes(app, recording_manager):
             }
         )
 
-    @admin
+    @api_guard
     async def handle_stream_recording(request):
         """GET /api/recordings/{id}/stream - Stream a recording file.
 
@@ -323,14 +323,14 @@ def setup_recording_routes(app, recording_manager):
         await response.write_eof()
         return response
 
-    @admin
+    @api_guard
     async def handle_active_recordings(request):
         """GET /api/recordings/active - Get only active recordings."""
 
         recordings = recording_manager.get_active_recordings()
         return web.json_response({"recordings": recordings})
 
-    @admin
+    @api_guard
     async def handle_record_via_get(request):
         """GET /record - Start recording and return a playable stream.
 
@@ -459,7 +459,7 @@ def setup_recording_routes(app, recording_manager):
         # Redirect to the live stream proxy
         raise web.HTTPFound(proxy_url)
 
-    @admin
+    @api_guard
     async def handle_stop_and_stream(request):
         """GET /record/stop/{id} - Stop an active recording and redirect to stream.
 

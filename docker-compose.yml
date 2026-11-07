@@ -9,6 +9,7 @@ services:
       - "7860:7860"
     environment:
       - API_PASSWORD=ep
+      # - ADMIN_PASSWORD=change_me
       - PORT=7860
     volumes:
       - ./data:/data

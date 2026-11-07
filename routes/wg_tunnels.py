@@ -2,11 +2,12 @@
 
 import functools
 import logging
+import urllib.parse
 
 from aiohttp import web
 
 import config_store
-from config import check_password
+from config import check_admin_password
 from services.proxy_shared import admin_guard as admin, json_response
 from services import wg_tunnels
 from services.proxy_shared import read_template
@@ -31,8 +32,8 @@ def setup_wg_tunnel_routes(app: web.Application) -> None:
     """Register the tunnel panels and their JSON API."""
 
     async def handle_page(request, slot: str):
-        if not check_password(request):
-            raise web.HTTPFound("/admin/login")
+        if not check_admin_password(request):
+            raise web.HTTPFound("/admin/login?next=" + urllib.parse.quote(request.path))
         _, template = PAGES[slot]
         try:
             return web.Response(text=read_template(template), content_type="text/html")

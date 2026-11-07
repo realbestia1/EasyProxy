@@ -1,4 +1,5 @@
 import os
+import hmac
 import shutil
 import logging
 import socket
@@ -44,7 +45,7 @@ _SOCKET_CHECK_EXECUTOR = ThreadPoolExecutor(
 )
 
 
-APP_VERSION = "2.13.68"
+APP_VERSION = "2.13.69"
 
 
 def get_extractor_proxies(extractor_name: str) -> list:
@@ -833,25 +834,56 @@ def get_ssl_setting_for_url(url: str, transport_routes: list = None) -> bool:
     return False
 
 API_PASSWORD = os.environ.get("API_PASSWORD")
+ADMIN_PASSWORD = os.environ.get("ADMIN_PASSWORD")
 PORT = int(os.environ.get("PORT", 7860))
+
+
+def _password_matches(value, expected):
+    """Confronto a tempo costante, tollerante a None."""
+    return bool(expected) and hmac.compare_digest(
+        str(value or "").encode(), str(expected).encode()
+    )
+
 
 def check_password(request):
     """Verifica la password API se impostata."""
     if not API_PASSWORD:
         return True
 
-    api_password_param = request.query.get("api_password")
-    if api_password_param == API_PASSWORD:
+    if _password_matches(request.query.get("api_password"), API_PASSWORD):
         return True
 
-    if request.headers.get("x-api-password") == API_PASSWORD:
+    if _password_matches(request.headers.get("x-api-password"), API_PASSWORD):
         return True
 
     # Cookie-based auth (set by /api/admin/login)
-    if request.cookies.get("admin_token") == API_PASSWORD:
+    token = request.cookies.get("admin_token")
+    if _password_matches(token, API_PASSWORD):
+        return True
+
+    # Un admin autenticato può accedere anche alle pagine/API protette da API_PASSWORD.
+    if ADMIN_PASSWORD and _password_matches(token, ADMIN_PASSWORD):
         return True
 
     return False
+
+
+def check_admin_password(request):
+    """Verifica la password admin: ADMIN_PASSWORD se impostata, altrimenti API_PASSWORD."""
+    expected = ADMIN_PASSWORD or API_PASSWORD
+    if not expected:
+        return True
+
+    return any(
+        _password_matches(value, expected)
+        for value in (
+            request.query.get("admin_password"),
+            request.query.get("api_password"),
+            request.headers.get("x-admin-password"),
+            request.headers.get("x-api-password"),
+            request.cookies.get("admin_token"),
+        )
+    )
 
 
 def get_client_ip(request):

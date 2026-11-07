@@ -687,12 +687,6 @@
                 </div>
 
                 <div class="form-group">
-                    <label class="form-label">API Password <span style="color:var(--text-muted);font-weight:400;">(optional)</span></label>
-                    <input type="password" id="apiPasswordInput" class="form-input"
-                        placeholder="Enter API password if required">
-                </div>
-
-                <div class="form-group">
                     <label class="form-label">Added Playlists <span id="urlCount" style="color:var(--text-muted);font-weight:400;"></span></label>
                     <div class="url-list" id="urlList">
                         <div class="url-list-empty" id="urlListEmpty">
@@ -736,6 +730,8 @@
 
     <script>
 
+        const API_PASSWORD = {{API_PASSWORD}};
+
         const observer = new IntersectionObserver((entries) => {
             entries.forEach(entry => {
                 if (entry.isIntersecting) entry.target.classList.add('visible');
@@ -748,7 +744,6 @@
                 this.urls = [];
                 this.elements = {
                     urlInput: document.getElementById('urlInput'),
-                    apiPassword: document.getElementById('apiPasswordInput'),
                     addBtn: document.getElementById('addBtn'),
                     clearBtn: document.getElementById('clearBtn'),
                     urlList: document.getElementById('urlList'),
@@ -768,7 +763,6 @@
                 });
                 this.elements.clearBtn.addEventListener('click', () => this.clearAll());
                 this.elements.copyBtn.addEventListener('click', () => this.copyUrl());
-                this.elements.apiPassword.addEventListener('input', () => { this.updateGenerateUrl(); if (this.urls.length) this.generate(); });
             }
 
             addUrl() {
@@ -891,8 +885,7 @@
                         if (p.warp) extraParams += '&warp=off';
                         if (p.noProxy) extraParams += '&proxy=off';
                         else if (p.proxy && p.proxy !== 'auto') extraParams += '&proxy=' + encodeURIComponent(p.proxy);
-                        const pw = this.elements.apiPassword.value.trim();
-                        if (pw) extraParams += `&api_password=${encodeURIComponent(pw)}`;
+                        if (API_PASSWORD) extraParams += `&api_password=${encodeURIComponent(API_PASSWORD)}`;
                         const ck = rawUrl.match(/[?&]clearkey=([^&]+)/i);
                         if (ck) {
                             extraParams += `&clearkey=${ck[1]}`;
@@ -918,8 +911,7 @@
                 const urlString = encoded.join(';');
                 const base = window.location.origin;
                 let finalUrl = `${base}/playlist?url=${urlString}`;
-                const pw = this.elements.apiPassword.value.trim();
-                if (pw) finalUrl += `&api_password=${encodeURIComponent(pw)}`;
+                if (API_PASSWORD) finalUrl += `&api_password=${encodeURIComponent(API_PASSWORD)}`;
                 return finalUrl;
             }
 

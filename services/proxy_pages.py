@@ -11,8 +11,8 @@ from services import wg_tunnels
 from services import tor_proxy
 from services.updater import check_update_info, apply_self_update, can_self_update, is_newer_version
 from services.proxy_shared import (
-    logger, web, APP_VERSION, admin_guard,
-    check_password, get_client_ip, PlaylistBuilder, ClientSession, ClientTimeout,
+    logger, web, APP_VERSION, admin_guard, api_guard,
+    check_password, check_admin_password, get_client_ip, PlaylistBuilder, ClientSession, ClientTimeout,
     TCPConnector, API_PASSWORD,
     get_public_base_url,
 )
@@ -23,6 +23,7 @@ from config import (
     reload_config,
     clear_proxy_affinity,
     get_system_stats,
+    ADMIN_PASSWORD,
 )
 
 # Background speedtest job state (single run at a time; polled by the panel).
@@ -49,6 +50,19 @@ _PROXY_ENV_KEYS = (
     "SOCKS_PROXY", "socks_proxy",
     "NO_PROXY", "no_proxy",
 )
+
+
+def _js_literal(value) -> str:
+    """Embed a Python string as a JS literal inside a <script> block."""
+    return json.dumps(value or "").replace("<", "\\u003c")
+
+
+def _safe_next_path(request, default="/admin") -> str:
+    """Only allow same-site absolute paths as post-login redirects."""
+    next_path = request.query.get("next", "")
+    if next_path.startswith("/") and not next_path.startswith("//") and "\\" not in next_path:
+        return next_path
+    return default
 
 
 
@@ -250,6 +264,8 @@ class HLSProxyPagesMixin:
 
     async def handle_url_generator(self, request):
         """Serve la pagina web per generare URL proxy ed extractor."""
+        if not check_password(request):
+            raise web.HTTPFound('/admin/login?next=' + urllib.parse.quote(request.path))
         try:
             html_content = self._read_template("url_generator.html")
             is_outdated = is_newer_version(self.latest_version, APP_VERSION)
@@ -257,9 +273,10 @@ class HLSProxyPagesMixin:
             html_content = html_content.replace("{{APP_VERSION}}", APP_VERSION)
             html_content = html_content.replace("{{LATEST_VERSION}}", self.latest_version)
             html_content = html_content.replace("{{VERSION_STATUS_CLASS}}", version_status_class)
+            html_content = html_content.replace("{{API_PASSWORD}}", _js_literal(API_PASSWORD))
             self.warp_status = await self.get_warp_status()
             html_content = html_content.replace("{{WARP_STATUS}}", self.warp_status)
-            return web.Response(text=html_content, content_type="text/html")
+            return web.Response(text=html_content, content_type="text/html", headers={"Cache-Control": "no-store"})
         except Exception as e:
             logger.error(f"Unable to load 'url_generator.html': {e}")
             return web.Response(
@@ -270,6 +287,8 @@ class HLSProxyPagesMixin:
 
     async def handle_builder(self, request):
         """Gestisce l'interfaccia web del playlist builder."""
+        if not check_password(request):
+            raise web.HTTPFound('/admin/login?next=' + urllib.parse.quote(request.path))
         try:
             html_content = self._read_template("builder.html")
             is_outdated = is_newer_version(self.latest_version, APP_VERSION)
@@ -277,9 +296,10 @@ class HLSProxyPagesMixin:
             html_content = html_content.replace("{{APP_VERSION}}", APP_VERSION)
             html_content = html_content.replace("{{LATEST_VERSION}}", self.latest_version)
             html_content = html_content.replace("{{VERSION_STATUS_CLASS}}", version_status_class)
+            html_content = html_content.replace("{{API_PASSWORD}}", _js_literal(API_PASSWORD))
             self.warp_status = await self.get_warp_status()
             html_content = html_content.replace("{{WARP_STATUS}}", self.warp_status)
-            return web.Response(text=html_content, content_type="text/html")
+            return web.Response(text=html_content, content_type="text/html", headers={"Cache-Control": "no-store"})
         except Exception as e:
             logger.error(f"❌ Critical error: unable to load 'builder.html': {e}")
             return web.Response(
@@ -559,7 +579,7 @@ class HLSProxyPagesMixin:
             logger.error(f"❌ Error generating URLs: {e}")
             return web.Response(text=str(e), status=500)
 
-    @admin_guard
+    @api_guard
     async def handle_proxy_ip(self, request):
         """Restituisce l'indirizzo IP pubblico reale del server (connessione diretta)."""
 
@@ -580,8 +600,8 @@ class HLSProxyPagesMixin:
             return web.Response(text=err_msg, status=500)
 
     async def handle_admin(self, request):
-        if not check_password(request):
-            raise web.HTTPFound('/admin/login')
+        if not check_admin_password(request):
+            raise web.HTTPFound('/admin/login?next=/admin')
         try:
             html = self._read_template("admin.html")
             html = html.replace("{{APP_VERSION}}", APP_VERSION)
@@ -592,8 +612,10 @@ class HLSProxyPagesMixin:
             return web.Response(text="Admin page error", status=500)
 
     async def handle_admin_login(self, request):
-        if check_password(request):
-            raise web.HTTPFound('/admin')
+        next_path = _safe_next_path(request)
+        is_admin_page = next_path == '/admin' or next_path.startswith('/admin/')
+        if check_admin_password(request) or (not is_admin_page and check_password(request)):
+            raise web.HTTPFound(next_path)
         html = self._read_template("admin_login.html")
         return web.Response(text=html, content_type="text/html")
 
@@ -605,12 +627,25 @@ class HLSProxyPagesMixin:
             return web.json_response({"error": "Invalid JSON"}, status=400)
         if not isinstance(data, dict):
             return web.json_response({"error": "Invalid payload"}, status=400)
-        password = str(data.get("password") or "")
-        if API_PASSWORD and not hmac.compare_digest(password.encode(), API_PASSWORD.encode()):
+
+        password = str(data.get("password") or "").encode()
+        admin_pw = (ADMIN_PASSWORD or API_PASSWORD or "").encode()
+        api_pw = (API_PASSWORD or "").encode()
+
+        if admin_pw and hmac.compare_digest(password, admin_pw):
+            scope = "admin"
+        elif api_pw and hmac.compare_digest(password, api_pw):
+            scope = "api"
+        elif not admin_pw and not api_pw:
+            scope = "open"
+        else:
             return web.json_response({"error": "Invalid password"}, status=401)
-        resp = web.json_response({"ok": True})
-        if API_PASSWORD:
-            resp.set_cookie("admin_token", API_PASSWORD, httponly=True, samesite="lax", max_age=86400 * 30, path="/")
+
+        resp = web.json_response({"ok": True, "scope": scope})
+        if scope == "admin":
+            resp.set_cookie("admin_token", admin_pw.decode(), httponly=True, samesite="lax", max_age=86400 * 30, path="/")
+        elif scope == "api":
+            resp.set_cookie("admin_token", api_pw.decode(), httponly=True, samesite="lax", max_age=86400 * 30, path="/")
         return resp
 
     async def handle_admin_logout(self, request):
@@ -622,6 +657,7 @@ class HLSProxyPagesMixin:
     async def handle_admin_api_get(self, request):
         config = config_store.get_all()
         config["api_password_configured"] = bool(API_PASSWORD)
+        config["admin_password_configured"] = bool(ADMIN_PASSWORD)
         config["app_version"] = APP_VERSION
         config["warp_status"] = await self.get_warp_status()
         config["warp_ip"] = getattr(self, '_warp_ip', '')
