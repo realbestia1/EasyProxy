@@ -1691,6 +1691,8 @@ class HLSProxyStreamingMixin:
                     }
                     for h in ["Content-Length", "Content-Range", "Accept-Ranges"]:
                         if h in resp.headers: response_headers[h] = resp.headers[h]
+                    # See the buffered path: keep Cloudflare from compressing segments.
+                    response_headers["Cache-Control"] = "no-transform"
 
                     response = web.StreamResponse(status=resp.status, headers=response_headers)
                     await response.prepare(request)
@@ -2033,6 +2035,10 @@ class HLSProxyStreamingMixin:
                 set_response_header(
                     response_headers, "Content-Length", str(len(content_bytes))
                 )
+                # Cloudflare in front of the proxy compresses cacheable .mp4/.m4s
+                # objects and then answers Range requests with the compressed
+                # size in Content-Range, truncating init segments for players.
+                set_response_header(response_headers, "Cache-Control", "no-transform")
 
                 if coalesce_future is not None and response_status == 200:
                     coalesce_future.set_result(

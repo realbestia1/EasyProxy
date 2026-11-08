@@ -41,6 +41,8 @@ class AudioStore:
         self._pinned: dict[str, int] = {}
         self._active: dict[str, int] = {}
         self._prefetch_tasks: set[asyncio.Task] = set()
+        # Silent lead-in fragments keyed by (sample_rate, channels, duration_ms).
+        self._gap_cache: dict[tuple[int, int, int], bytes] = {}
 
     def _lock(self, hid: str):
         return self._locks.setdefault(hid, asyncio.Lock())
@@ -411,6 +413,67 @@ class AudioStore:
                 timescale = struct.unpack(">I", init_data[offset_pos:offset_pos + 4])[0] or 48000
             self._patch_time(fragment, timescale, item["start"])
             return init_data, bytes(fragment)
+
+    @classmethod
+    def _audio_format(cls, init_data: bytes) -> tuple[int, int]:
+        """Return (sample_rate, channels) from the init segment's mp4a entry."""
+        found = cls._find_box(init_data, [b"moov", b"trak", b"mdia", b"minf", b"stbl", b"stsd"])
+        if found:
+            position, _, header = found
+            entry = position + header + 8  # skip version/flags + entry_count
+            if init_data[entry + 4:entry + 8] == b"mp4a":
+                channels = struct.unpack(">H", init_data[entry + 24:entry + 26])[0]
+                sample_rate = struct.unpack(">I", init_data[entry + 32:entry + 36])[0] >> 16
+                if sample_rate and channels:
+                    return sample_rate, channels
+        return 48000, 2
+
+    async def gap_fragment(self, hid: str, offset: float, rate: float, duration: float) -> bytes:
+        """Silent fragment covering [0, duration) before the first shifted segment.
+
+        Strict HLS players (AVPlayer) stall when the audio rendition's first
+        media timestamp sits far after its playlist position; a leading
+        silent segment keeps playlist and media timelines aligned.
+        """
+        timeline = self.timeline(self.metadata(hid), offset, rate)
+        if not timeline:
+            raise ValueError("empty audio timeline")
+        init_data, _ = await self.fragment_bytes(hid, timeline[0]["idx"], offset, rate)
+        sample_rate, channels = self._audio_format(init_data)
+        key = (sample_rate, channels, int(round(duration * 1000)))
+        cached = self._gap_cache.get(key)
+        if cached is not None:
+            return cached
+        with tempfile.TemporaryDirectory(prefix=f"dual-gap-{hid}-") as temp_dir:
+            work = Path(temp_dir)
+            layout = "mono" if channels == 1 else "stereo" if channels == 2 else f"{channels}c"
+            command = [
+                "ffmpeg", "-v", "error", "-f", "lavfi",
+                "-i", f"anullsrc=r={sample_rate}:cl={layout}",
+                "-t", f"{duration:.6f}", "-c:a", "aac", "-profile:a", "aac_low", "-b:a", "64k",
+                "-f", "hls", "-hls_time", "99999", "-hls_playlist_type", "vod",
+                "-hls_segment_type", "fmp4", "-hls_fmp4_init_filename", "init.mp4",
+                "-hls_segment_filename", "f%d.m4s", "-hls_list_size", "0", "-y", "output.m3u8",
+            ]
+            process = await asyncio.create_subprocess_exec(
+                *command, cwd=work, stdout=asyncio.subprocess.DEVNULL, stderr=asyncio.subprocess.PIPE
+            )
+            try:
+                _, error = await asyncio.wait_for(process.communicate(), timeout=30)
+            except BaseException:
+                if process.returncode is None:
+                    process.kill()
+                    await process.communicate()
+                raise
+            made = work / "f0.m4s"
+            if process.returncode or not made.exists():
+                raise RuntimeError((error.decode(errors="replace") or "ffmpeg failed")[:300])
+            fragment = bytearray(made.read_bytes())
+        self._patch_time(fragment, sample_rate, 0.0)
+        if len(self._gap_cache) >= 64:
+            self._gap_cache.clear()
+        self._gap_cache[key] = bytes(fragment)
+        return self._gap_cache[key]
 
     def prefetch(self, hid: str, indices: list[int], offset: float, rate: float) -> None:
         """Warm the fragment cache while the player is still starting."""
