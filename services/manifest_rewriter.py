@@ -927,4 +927,10 @@ class ManifestRewriter:
                 1,
             )
 
+        if "#EXT-X-ENDLIST" in text and "dual_video_track=" in text:
+            from services.dual.prefetch import register_playlist
+            register_playlist([
+                line for line in rewritten_lines
+                if "/proxy/hls/segment" in line and not line.startswith("#")
+            ])
         return ManifestRewriter._ensure_hls_version(text)

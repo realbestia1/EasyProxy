@@ -6,6 +6,7 @@ import urllib.parse
 from concurrent.futures import ThreadPoolExecutor
 import aiohttp
 from services.dual.video import byte_range, video_only
+import services.dual.prefetch as dual_prefetch
 import config as _config
 from config import is_proxy_alive
 import services.proxy_shared as _shared
@@ -923,6 +924,12 @@ class HLSProxyStreamingMixin:
             )
             return web.Response(text=f"Segment error: {str(e)}", status=500)
 
+    @staticmethod
+    def _loopback_base(request) -> str:
+        sockname = request.transport.get_extra_info("sockname") if request.transport else None
+        port = sockname[1] if sockname else int(os.environ.get("PORT", "7860"))
+        return f"http://127.0.0.1:{port}"
+
     async def _proxy_stream(self, request, stream_url, stream_headers, bypass_warp=None, forced_proxy=None, force_direct=None, extractor_key=None, stream_key=None):
         """Effettua il proxy dello stream con gestione manifest e AES-128"""
         is_hls_segment_request = request.path.startswith("/proxy/hls/segment.")
@@ -932,6 +939,26 @@ class HLSProxyStreamingMixin:
                 raise ValueError()
         except ValueError:
             return web.Response(status=400, text="Invalid DUAL video track")
+        is_dual_prefetch = request.headers.get(dual_prefetch.PREFETCH_HEADER) == "1"
+        if dual_video_track and is_hls_segment_request and not is_dual_prefetch:
+            segment_key = request.query.get("d", "")
+            cached_segment = await dual_prefetch.lookup(segment_key, dual_video_track)
+            if cached_segment is not None:
+                body, status, content_range = byte_range(cached_segment, request.headers.get("Range"))
+                cached_headers = {
+                    "Content-Type": "video/mp4",
+                    "Accept-Ranges": "bytes",
+                    "Content-Length": str(len(body)),
+                    "Cache-Control": "no-transform",
+                    "Content-Encoding": "identity",
+                    "Access-Control-Allow-Origin": "*",
+                    "Access-Control-Allow-Methods": "GET, HEAD, OPTIONS",
+                    "Access-Control-Allow-Headers": "Range, Content-Type",
+                }
+                if content_range:
+                    cached_headers["Content-Range"] = content_range
+                dual_prefetch.schedule_after(segment_key, dual_video_track, self._loopback_base(request))
+                return web.Response(body=body, status=status, headers=cached_headers)
         if bypass_warp is None:
             bypass_warp = request.query.get("warp", "").lower() == "off"
         bypass_proxies = request.query.get("proxy", "").lower() == "off"
@@ -1958,6 +1985,11 @@ class HLSProxyStreamingMixin:
                     except ValueError as exc:
                         logger.warning("DUAL video filtering failed: %s", exc)
                         return web.Response(status=502, text="Invalid DUAL fMP4 segment", headers={"Access-Control-Allow-Origin": "*"})
+                    if is_hls_segment_request and response_status == 200:
+                        segment_key = request.query.get("d", "")
+                        dual_prefetch.store(segment_key, dual_video_track, content_bytes)
+                        if not is_dual_prefetch:
+                            dual_prefetch.schedule_after(segment_key, dual_video_track, self._loopback_base(request))
 
                 response_headers = {}
 
