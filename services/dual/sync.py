@@ -102,6 +102,15 @@ class SyncEngine:
     LINEAR_MIN_CORRELATION = 0.75
     SYNC_MAX_DEVIATION = 0.25
     SYNC_MAX_LAG_SECONDS = 20
+    # Last-resort search window: editions that differ by an intro/logo of
+    # 10-60s keep a constant offset the 15s probes cannot reach.
+    SYNC_WIDE_SEARCH_SECONDS = 60
+    # Longer probes and a lower per-sample floor: ITA-vs-original envelopes
+    # correlate weakly, but random peaks never agree within SYNC_MAX_DEVIATION
+    # across a 120s window, so the >=60% agreement rule stays the safeguard.
+    SYNC_WIDE_SAMPLE_SECONDS = 30
+    SYNC_WIDE_MIN_CORRELATION = 0.50
+    SYNC_WIDE_PROBES = 8
     LINEAR_MAX_DEVIATION = 0.10
     MAX_RATE_DELTA = 0.002
     MAX_END_DEVIATION = 1.5
@@ -880,21 +889,27 @@ class SyncEngine:
         reference_matches_video = None
         measurements = []
 
-        async def collect_one(position: float, index: int, batch: str):
+        async def collect_one(position: float, index: int, batch: str, wide: float = 0.0):
+            sample_seconds = self.SYNC_WIDE_SAMPLE_SECONDS if wide else self.sample_seconds
+            # wide > 0: decode a longer audio window around the probe so an
+            # offset up to +-wide seconds still overlaps the reference sample.
+            audio_start = max(0.0, position - wide)
+            shift = position - audio_start
             video_dir = root / f"{batch}-video-{index}"
             audio_dir = root / f"{batch}-audio-{index}"
             video_dir.mkdir(), audio_dir.mkdir()
             if reference_audio_url:
                 reference_task = self._decode_reference_audio(
-                    reference_audio_url, video_headers, position, video_dir
+                    reference_audio_url, video_headers, position, video_dir, sample_seconds
                 )
             else:
                 reference_task = self._decode_video(
-                    video_url, video_headers, position, video_dir
+                    video_url, video_headers, position, video_dir, sample_seconds
                 )
+            audio_seconds = sample_seconds + shift + wide
             reference_result, audio_result = await self._gather_strict(
                 reference_task,
-                self._decode_audio(audio_hid, position, audio_dir),
+                self._decode_audio(audio_hid, audio_start, audio_dir, sample_seconds=audio_seconds),
             )
             reference_playlist, reference_seek, _ = reference_result
             audio_playlist, audio_seek, _ = audio_result
@@ -905,13 +920,13 @@ class SyncEngine:
                     reference_playlist,
                     reference_seek,
                     video_pcm,
-                    sample_seconds=self.sample_seconds,
+                    sample_seconds=sample_seconds,
                 ),
                 self._pcm(
                     audio_playlist,
                     audio_seek,
                     audio_pcm,
-                    sample_seconds=self.sample_seconds,
+                    sample_seconds=audio_seconds,
                 ),
                 return_exceptions=True,
             )
@@ -929,21 +944,30 @@ class SyncEngine:
                 self._lag,
                 video_envelope,
                 audio_envelope,
-                self.SYNC_MAX_LAG_SECONDS,
+                int(math.ceil(shift + wide)) if wide else self.SYNC_MAX_LAG_SECONDS,
             )
-            return {"position": position, "lag": lag, "offset": lag, "correlation": correlation}
+            offset = round(lag - shift, 3)
+            return {"position": position, "lag": offset, "offset": offset, "correlation": correlation}
 
-        async def collect_batch(positions, batch: str = "main", accept_early: bool = False):
+        async def collect_batch(
+            positions,
+            batch: str = "main",
+            accept_early: bool = False,
+            wide: float = 0.0,
+            sink: list | None = None,
+            accept_minimum: float = 0.65,
+        ):
             """Run every probe in parallel and stop as soon as they agree."""
+            measurements_out = measurements if sink is None else sink
             tasks = [
-                asyncio.ensure_future(collect_one(position, index, batch))
+                asyncio.ensure_future(collect_one(position, index, batch, wide))
                 for index, position in enumerate(positions)
             ]
             failures: list[BaseException] = []
             try:
                 for completed in asyncio.as_completed(tasks):
                     try:
-                        measurements.append(await completed)
+                        measurements_out.append(await completed)
                     except asyncio.CancelledError:
                         raise
                     except BaseException as exc:
@@ -955,7 +979,7 @@ class SyncEngine:
                         )
                         continue
                     if accept_early:
-                        constant = self._constant_candidate(measurements, minimum=0.65)
+                        constant = self._constant_candidate(measurements_out, minimum=accept_minimum)
                         if constant is not None:
                             return constant
             finally:
@@ -963,7 +987,7 @@ class SyncEngine:
                     if not task.done():
                         task.cancel()
                 await asyncio.gather(*tasks, return_exceptions=True)
-            if failures and len(measurements) < 3:
+            if failures and len(measurements_out) < 3:
                 raise failures[0]
             return None
 
@@ -1187,17 +1211,59 @@ class SyncEngine:
                     len(linear_measurements),
                 )
 
-        if result["status"] != "ok" and linear_measurements:
-            linear_result = self._measurement_result(
-                video_duration,
-                audio_duration,
-                linear_measurements,
-                video_start_time,
-            )
-            if linear_result["status"] == "ok":
-                result = linear_result
-            else:
-                result["linear_measurements"] = linear_measurements
+            if result["status"] != "ok" and linear_measurements:
+                linear_result = self._measurement_result(
+                    video_duration,
+                    audio_duration,
+                    linear_measurements,
+                    video_start_time,
+                )
+                if linear_result["status"] == "ok":
+                    result = linear_result
+                else:
+                    result["linear_measurements"] = linear_measurements
+
+            if result["status"] != "ok":
+                wide = float(self.SYNC_WIDE_SEARCH_SECONDS)
+                probes = self.SYNC_WIDE_PROBES
+                wide_positions = sorted({common * k / (probes + 1) for k in range(1, probes + 1)})
+                logger.info(
+                    "[DUAL] sync sampling wide positions=%s window=+-%.0fs",
+                    ",".join(f"{position:.1f}" for position in wide_positions),
+                    wide,
+                )
+                wide_measurements: list[dict] = []
+                try:
+                    await collect_batch(
+                        wide_positions,
+                        "wide",
+                        accept_early=True,
+                        wide=wide,
+                        sink=wide_measurements,
+                        accept_minimum=self.SYNC_WIDE_MIN_CORRELATION,
+                    )
+                except Exception as exc:
+                    # Keep the earlier rejection; a failed last resort is not a new verdict.
+                    logger.warning("[DUAL] wide sync failed: %s: %s", type(exc).__name__, str(exc)[:180])
+                logger.info("[DUAL] sync wide samples complete count=%d", len(wide_measurements))
+                wide_constant = self._constant_candidate(
+                    wide_measurements, minimum=self.SYNC_WIDE_MIN_CORRELATION
+                )
+                if wide_constant is not None:
+                    measured, deviation, confidence = wide_constant
+                    result = {
+                        "status": "ok",
+                        "offset": round(-measured + video_start_time, 3),
+                        "rate": 1.0,
+                        "confidence": confidence,
+                        "deviation": deviation,
+                        "sync_mode": "wide",
+                        "video_duration": video_duration,
+                        "audio_duration": audio_duration,
+                        "measurements": wide_measurements,
+                    }
+                elif wide_measurements:
+                    result["wide_measurements"] = wide_measurements
         if result["status"] != "ok":
             def _summarize(items):
                 try:
