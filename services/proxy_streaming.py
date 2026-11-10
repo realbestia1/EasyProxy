@@ -38,6 +38,8 @@ from services.proxy_shared import (
     final_curl_request_url,
     should_use_curl_cffi,
     is_special_cdn_stream,
+    host_needs_impersonation,
+    remember_impersonation_host,
     get_public_base_url,
     get_extractor_routing_overrides,
     request_log_context,
@@ -930,6 +932,53 @@ class HLSProxyStreamingMixin:
         port = sockname[1] if sockname else int(os.environ.get("PORT", "7860"))
         return f"http://127.0.0.1:{port}"
 
+    async def _waf_impersonation_works(self, stream_url, headers, session_proxy, disable_ssl) -> bool:
+        """One-shot check: does the same request pass with a browser TLS fingerprint?
+
+        Some Cloudflare-fronted hosts answer 403 to aiohttp (JA3/JA4) regardless
+        of WARP, but 200 to curl_cffi impersonation. On success the caller
+        remembers the host, so following manifests/segments skip aiohttp.
+        """
+        session_cls = get_curl_async_session()
+        if session_cls is None:
+            return False
+        curl_kwargs = {"impersonate": "chrome124"}
+        curl_options = _config.get_curl_ipv4_options(session_proxy).get("curl_options")
+        if curl_options:
+            curl_kwargs["curl_options"] = curl_options
+        curl_s = None
+        try:
+            curl_s = session_cls(**curl_kwargs)
+            resp = await curl_s.get(
+                final_curl_request_url(stream_url),
+                headers=prepare_curl_headers(stream_url, headers),
+                proxies={"http": session_proxy, "https": session_proxy} if session_proxy else None,
+                verify=not disable_ssl,
+                timeout=15,
+                stream=True,
+                allow_redirects=True,
+            )
+            try:
+                return resp.status_code in (200, 206)
+            finally:
+                try:
+                    await resp.aclose()
+                except Exception:
+                    pass
+        except Exception as exc:
+            logger.debug(
+                "Impersonation probe failed for %s: %s",
+                stream_url,
+                exc,
+            )
+            return False
+        finally:
+            if curl_s is not None:
+                try:
+                    await curl_s.close()
+                except Exception:
+                    pass
+
     async def _proxy_stream(self, request, stream_url, stream_headers, bypass_warp=None, forced_proxy=None, force_direct=None, extractor_key=None, stream_key=None):
         """Effettua il proxy dello stream con gestione manifest e AES-128"""
         is_hls_segment_request = request.path.startswith("/proxy/hls/segment.")
@@ -1521,6 +1570,36 @@ class HLSProxyStreamingMixin:
 
                 if resp.status not in [200, 206]:
                     if resp.status == 403:
+                        # Cloudflare can reject aiohttp's TLS fingerprint even
+                        # through WARP. Probe once with browser impersonation;
+                        # on success the host is remembered so its segments and
+                        # later manifests go straight to curl_cffi.
+                        if (
+                            HAS_CURL_CFFI
+                            and not use_curl_cffi
+                            and not is_special_cdn
+                            and not host_needs_impersonation(stream_url)
+                        ):
+                            waf_host = urllib.parse.urlsplit(stream_url).hostname or stream_url
+                            if await self._waf_impersonation_works(
+                                stream_url, headers, session_proxy, disable_ssl
+                            ):
+                                remember_impersonation_host(stream_url)
+                                logger.info(
+                                    "🕵️ WAF TLS block bypassed for %s with browser impersonation, retrying [%s]",
+                                    waf_host,
+                                    log_context(session_proxy),
+                                )
+                                return await self._proxy_stream(
+                                    request,
+                                    stream_url,
+                                    stream_headers,
+                                    bypass_warp=bypass_warp,
+                                    forced_proxy=forced_proxy,
+                                    force_direct=force_direct,
+                                    extractor_key=extractor_key,
+                                    stream_key=stream_key,
+                                )
                         # 1. Quick retry if it's a transient CDN error (e.g. Varnish cache miss with Retry-After on TikTok/live CDNs)
                         if is_hls_segment_request:
                             retry_after = resp.headers.get("Retry-After")

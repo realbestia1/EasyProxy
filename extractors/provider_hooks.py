@@ -1,3 +1,4 @@
+import time
 import urllib.parse
 
 
@@ -19,6 +20,36 @@ PROTECTED_CURL_DOMAINS = (
 )
 MANIFEST_ONLY_CURL_DOMAINS = ("torrentio", "strem.fun")
 
+# Hosts that answered 403 to aiohttp and 200 to browser impersonation are
+# remembered here so their segments skip the doomed aiohttp attempt. Their
+# domains rotate daily, so a static list cannot cover them.
+IMPERSONATION_HOST_TTL_SECONDS = 1800.0
+_impersonation_hosts: dict[str, float] = {}
+
+
+def _host_of(url: str) -> str:
+    try:
+        return (urllib.parse.urlsplit(url).hostname or "").lower()
+    except ValueError:
+        return ""
+
+
+def host_needs_impersonation(url: str) -> bool:
+    host = _host_of(url)
+    expiry = _impersonation_hosts.get(host or "")
+    if not expiry:
+        return False
+    if expiry < time.monotonic():
+        _impersonation_hosts.pop(host or "", None)
+        return False
+    return True
+
+
+def remember_impersonation_host(url: str) -> None:
+    host = _host_of(url)
+    if host:
+        _impersonation_hosts[host] = time.monotonic() + IMPERSONATION_HOST_TTL_SECONDS
+
 
 def is_dynamic_warp_bypass_candidate(domain: str) -> bool:
     value = (domain or "").lower()
@@ -37,6 +68,8 @@ def should_use_curl_cffi(stream_url: str, is_special_cdn: bool, has_curl_cffi: b
     value = (stream_url or "").lower()
     if not has_curl_cffi or is_special_cdn:
         return False
+    if host_needs_impersonation(value):
+        return True
     if not any(domain in value for domain in PROTECTED_CURL_DOMAINS):
         return False
     if any(domain in value for domain in MANIFEST_ONLY_CURL_DOMAINS):
@@ -114,6 +147,8 @@ __all__ = [
     "prefer_default_family_for_url",
     "is_special_cdn_stream",
     "should_use_curl_cffi",
+    "host_needs_impersonation",
+    "remember_impersonation_host",
     "prepare_curl_headers",
     "final_curl_request_url",
     "should_use_short_manifest_urls",
