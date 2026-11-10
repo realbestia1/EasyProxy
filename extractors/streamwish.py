@@ -29,7 +29,9 @@ class StreamWishExtractor(BaseExtractor):
             or self.request_headers.get("Referer")
             or self.request_headers.get("referer")
         )
-        if not referer:
+        if not referer or urlparse(referer).hostname != urlparse(url).hostname:
+            # The admin page (or the player) is not a meaningful Referer for the
+            # embed host and can trigger hotlink protection.
             parsed = urlparse(url)
             referer = f"{parsed.scheme}://{parsed.netloc}/"
 
@@ -51,8 +53,8 @@ class StreamWishExtractor(BaseExtractor):
         if not final_url and not has_packed:
             # An edge can answer 200 with an interstitial instead of the player.
             logger.warning(
-                "StreamWish: no player in %s (HTTP %s, %d bytes), retrying",
-                iframe_url, status, len(html),
+                "StreamWish: no player in %s (HTTP %s, %d bytes, referer %s), retrying",
+                iframe_url, status, len(html), referer,
             )
             resp_iframe = await self._make_request(iframe_url, headers=headers)
             html = resp_iframe.text
