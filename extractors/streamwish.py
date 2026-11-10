@@ -43,10 +43,24 @@ class StreamWishExtractor(BaseExtractor):
 
         resp_iframe = await self._make_request(iframe_url, headers=headers)
         html = resp_iframe.text
+        status = resp_iframe.status
 
         final_url = self._extract_m3u8(html)
+        has_packed = "eval(function(p,a,c,k,e,d)" in html
 
-        if not final_url and "eval(function(p,a,c,k,e,d)" in html:
+        if not final_url and not has_packed:
+            # An edge can answer 200 with an interstitial instead of the player.
+            logger.warning(
+                "StreamWish: no player in %s (HTTP %s, %d bytes), retrying",
+                iframe_url, status, len(html),
+            )
+            resp_iframe = await self._make_request(iframe_url, headers=headers)
+            html = resp_iframe.text
+            status = resp_iframe.status
+            final_url = self._extract_m3u8(html)
+            has_packed = "eval(function(p,a,c,k,e,d)" in html
+
+        if not final_url and has_packed:
             try:
                 # Unpack the page we already fetched: a second request can land
                 # on a different edge and return a page without the player.
@@ -67,7 +81,10 @@ class StreamWishExtractor(BaseExtractor):
                 final_url = None
 
         if not final_url:
-            raise ExtractorError("StreamWish: Failed to extract m3u8")
+            raise ExtractorError(
+                f"StreamWish: Failed to extract m3u8 (HTTP {status}, {len(html)} bytes, "
+                f"packed={'yes' if has_packed else 'no'}, {iframe_url})"
+            )
 
         if final_url.startswith("/"):
             final_url = urljoin(iframe_url, final_url)
