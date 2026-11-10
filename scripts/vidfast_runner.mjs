@@ -138,12 +138,15 @@ function parseProps(html) {
 function scriptUrls(html) {
   const urls = [];
   const seen = new Set();
-  for (const match of html.matchAll(/<script[^>]+src="([^"]+)"/gi)) {
-    const src = absoluteUrl(match[1]);
-    if (!src.includes("/_next/static/chunks/") || seen.has(src)) continue;
+  const add = raw => {
+    const src = absoluteUrl(raw);
+    if (!src.includes("/_next/static/chunks/") || !src.endsWith(".js") || seen.has(src)) return;
     seen.add(src);
     urls.push(src);
-  }
+  };
+  for (const match of html.matchAll(/<script[^>]+src="([^"]+)"/gi)) add(match[1]);
+  // The player chunk is lazy: the page only lists it in the flight payload.
+  for (const match of html.matchAll(/(?:\/_next)?\/static\/chunks\/[^"'\s\\]+?\.js/g)) add(match[0]);
   return urls;
 }
 
@@ -348,7 +351,14 @@ function webpackRequire(id) {
   const mod = { exports: {} };
   cache[id] = mod;
   const req = Object.assign(requested => webpackRequire(requested), {
-    d: defineExports, bind: (target, ...args) => target.bind(...args), g: context,
+    d: defineExports,
+    r: exports => {
+      Object.defineProperty(exports, Symbol.toStringTag, { value: "Module" });
+      exports.__esModule = true;
+    },
+    n: module => (module && module.__esModule ? () => module.default : () => module),
+    o: (obj, key) => Object.prototype.hasOwnProperty.call(obj, key),
+    bind: (target, ...args) => target.bind(...args), g: context,
   });
   modules[id](mod, mod.exports, req);
   return mod.exports;
@@ -527,10 +537,19 @@ async function loadPlayer(html, reactModule) {
     loadChunk(code, url);
   }
   installStubs(reactModule);
-  const playerId = Object.keys(modules).find(id => String(modules[id]).includes("xZ/aW~D6:U0_]EVA"));
-  if (!playerId) throw new Error("VidFast player bundle not found");
-  log("player module", playerId);
-  return webpackRequire(Number(playerId));
+  // The page renders one lazy Player.js?playerVariant=N; its chunk and module
+  // ids are listed in the page module, indexed by the variantIndex prop.
+  const variant = Number((html.match(/variantIndex\\?":(\d+)/) || [0, 0])[1]);
+  let playerId = null;
+  for (const factory of Object.values(modules)) {
+    const source = String(factory);
+    if (!source.includes("playerVariant=")) continue;
+    const ids = [...source.matchAll(/\.bind\(\w+,(\d+)\)/g)].map(match => Number(match[1]));
+    if (ids.length) { playerId = ids[variant] ?? ids[0]; break; }
+  }
+  if (playerId === null) throw new Error("VidFast player bundle not found");
+  log("player module", playerId, "variant", variant);
+  return webpackRequire(playerId);
 }
 
 async function resolve() {

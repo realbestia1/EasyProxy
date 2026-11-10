@@ -10,6 +10,7 @@ import json
 import os
 import shutil
 import sys
+from pathlib import Path
 
 from extractors.base import ExtractorError
 
