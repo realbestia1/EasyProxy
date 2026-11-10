@@ -1,7 +1,10 @@
+import logging
 import re
 from urllib.parse import urljoin, urlparse
 from extractors.base import BaseExtractor, ExtractorError
 from utils.packed import eval_solver
+
+logger = logging.getLogger(__name__)
 
 
 class StreamWishExtractor(BaseExtractor):
@@ -45,8 +48,10 @@ class StreamWishExtractor(BaseExtractor):
 
         if not final_url and "eval(function(p,a,c,k,e,d)" in html:
             try:
+                # Unpack the page we already fetched: a second request can land
+                # on a different edge and return a page without the player.
                 final_url = await eval_solver(
-                    await self._get_session(iframe_url),
+                    None,
                     iframe_url,
                     headers,
                     [
@@ -55,8 +60,10 @@ class StreamWishExtractor(BaseExtractor):
                         # relative stream paths
                         r'(\/stream\/[^"\'\s]+\.m3u8[^"\'\s]*)',
                     ],
+                    text=html,
                 )
-            except Exception:
+            except Exception as exc:
+                logger.warning("StreamWish: packed-script extraction failed: %s", exc)
                 final_url = None
 
         if not final_url:
