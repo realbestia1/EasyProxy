@@ -747,6 +747,63 @@ class HLSProxyCoreMixin:
         return None
 
     @staticmethod
+    def _png_itxt_ts(content: bytes) -> bytes | None:
+        """TS packets wrapped in PNG iTXt chunks (Matchora / CanvasLoader steganography)."""
+        off = 8
+        parts = []
+        c_len = len(content)
+        while off + 12 <= c_len:
+            length = int.from_bytes(content[off:off + 4], "big")
+            kind = content[off + 4:off + 8]
+            s = off + 8
+            e = s + length
+            if e + 4 > c_len:
+                break
+            if kind == b"iTXt":
+                chunk = content[s:e]
+                z = chunk.find(b"\x00")
+                if z != -1 and chunk.startswith(b"payload-"):
+                    try:
+                        idx = int(chunk[8:z].decode("latin1"))
+                        c = chunk[z + 1]
+                        z2 = chunk.find(b"\x00", z + 3)
+                        z3 = chunk.find(b"\x00", z2 + 1)
+                        if z3 != -1:
+                            payload_data = chunk[z3 + 1:]
+                            parts.append((idx, c, payload_data))
+                    except Exception:
+                        pass
+            off = e + 4
+
+        if not parts:
+            return None
+
+        parts.sort(key=lambda x: x[0])
+        import zlib
+        import base64
+        bufs = []
+        for idx, c, d in parts:
+            if c == 1:
+                try:
+                    bufs.append(zlib.decompress(d))
+                except Exception:
+                    try:
+                        bufs.append(zlib.decompress(d, -15))
+                    except Exception:
+                        return None
+            else:
+                bufs.append(d)
+
+        try:
+            full_b64 = b"".join(bufs)
+            video_bytes = base64.b64decode(full_b64)
+            if len(video_bytes) > 188 and video_bytes[0] == 0x47 and video_bytes[188] == 0x47:
+                return video_bytes
+        except Exception:
+            return None
+        return None
+
+    @staticmethod
     def _webp_exif_ts(content: bytes) -> bytes | None:
         """TS packet(s) stored in the WebP EXIF chunk (daddyliveplayer.st)."""
         off = 12
@@ -782,6 +839,10 @@ class HLSProxyCoreMixin:
         is_png = content.startswith(b"\x89PNG\r\n\x1a\n")
 
         if is_png:
+            itxt = HLSProxyCoreMixin._png_itxt_ts(content)
+            if itxt is not None:
+                return itxt
+
             trailing = HLSProxyCoreMixin._png_trailing_ts(content)
             if trailing is not None:
                 return trailing

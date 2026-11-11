@@ -128,6 +128,19 @@ class PlaylistBuilder:
                 elif 'fctv33' in logical_line or 'mpgreatestclgczbmiddle' in logical_line:
                     encoded_url = urllib.parse.quote(logical_line, safe='')
                     processed_url_content = f"{base_url}/extractor/video.m3u8?host=fctv33&redirect_stream=true&d={encoded_url}"
+                elif ('scorezonetv.live' in logical_line or logical_line.startswith('scorezone://')) and '/extractor/' not in logical_line:
+                    encoded_url = urllib.parse.quote(logical_line, safe='')
+                    processed_url_content = f"{base_url}/extractor/video.m3u8?host=scorezone&redirect_stream=true&d={encoded_url}"
+                elif ('htsport.info' in logical_line or 'htsport.cc' in logical_line or logical_line.startswith('htsport://')) and '/extractor/' not in logical_line:
+                    encoded_url = urllib.parse.quote(logical_line, safe='')
+                    processed_url_content = f"{base_url}/extractor/video.m3u8?host=htsport&redirect_stream=true&d={encoded_url}"
+                elif ('matchora.pro' in logical_line or 'matchora.to' in logical_line or logical_line.startswith('matchora://')) and '/extractor/' not in logical_line:
+                    encoded_url = urllib.parse.quote(logical_line, safe='')
+                    processed_url_content = f"{base_url}/extractor/video.m3u8?host=matchora&redirect_stream=true&d={encoded_url}"
+                elif '/extractor/video' in logical_line:
+                    parsed = urllib.parse.urlsplit(logical_line)
+                    path_with_query = parsed.path + ('?' + parsed.query if parsed.query else '')
+                    processed_url_content = f"{base_url}{path_with_query}"
                 elif '.m3u8' in logical_line:
                     encoded_url = urllib.parse.quote(logical_line, safe='')
                     processed_url_content = f"{base_url}/proxy/manifest.m3u8?url={encoded_url}"
@@ -153,19 +166,25 @@ class PlaylistBuilder:
                     current_ext_headers = {}
                 
                 # ✅ FIX: Aggiungi api_password se presente
-                if api_password:
-                    processed_url_content += f"&api_password={api_password}"
+                if api_password and "api_password=" not in processed_url_content:
+                    separator = '&' if '?' in processed_url_content else '?'
+                    processed_url_content += f"{separator}api_password={api_password}"
                 
-                if bypass_warp:
-                    processed_url_content += "&warp=off"
+                if bypass_warp and "warp=" not in processed_url_content:
+                    separator = '&' if '?' in processed_url_content else '?'
+                    processed_url_content += f"{separator}warp=off"
                 
                 proxy_route = str(bypass_proxies or '').strip().lower()
                 if proxy_route in ('off', 'true', '1'):
-                    processed_url_content += "&proxy=off"
+                    if "proxy=" not in processed_url_content:
+                        separator = '&' if '?' in processed_url_content else '?'
+                        processed_url_content += f"{separator}proxy=off"
                 elif proxy_route not in ('', 'false', '0', 'on'):
-                    processed_url_content += (
-                        f"&proxy={urllib.parse.quote(proxy_route, safe='')}"
-                    )
+                    if "proxy=" not in processed_url_content:
+                        separator = '&' if '?' in processed_url_content else '?'
+                        processed_url_content += (
+                            f"{separator}proxy={urllib.parse.quote(proxy_route, safe='')}"
+                        )
                 
                 yield processed_url_content + '\n'
             else:
