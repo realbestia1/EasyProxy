@@ -6,17 +6,15 @@ through the edge relay (edge.matchora.pro) to bypass CDN legal restrictions.
 """
 
 import asyncio
-import json
 import logging
 import re
 import time
 import urllib.parse
 from typing import Any, Dict, Optional
 
-import aiohttp
 from aiohttp import ClientSession, ClientTimeout, TCPConnector
 
-from config import get_connector_for_proxy, get_preferred_proxy_for_url
+from config import get_connector_for_proxy
 import config as _cfg
 from extractors.base import BaseExtractor, ExtractorError
 
@@ -177,13 +175,14 @@ class MatchoraExtractor(BaseExtractor):
         cache_key = f"{ch_id}:{url.strip()}:{route_key}"
         now = time.time()
 
-        cached = self._cache.get(cache_key)
+        force = bool(kwargs.get("force_refresh")) or str(kwargs.get("force", "")).lower() == "true"
+        cached = None if force else self._cache.get(cache_key)
         if cached and cached[0] > now:
             logger.debug("Matchora: cache hit for %s", cache_key)
             return dict(cached[1])
 
         task = self._inflight.get(cache_key)
-        if not task or task.done():
+        if force or not task or task.done():
             task = asyncio.create_task(self._extract_impl(url, **kwargs))
             self._inflight[cache_key] = task
 

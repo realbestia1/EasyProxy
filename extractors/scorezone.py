@@ -40,9 +40,9 @@ DEFAULT_IPTV_URL = "https://scorezone-live.scorezone.workers.dev/api/iptv/channe
 CACHE_TTL = 60  # secondi: elenco canali partita / lista IPTV
 CACHE_MAX_ENTRIES = 500
 PLAYBACK_CACHE_TTL = 45  # 45 secondi di cache per il token playback (evita overload API e previene token scaduti)
-_PLAYBACK_CACHE: Dict[tuple, tuple] = {}  # (eventId, channelId) -> (ts, stream_url)
+_PLAYBACK_CACHE: Dict[tuple, tuple] = {}  # (eventId, channelId, route) -> (ts, stream_url)
 _CHANNELS_CACHE: Dict[str, tuple] = {}    # eventId -> (ts, key, channels)
-_IPTV_CACHE: Optional[tuple] = None       # (ts, channels)
+_IPTV_CACHE: Optional[tuple] = None       # (ts, channels, route)
 
 
 def _api_base() -> str:
@@ -159,7 +159,7 @@ def _is_channel_locked(c: dict) -> bool:
         v = c.get(k)
         if isinstance(v, str) and v.strip().lower() in ("true", "1", "yes"):
             return True
-        if bool(v):
+        if not isinstance(v, str) and bool(v):
             return True
     return False
 
@@ -180,6 +180,10 @@ class ScoreZoneExtractor(BaseExtractor):
             "Referer": f"{site}/",
             "Accept": "application/json, text/plain, */*",
         }
+
+    def _route(self) -> str:
+        # Il token e' legato all'IP di uscita: la cache deve distinguere la route.
+        return f"{self.bypass_warp_active}:{self._force_direct}:{self._forced_proxy}"
 
     def _stream_headers(self) -> dict:
         site = _site_url()
@@ -225,6 +229,7 @@ class ScoreZoneExtractor(BaseExtractor):
         eid = str(meta["eventId"])
         wanted = meta.get("channel")
         now = time.time()
+        route = self._route()
 
         if force_refresh:
             _CHANNELS_CACHE.pop(eid, None)
@@ -233,13 +238,13 @@ class ScoreZoneExtractor(BaseExtractor):
                 _PLAYBACK_CACHE.pop(k, None)
         else:
             if wanted:
-                cached_pb = _PLAYBACK_CACHE.get((eid, str(wanted)))
+                cached_pb = _PLAYBACK_CACHE.get((eid, str(wanted), route))
                 if cached_pb and (now - cached_pb[0]) < PLAYBACK_CACHE_TTL:
                     logger.info("ScoreZone: playback da cache per evento %s canale %s", eid, wanted)
                     return self._result(cached_pb[1], self._stream_headers())
             else:
-                for (cached_eid, ch_id), (ts, stream_url) in list(_PLAYBACK_CACHE.items()):
-                    if cached_eid == eid and (now - ts) < PLAYBACK_CACHE_TTL:
+                for (cached_eid, ch_id, r), (ts, stream_url) in list(_PLAYBACK_CACHE.items()):
+                    if cached_eid == eid and r == route and (now - ts) < PLAYBACK_CACHE_TTL:
                         logger.info("ScoreZone: playback da cache per evento %s canale %s", eid, ch_id)
                         return self._result(stream_url, self._stream_headers())
 
@@ -258,7 +263,7 @@ class ScoreZoneExtractor(BaseExtractor):
                 chosen = sorted(free, key=lambda c: _quality_rank(c.get("quality")))[0]
                 channel_id = str(chosen["id"])
 
-        cache_key = (eid, channel_id)
+        cache_key = (eid, channel_id, route)
 
         try:
             resp = await self._make_request(
@@ -300,14 +305,14 @@ class ScoreZoneExtractor(BaseExtractor):
             _PLAYBACK_CACHE.pop(cache_key, None)
             raise ExtractorError(f"SCOREZONE: playback senza URL (evento {eid}, canale {channel_id})")
 
-        _PLAYBACK_CACHE[cache_key] = (now, stream_url)
+        self._cache_put(_PLAYBACK_CACHE, cache_key, (now, stream_url))
         logger.info("ScoreZone: evento %s canale %s -> %s...", eid, channel_id, stream_url[:70])
         return self._result(stream_url, self._stream_headers())
 
     async def _extract_iptv(self, channel_id: str, force_refresh: bool = False) -> Dict[str, Any]:
         global _IPTV_CACHE
         cached = _IPTV_CACHE
-        channels = cached[1] if cached and not force_refresh and time.time() - cached[0] < CACHE_TTL else None
+        channels = cached[1] if cached and cached[2] == self._route() and not force_refresh and time.time() - cached[0] < CACHE_TTL else None
         channel = next((c for c in (channels or []) if str(c.get("id")) == channel_id), None)
         if channel is None:
             resp = await self._make_request(
@@ -319,7 +324,7 @@ class ScoreZoneExtractor(BaseExtractor):
             channels = data.get("channels") if isinstance(data, dict) else None
             if not isinstance(channels, list):
                 raise ExtractorError("SCOREZONE: lista canali IPTV non valida")
-            _IPTV_CACHE = (time.time(), channels)
+            _IPTV_CACHE = (time.time(), channels, self._route())
             channel = next((c for c in channels if isinstance(c, dict) and str(c.get("id")) == channel_id), None)
         if not channel or not channel.get("url"):
             raise ExtractorError(f"SCOREZONE: canale IPTV {channel_id} non trovato")

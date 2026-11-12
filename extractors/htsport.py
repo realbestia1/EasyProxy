@@ -12,10 +12,9 @@ import time
 import urllib.parse
 from typing import Any, Dict, Optional
 
-import aiohttp
 from aiohttp import ClientSession, ClientTimeout, TCPConnector
 
-from config import get_connector_for_proxy, get_preferred_proxy_for_url
+from config import get_connector_for_proxy
 import config as _cfg
 from extractors.base import BaseExtractor, ExtractorError
 from extractors.dlstreams import DLStreamsExtractor
@@ -134,7 +133,7 @@ class HTSportExtractor(BaseExtractor):
         # 1. Matchora (matchora.pro / matchora.to)
         if "matchora." in raw_iframe_url:
             sub = MatchoraExtractor(self.request_headers, self.proxies, bypass_warp=self.bypass_warp_active)
-            return await sub.extract(raw_iframe_url, referer=page_url, **sub_kwargs)
+            return await sub.extract(raw_iframe_url, **{**sub_kwargs, "referer": page_url})
 
         # 2. DaddyLive / DLStreams (stream-*.php, thedaddy, gomstream, apexstreams, worldsportz4u)
         if any(marker in raw_iframe_url for marker in ("stream-", "thedaddy.", "gomstream.", "apexstreams.", "worldsportz4u.")):
@@ -168,13 +167,14 @@ class HTSportExtractor(BaseExtractor):
         cache_key = f"{clean_url}:{route_key}"
         now = time.time()
 
-        cached = self._cache.get(cache_key)
+        force = bool(kwargs.get("force_refresh")) or str(kwargs.get("force", "")).lower() == "true"
+        cached = None if force else self._cache.get(cache_key)
         if cached and cached[0] > now:
             logger.debug("HTSport: cache hit for %s", cache_key)
             return dict(cached[1])
 
         task = self._inflight.get(cache_key)
-        if not task or task.done():
+        if force or not task or task.done():
             task = asyncio.create_task(self._extract_impl(url, **kwargs))
             self._inflight[cache_key] = task
 
