@@ -1,16 +1,19 @@
-"""Headless Chromium solver for the xstream/dynbush Turnstile gate.
+"""Chromium solver for the xstream/dynbush Turnstile gate.
 
 The player intermittently serves a config without the signed stream URL: the URL
 is only released by ``POST /turnstile/<id>`` after a Cloudflare Turnstile
 challenge inside the player iframe. This module loads the channel page in
-headless Chromium, attaches to the player iframe over CDP and returns the JSON
-body of that POST. Chrome is the binary bundled with FlareSolverr / installed in
-the Docker image; the CDP client uses aiohttp, so there is no new dependency.
+Chromium, attaches to the player iframe over CDP and returns the JSON body of
+that POST. Chromium runs headed (off-screen window, private Xvfb on Linux) with
+a persistent profile because Turnstile penalises headless browsers. Chrome is
+the binary bundled with FlareSolverr / installed in the Docker image; the CDP
+client uses aiohttp, so there is no new dependency.
 """
 
 from __future__ import annotations
 
 import asyncio
+import atexit
 import json
 import logging
 import os
@@ -18,17 +21,21 @@ import re
 import shutil
 import subprocess
 import sys
-import tempfile
 import time
 import urllib.request
 from pathlib import Path
 
 import aiohttp
 
+import config_store
+
 logger = logging.getLogger(__name__)
 
 _SOLVE_LOCK = asyncio.Lock()
 _DEFAULT_UA_VERSION = "124.0.0.0"
+_XVFB_LOCK = asyncio.Lock()
+_XVFB_PROCESS: subprocess.Popen | None = None
+_XVFB_DISPLAY: str | None = None
 
 
 def _build_user_agent(chrome_path: str) -> str:
@@ -105,6 +112,69 @@ def find_chrome() -> str | None:
         if candidate and os.path.isfile(candidate):
             return candidate
     return None
+
+
+def _profile_dir() -> str:
+    """Persistent Chromium profile: cookies/clearance survive across solves."""
+    override = os.getenv("TURNSTILE_PROFILE_DIR", "").strip()
+    path = override or os.path.join(config_store.CONFIG_DIR, "turnstile-profile")
+    os.makedirs(path, exist_ok=True)
+    for name in ("SingletonLock", "SingletonSocket", "SingletonCookie", "DevToolsActivePort"):
+        try:
+            os.unlink(os.path.join(path, name))
+        except OSError:
+            pass
+    return path
+
+
+def _stop_xvfb() -> None:
+    global _XVFB_PROCESS
+    if _XVFB_PROCESS is not None and _XVFB_PROCESS.poll() is None:
+        try:
+            _XVFB_PROCESS.terminate()
+            _XVFB_PROCESS.wait(timeout=5)
+        except Exception:
+            try:
+                _XVFB_PROCESS.kill()
+            except Exception:
+                pass
+    _XVFB_PROCESS = None
+
+
+async def _ensure_display() -> str | None:
+    """Display for headed Chromium: existing X11, or a private Xvfb."""
+    global _XVFB_PROCESS, _XVFB_DISPLAY
+    if os.name == "nt":
+        return ""
+    if sys.platform == "darwin":
+        return None
+    existing = os.getenv("DISPLAY")
+    if existing:
+        return existing
+    async with _XVFB_LOCK:
+        if _XVFB_DISPLAY:
+            return _XVFB_DISPLAY
+        xvfb = shutil.which("Xvfb")
+        if not xvfb:
+            return None
+        for number in range(99, 105):
+            display = f":{number}"
+            if os.path.exists(f"/tmp/.X11-unix/X{number}"):
+                _XVFB_DISPLAY = display
+                return display
+            proc = subprocess.Popen(
+                [xvfb, display, "-screen", "0", "1280x800x24", "-nolisten", "tcp"],
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+            )
+            await asyncio.sleep(0.5)
+            if proc.poll() is None:
+                _XVFB_PROCESS = proc
+                _XVFB_DISPLAY = display
+                atexit.register(_stop_xvfb)
+                logger.info("Turnstile solver: started Xvfb on %s", display)
+                return display
+        return None
 
 
 class _CDP:
@@ -191,11 +261,24 @@ async def _solve_once(
         )
         return None
 
-    profile = tempfile.mkdtemp(prefix="ep-turnstile-")
+    headless = os.getenv("TURNSTILE_HEADLESS", "").strip().lower() in {"1", "true", "yes", "on"}
+    env = dict(os.environ)
+    if not headless:
+        display = await _ensure_display()
+        if display is None:
+            headless = True
+        elif display:
+            env["DISPLAY"] = display
+
+    profile = _profile_dir()
     ua = _build_user_agent(chrome)
-    cmd = [
-        chrome,
-        "--headless=new",
+    cmd = [chrome]
+    if headless:
+        cmd.append("--headless=new")
+    else:
+        # A real window (off-screen) passes Turnstile far more often than headless.
+        cmd.extend(["--window-position=-32000,-32000", "--window-size=1280,800"])
+    cmd.extend([
         "--remote-debugging-port=0",
         f"--user-data-dir={profile}",
         "--no-first-run",
@@ -205,18 +288,19 @@ async def _solve_once(
         "--disable-blink-features=AutomationControlled",
         "--disable-extensions",
         "--disable-component-extensions-with-background-pages",
-        "--window-size=1280,800",
         f"--user-agent={ua}",
-    ]
+    ])
     if hasattr(os, "geteuid") and os.geteuid() == 0:
         cmd.append("--no-sandbox")
     if proxy:
         # The browser must leave on the same route as the extraction.
         cmd.append(f"--proxy-server={proxy.replace('socks5h://', 'socks5://')}")
     cmd.append("about:blank")
+    logger.debug("Turnstile solver: launching (headless=%s): %s", headless, " ".join(cmd[:6]))
 
     proc = subprocess.Popen(
         cmd,
+        env=env,
         stdout=subprocess.DEVNULL,
         stderr=subprocess.DEVNULL,
         creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
@@ -243,7 +327,6 @@ async def _solve_once(
                 proc.kill()
             except Exception:
                 pass
-        shutil.rmtree(profile, ignore_errors=True)
 
 
 async def _wait_devtools_port(profile: str) -> int | None:
