@@ -1,6 +1,7 @@
 import asyncio
 import base64
 import logging
+import os
 import re
 import json
 import ssl
@@ -58,6 +59,9 @@ class SportsonlineExtractor(BaseExtractor):
     """Sportsonline/Sportzonline URL extractor for M3U8 streams."""
 
     EXTRACT_BUDGET_SECONDS = 20.0
+    # The Turnstile solver may cold-start Chromium, so the whole extraction is
+    # slower than the plain HTTP path.
+    REQUEST_TIMEOUT_TOTAL = 120
     CANDIDATE_TIMEOUT_SECONDS = 6.0
     STREAM_CACHE_SECONDS = 30.0
     STREAM_CACHE_STALE_SECONDS = 900.0
@@ -364,8 +368,8 @@ class SportsonlineExtractor(BaseExtractor):
         return None
 
     @staticmethod
-    def _extract_econfig_m3u8(html: str) -> str | None:
-        """Decode current dynmill player config and return its stream URL."""
+    def _decode_econfig(html: str) -> dict | None:
+        """Decode the dynmill player config (window._econfig) into a dict."""
         config_match = re.search(r"window\._econfig\s*=\s*['\"]([^'\"]+)['\"]", html)
         if not config_match:
             return None
@@ -401,6 +405,14 @@ class SportsonlineExtractor(BaseExtractor):
             logger.debug(f"Failed to decode Sportsonline _econfig: {e}")
             return None
 
+        return config
+
+    @classmethod
+    def _extract_econfig_m3u8(cls, html: str) -> str | None:
+        """Return the decoded _econfig stream URL (None when absent or gated)."""
+        config = cls._decode_econfig(html)
+        if not config:
+            return None
         return config.get("stream_url_nop2p") or config.get("stream_url")
 
     @staticmethod
@@ -512,9 +524,10 @@ class SportsonlineExtractor(BaseExtractor):
                     "No packed blocks found; trying inline/econfig M3U8 fallback"
                 )
                 direct_match = self._extract_m3u8_candidate(iframe_html)
+                econfig = self._decode_econfig(iframe_html)
                 fallback_source = "inline"
-                if not direct_match:
-                    direct_match = self._extract_econfig_m3u8(iframe_html)
+                if not direct_match and econfig:
+                    direct_match = econfig.get("stream_url_nop2p") or econfig.get("stream_url")
                     fallback_source = "econfig"
                 if direct_match:
                     m3u8_url = self._normalize_stream_url(direct_match, iframe_url)
@@ -525,10 +538,64 @@ class SportsonlineExtractor(BaseExtractor):
                     )
 
                     return self._result(m3u8_url, playback_headers)
-                else:
-                    raise ExtractorError(
-                        "No packed blocks, inline M3U8, or _econfig stream URL found"
+                if econfig and econfig.get("turnstile_key"):
+                    # The player intermittently gates a stream behind Cloudflare
+                    # Turnstile: _econfig then only carries the challenge, and the
+                    # signed URL comes from POST /turnstile/<id> after a browser
+                    # solve. The gate alternates per request, so a couple of
+                    # re-fetches usually return the plain config.
+                    for attempt in range(1, 3):
+                        if deadline <= time.monotonic():
+                            break
+                        logger.info(
+                            "Sportsonline: Turnstile-gated player, retrying iframe (%d/2)",
+                            attempt,
+                        )
+                        try:
+                            retry_html, _ = await self._make_robust_request(
+                                iframe_url,
+                                headers=self._build_iframe_headers(main_url, iframe_url),
+                                timeout=self.CANDIDATE_TIMEOUT_SECONDS,
+                                retries=1,
+                                deadline=deadline,
+                            )
+                        except Exception as e:
+                            logger.debug("Sportsonline: gated retry failed: %s", e)
+                            continue
+                        direct_match = self._extract_m3u8_candidate(retry_html)
+                        econfig = self._decode_econfig(retry_html) or {}
+                        if not direct_match:
+                            direct_match = econfig.get("stream_url_nop2p") or econfig.get("stream_url")
+                        if direct_match:
+                            break
+                    if direct_match:
+                        m3u8_url = self._normalize_stream_url(direct_match, iframe_url)
+                        logger.info(
+                            "Found M3U8 URL after Turnstile-gated retry: %s", m3u8_url
+                        )
+                        return self._result(m3u8_url, playback_headers)
+                    solved = await self._solve_gated_stream(main_url)
+                    if solved:
+                        solved_stream, solver_ua = solved
+                        m3u8_url = self._normalize_stream_url(solved_stream, iframe_url)
+                        headers = dict(playback_headers)
+                        if solver_ua:
+                            # The signed URL is bound to the UA that minted it.
+                            headers["User-Agent"] = solver_ua
+                        logger.info(
+                            "Found M3U8 URL via Turnstile solver: %s", m3u8_url
+                        )
+                        return self._result(m3u8_url, headers)
+                    logger.warning(
+                        "Sportsonline: %s still serves a Turnstile-gated player (no stream URL in _econfig)",
+                        self._host_of(iframe_url),
                     )
+                    raise ExtractorError(
+                        "Sportsonline: stream requires Cloudflare Turnstile verification"
+                    )
+                raise ExtractorError(
+                    "No packed blocks, inline M3U8, or _econfig stream URL found"
+                )
 
             # Choose block: if >=2 use second (index 1), else first (index 0)
             chosen_idx = 1 if len(packed_blocks) > 1 else 0
@@ -587,12 +654,40 @@ class SportsonlineExtractor(BaseExtractor):
             logger.exception(f"Sportsonline extraction failed for {url}")
             raise ExtractorError(f"Extraction failed: {str(e)}")
 
+    async def _solve_gated_stream(self, page_url: str) -> tuple[str, str | None] | None:
+        """Solve the player Turnstile gate in headless Chromium (best effort)."""
+        if str(os.getenv("SPORTSONLINE_TURNSTILE_SOLVER", "1")).strip().lower() in {"0", "off", "false", "no"}:
+            return None
+        try:
+            from services.turnstile_cdp import solve_player_stream
+        except Exception as e:  # pragma: no cover - optional dependency path
+            logger.debug("Sportsonline: Turnstile solver unavailable: %s", e)
+            return None
+        try:
+            solution = await solve_player_stream(page_url, proxy=self._session_proxy)
+        except Exception as e:
+            logger.warning("Sportsonline: Turnstile solver failed: %s", e)
+            return None
+        if not solution:
+            return None
+        if not solution.get("success"):
+            logger.warning(
+                "Sportsonline: Turnstile verification rejected (%s)",
+                solution.get("error") or "unknown",
+            )
+            return None
+        stream_url = solution.get("stream_url_nop2p") or solution.get("stream_url")
+        if not stream_url:
+            return None
+        return stream_url, solution.get("_solver_user_agent")
+
     async def extract(self, url: str, **kwargs) -> Dict[str, Any]:
         """Extract with short-lived cache and single-flight deduplication."""
         self._apply_routing_kwargs(url, kwargs)
         cache_key = (url.strip(), self._forced_proxy, self._force_direct, self.bypass_warp_active)
         now = time.monotonic()
-        cached = self._stream_cache.get(cache_key)
+        force_refresh = bool(kwargs.get("force_refresh")) or str(kwargs.get("force", "")).lower() == "true"
+        cached = None if force_refresh else self._stream_cache.get(cache_key)
         if cached and cached[0] > now:
             logger.debug("Sportsonline: reusing cached stream URL for %s", cache_key)
             return dict(cached[2])
