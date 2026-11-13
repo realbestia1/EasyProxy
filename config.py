@@ -45,7 +45,7 @@ _SOCKET_CHECK_EXECUTOR = ThreadPoolExecutor(
 )
 
 
-APP_VERSION = "2.13.82"
+APP_VERSION = "2.13.83"
 
 
 def get_extractor_proxies(extractor_name: str) -> list:
@@ -818,7 +818,7 @@ def get_ssl_setting_for_url(url: str, transport_routes: list = None) -> bool:
 
     vavoo_domains = ("vavoo.to", "vavoo.tv", "vavoo", "lokke.app", "mediahubmx", "vixsrc.to", "vix-content.net", "/sunshine/", "unitv.mom", "d2b.you", "vidxgo",
                        # Mirror frontend dello stesso backend mediahubmx (stesse tutele SSL).
-                       "kool.to", "kool.ws", "vavoo.net", "huhu.to", "oha.to", "voltop.net")
+                       "kool.to", "kool.ws", "vavoo.net", "huhu.to", "oha.to", "voltop.net", "geil.to", "geil.app", "geil.win")
 
     if not url or not transport_routes:
         return any(domain in normalized_url for domain in vavoo_domains)

@@ -24,12 +24,10 @@ _PING_URLS = [
 ]
 _VYPN_PACKAGE = "net.vypn.app"
 _VYPN_VERSION = "1.4.1"
-# Mirror frontend dello stesso backend mediahubmx (verificato ott 2026:
-# stessa firma dai ping, stesso catalogo, resolve cross-compatibile tra
-# domini). Il gate di extract() e l'auto-detect accettano tutti questi
-# domini; le basi di resolve/catalogo restano le 4 con fallback (huhu.to /
-# oha.to / voltop.net esclusi dalle basi: verificati giu' insieme a
-# vavoo.to / kool.to, stessa infra).
+# Mirror frontend dello stesso backend mediahubmx: resolve cross-compatibile
+# tra domini. Il gate di extract() e l'auto-detect accettano tutti questi
+# domini. Basi ordinate per latenza misurata (nov 2026); vavoo.to non accetta
+# piu' connessioni e non e' piu' una base. geil.to espone solo l'API v2.
 VAVOO_MIRROR_DOMAINS = (
     "vavoo.to",
     "kool.to",
@@ -38,8 +36,14 @@ VAVOO_MIRROR_DOMAINS = (
     "huhu.to",
     "oha.to",
     "voltop.net",
+    "geil.to",
+    "geil.app",
+    "geil.win",
 )
-_BASE_SITES = ["https://vavoo.to", "https://kool.to", "https://vavoo.net", "https://kool.ws"]
+_BASE_SITES = ["https://voltop.net", "https://vavoo.net", "https://kool.to", "https://kool.ws"]
+# API v2 (/live/resolve?url=): link /live/play/<id>, nessuna firma richiesta.
+_V2_BASE_SITES = ["https://voltop.net", "https://vavoo.net", "https://geil.to", "https://kool.to", "https://kool.ws"]
+_V2_LINK_RE = re.compile(r"/live/play/[^/?#]+", re.IGNORECASE)
 _LANGUAGE = "de"
 _REGION = "DE"
 
@@ -278,8 +282,41 @@ class VavooExtractor(BaseExtractor):
         logger.info("Vavoo addonSig obtained")
         return sig
 
+    async def _resolve_via_v2(self, url: str) -> Optional[str]:
+        """Resolve a v2 /live/play/<id> link via GET /live/resolve (no signature)."""
+        last_err = None
+        for base in _V2_BASE_SITES:
+            session = await self._get_session()
+            try:
+                async with session.get(f"{base}/live/resolve", params={"url": url},
+                                       headers={"Accept": "application/json"},
+                                       timeout=ClientTimeout(total=15), ssl=False) as resp:
+                    # Solo errori di gateway dipendono dalla singola base.
+                    if resp.status in (502, 503, 504):
+                        last_err = f"HTTP {resp.status} on {base}"
+                        continue
+                    if resp.status != 200:
+                        last_err = f"HTTP {resp.status} on {base}"
+                        break
+                    data = await resp.json(content_type=None)
+                    if isinstance(data, dict) and data.get("url"):
+                        return str(data["url"])
+                    last_err = f"no url in v2 resolve response on {base}"
+                    break
+            except ssl.SSLError as e:
+                last_err = e
+                break
+            except Exception as e:
+                last_err = e
+                logger.warning(f"Vavoo v2 resolve exception on {base}, switching base site: {e}")
+        logger.warning(f"Vavoo v2 resolve failed, last error: {last_err}")
+        self._last_resolve_error = last_err
+        return None
+
     async def _resolve_via_mediahubmx(self, url: str) -> Optional[str]:
         """Resolve vavoo URL to stream URL via mediahubmx-resolve.json."""
+        if _V2_LINK_RE.search(url):
+            return await self._resolve_via_v2(url)
         # Normalize /watch?live=X to /vavoo-iptv/play/X
         if "/watch" in url:
             params = parse_qs(urlparse(url).query)
