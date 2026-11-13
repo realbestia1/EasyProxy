@@ -1,4 +1,5 @@
 import logging
+import os
 import re
 import asyncio
 import base64
@@ -286,6 +287,8 @@ class DLStreamsExtractor(BaseExtractor):
     # dlive.sx would otherwise burn 10s per candidate, hit the outer timeout
     # and turn concurrent requests into 500s.
     EXTRACT_BUDGET_SECONDS = 20.0
+    # The Turnstile solver may cold-start Chromium (up to ~60s for two attempts).
+    REQUEST_TIMEOUT_TOTAL = 120
     CANDIDATE_TIMEOUT_SECONDS = 6
     # No resolved-URL cache and no host backoff: the extractor endpoint answers
     # with a redirect to the stable /proxy manifest URL, so manifest reloads go
@@ -689,6 +692,35 @@ class DLStreamsExtractor(BaseExtractor):
             logger.debug("DLStreams: premium token refresh failed for %s: %s", stream_url, exc)
             return stream_url
 
+    async def _solve_gated_player(self, page_url: str) -> tuple[str, str | None] | None:
+        """Solve the xstream Turnstile gate in headless Chromium (best effort)."""
+        if str(os.getenv("DLSTREAMS_TURNSTILE_SOLVER", "1")).strip().lower() in {"0", "off", "false", "no"}:
+            return None
+        try:
+            from services.turnstile_cdp import solve_player_stream
+        except Exception as e:
+            logger.debug("DLStreams: Turnstile solver unavailable: %s", e)
+            return None
+        try:
+            solution = await solve_player_stream(
+                page_url, proxy=getattr(self, "_session_proxy", None)
+            )
+        except Exception as e:
+            logger.warning("DLStreams: Turnstile solver failed: %s", e)
+            return None
+        if not solution:
+            return None
+        if not solution.get("success"):
+            logger.warning(
+                "DLStreams: Turnstile verification rejected (%s)",
+                solution.get("error") or "unknown",
+            )
+            return None
+        stream_url = solution.get("stream_url_nop2p") or solution.get("stream_url")
+        if not stream_url:
+            return None
+        return stream_url, solution.get("_solver_user_agent")
+
     async def _is_stream_alive(
         self, session, stream_url: str, headers: dict, budget: float | None = None
     ) -> bool:
@@ -944,6 +976,7 @@ class DLStreamsExtractor(BaseExtractor):
                 #  3) direct: source: 'https://...m3u8'
                 #  4) fallback: any https://...m3u8 URL in page
                 stream_url = None
+                solver_ua = None
 
                 m_cfg = re.search(r"window\._econfig\s*=\s*['\"]([^'\"]{100,})['\"]", iframe_html)
                 if m_cfg:
@@ -976,6 +1009,16 @@ class DLStreamsExtractor(BaseExtractor):
                         stream_url = m3u8_match.group(0)
                         logger.debug("DLStreams: extracted m3u8 fallback URL: %s", stream_url)
 
+                if not stream_url and m_cfg:
+                    # The xstream player is Turnstile-gated: let the browser solve it.
+                    solved = await self._solve_gated_player(candidate)
+                    if solved:
+                        stream_url, solver_ua = solved
+                        logger.info(
+                            "DLStreams: Turnstile solver produced stream URL for %s",
+                            candidate,
+                        )
+
                 if not stream_url:
                     logger.debug("DLStreams: no stream URL found. Iframe HTML start: %s", iframe_html[:200])
                     continue
@@ -994,7 +1037,7 @@ class DLStreamsExtractor(BaseExtractor):
                 playback_headers = {
                     "Referer": f"{ref_origin}/",
                     "Origin": ref_origin,
-                    "User-Agent": self.base_headers["User-Agent"],
+                    "User-Agent": solver_ua or self.base_headers["User-Agent"],
                     "Accept": "*/*",
                     "Sec-Fetch-Dest": "empty",
                     "Sec-Fetch-Mode": "cors",
