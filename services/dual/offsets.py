@@ -25,8 +25,10 @@ class RemoteOffsetStore:
 
     @staticmethod
     def key(media_key: str, resolution: int, video_fp: str, audio_fp: str) -> str:
+        # v3: offsets measured before the drift fix (2.13.84-86) are not
+        # reused; bump again whenever the sync result changes meaning.
         return hashlib.sha1(
-            f"v2|{media_key}|{resolution}|{video_fp}|{audio_fp}".encode()
+            f"v3|{media_key}|{resolution}|{video_fp}|{audio_fp}".encode()
         ).hexdigest()
 
     async def _get_session(self) -> aiohttp.ClientSession:
