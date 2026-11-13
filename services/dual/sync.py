@@ -843,9 +843,11 @@ class SyncEngine:
             if item and float(item.get("correlation") or 0.0) >= cls.SYNC_MIN_CORRELATION
         ]
         linear = cls._linear_fit(valid, video_duration, audio_duration)
+        # No end-of-film check here: the constant offset is already accepted,
+        # and editions often differ only by trimmed credits (different lengths).
         if (
             linear is None
-            or not linear["ok"]
+            or abs(linear["rate"] - 1.0) > cls.MAX_RATE_DELTA
             or linear["deviation"] > cls.DRIFT_MAX_DEVIATION
             or linear["span"] < cls.DRIFT_MIN_SPAN * video_duration
         ):
