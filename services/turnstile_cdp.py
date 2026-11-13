@@ -51,6 +51,16 @@ def _build_user_agent(chrome_path: str) -> str:
                 break
     except OSError:
         pass
+    if os.name != "nt":
+        try:
+            proc = subprocess.run(
+                [chrome_path, "--version"], capture_output=True, text=True, timeout=5
+            )
+            match = re.search(r"(\d+\.\d+\.\d+\.\d+)", proc.stdout or "")
+            if match:
+                version = match.group(1)
+        except Exception:
+            pass
     if os.name == "nt":
         platform = "Windows NT 10.0; Win64; x64"
     elif sys.platform == "darwin":
@@ -312,7 +322,8 @@ async def _solve_once(
     ua = _build_user_agent(chrome)
     cmd = [chrome]
     if headless:
-        cmd.append("--headless=new")
+        # Headless advertises HeadlessChrome: keep the client hint set coherent.
+        cmd.extend(["--headless=new", f"--user-agent={ua}"])
     else:
         # A real window passes Turnstile far more often than headless. Hide it
         # off-screen on Windows only: Xvfb is already invisible, and an
@@ -334,7 +345,6 @@ async def _solve_once(
         "--disable-blink-features=AutomationControlled",
         "--disable-extensions",
         "--disable-component-extensions-with-background-pages",
-        f"--user-agent={ua}",
     ])
     if hasattr(os, "geteuid") and os.geteuid() == 0:
         cmd.append("--no-sandbox")
@@ -434,6 +444,7 @@ async def _drive(ws, page_url: str, timeout: float, ua: str) -> dict | None:
         iframe_sid = None
         clicks = 0
         next_probe = time.monotonic() + 3
+        actual_ua = None
         server_date = None
         challenge_urls: dict[str, str] = {}
         while time.monotonic() < deadline:
@@ -491,7 +502,7 @@ async def _drive(ws, page_url: str, timeout: float, ua: str) -> dict | None:
                     except Exception as e:
                         logger.debug("Turnstile solver: body read failed: %r", e)
                         continue
-                    solution["_solver_user_agent"] = ua
+                    solution["_solver_user_agent"] = actual_ua or ua
                     logger.info(
                         "Turnstile solver: stream URL captured for %s", page_url
                     )
@@ -514,6 +525,17 @@ async def _drive(ws, page_url: str, timeout: float, ua: str) -> dict | None:
 
             if iframe_sid and time.monotonic() >= next_probe:
                 next_probe = time.monotonic() + 3
+                # The UA the browser actually reports beats the declared one.
+                if actual_ua is None:
+                    try:
+                        res_ua = await cdp.send(
+                            "Runtime.evaluate",
+                            {"expression": "navigator.userAgent", "returnByValue": True},
+                            iframe_sid,
+                        )
+                        actual_ua = (res_ua.get("result", {}) or {}).get("value") or None
+                    except Exception as e:
+                        logger.debug("Turnstile solver: UA probe failed: %r", e)
                 # Non-gated variant: the config already carries the signed URL.
                 try:
                     plain = await cdp.send(
@@ -545,7 +567,7 @@ async def _drive(ws, page_url: str, timeout: float, ua: str) -> dict | None:
                             "success": True,
                             "stream_url": config.get("stream_url"),
                             "stream_url_nop2p": config.get("stream_url_nop2p"),
-                            "_solver_user_agent": ua,
+                            "_solver_user_agent": actual_ua or ua,
                         }
                         return solution
                 if clicks < 4:
