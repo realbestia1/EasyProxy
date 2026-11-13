@@ -510,7 +510,7 @@ async def _drive(ws, page_url: str, timeout: float, ua: str) -> dict | None:
                 elif method == "Network.loadingFailed":
                     failed_url = challenge_urls.get(params.get("requestId"))
                     if failed_url:
-                        logger.warning(
+                        logger.debug(
                             "Turnstile solver: challenge request failed: %s -> %s",
                             failed_url,
                             params.get("errorText"),
@@ -627,9 +627,11 @@ async def _drive(ws, page_url: str, timeout: float, ua: str) -> dict | None:
                 server_ms = (
                     email.utils.parsedate_to_datetime(server_date).timestamp() * 1000
                 )
-                logger.warning(
-                    "Turnstile solver: clock skew %.0fs", (now_ms - server_ms) / 1000
-                )
+                skew = (now_ms - server_ms) / 1000
+                if abs(skew) > 120:
+                    logger.warning("Turnstile solver: clock skew %.0fs (fix NTP)", skew)
+                else:
+                    logger.debug("Turnstile solver: clock skew %.0fs", skew)
             except Exception as e:
                 logger.debug("Turnstile solver: clock skew check failed: %r", e)
         logger.warning(
