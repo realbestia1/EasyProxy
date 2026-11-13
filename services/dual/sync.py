@@ -114,6 +114,12 @@ class SyncEngine:
     LINEAR_MAX_DEVIATION = 0.10
     MAX_RATE_DELTA = 0.002
     MAX_END_DEVIATION = 1.5
+    # A "constant" pair whose samples spread this much may really be drifting
+    # (e.g. 40 ppm = 0.23s over 95 min): a single offset then leaves the two
+    # ends of the film audibly out of sync. Prefer the line when it fits.
+    DRIFT_MIN_DEVIATION = 0.08
+    DRIFT_MAX_DEVIATION = 0.03
+    DRIFT_MIN_SPAN = 0.3
     _host_gates: dict[str, "_AdaptiveHostGate"] = {}
 
     def __init__(self, audio: AudioStore, offsets: RemoteOffsetStore, proxy: str = ""):
@@ -727,6 +733,9 @@ class SyncEngine:
                 "deviation": deviation,
                 "sync_mode": "constant",
             })
+            result.update(cls._drift_refinement(
+                deviation, measurements, video_duration, audio_duration, video_start_time
+            ) or {})
             return result
         if len(valid) < 3:
             return result
@@ -735,14 +744,35 @@ class SyncEngine:
         deviation = max(abs(float(item["offset"]) - median_offset) for item in valid)
         result["deviation"] = deviation
 
+        linear = cls._linear_fit(valid, video_duration, audio_duration)
+        if linear is None:
+            return result
+        result.update({
+            "candidate_rate": linear["rate"],
+            "linear_deviation": linear["deviation"],
+            "drift_per_hour": (linear["rate"] - 1.0) * 3600.0,
+            "end_deviation": linear["end_deviation"],
+        })
+        if not linear["ok"]:
+            return result
+
+        result.update(cls._linear_result(linear, video_start_time))
+        return result
+
+    @classmethod
+    def _linear_fit(
+        cls,
+        valid: list[dict],
+        video_duration: float,
+        audio_duration: float,
+    ) -> dict | None:
+        """Least-squares line through the offsets; ``ok`` when it is a safe drift."""
         linear_valid = [
             item for item in valid
             if float(item.get("correlation") or 0.0) >= cls.LINEAR_MIN_CORRELATION
         ]
-        result["deviation"] = deviation
         if len(linear_valid) < 3:
-            return result
-
+            return None
         positions = [float(item["position"]) for item in linear_valid]
         offsets = [float(item["offset"]) for item in linear_valid]
         mean_position = statistics.mean(positions)
@@ -750,8 +780,9 @@ class SyncEngine:
         denominator = sum(
             (position - mean_position) ** 2 for position in positions
         )
-        if denominator <= 0 or max(positions) - min(positions) < 60.0:
-            return result
+        span = max(positions) - min(positions)
+        if denominator <= 0 or span < 60.0:
+            return None
 
         slope = sum(
             (position - mean_position) * (offset - mean_offset)
@@ -766,28 +797,60 @@ class SyncEngine:
         end_deviation = abs(
             intercept + rate * video_duration - audio_duration
         )
-        result.update({
-            "candidate_rate": rate,
-            "linear_deviation": linear_deviation,
-            "drift_per_hour": slope * 3600.0,
-            "end_deviation": end_deviation,
-        })
-        if (
-            abs(rate - 1.0) > cls.MAX_RATE_DELTA
-            or linear_deviation > cls.LINEAR_MAX_DEVIATION
-            or end_deviation > cls.MAX_END_DEVIATION
-        ):
-            return result
-
-        result.update({
-            "status": "ok",
-            "offset": round(-intercept + video_start_time, 3),
-            "rate": round(rate, 9),
-            "sync_mode": "linear",
-            "confidence": min(float(item["correlation"]) for item in linear_valid),
+        return {
+            "rate": rate,
+            "intercept": intercept,
             "deviation": linear_deviation,
-        })
-        return result
+            "end_deviation": end_deviation,
+            "span": span,
+            "confidence": min(float(item["correlation"]) for item in linear_valid),
+            "ok": not (
+                abs(rate - 1.0) > cls.MAX_RATE_DELTA
+                or linear_deviation > cls.LINEAR_MAX_DEVIATION
+                or end_deviation > cls.MAX_END_DEVIATION
+            ),
+        }
+
+    @staticmethod
+    def _linear_result(linear: dict, video_start_time: float) -> dict:
+        return {
+            "status": "ok",
+            "offset": round(-linear["intercept"] + video_start_time, 3),
+            "rate": round(linear["rate"], 9),
+            "sync_mode": "linear",
+            "confidence": linear["confidence"],
+            "deviation": linear["deviation"],
+        }
+
+    @classmethod
+    def _drift_refinement(
+        cls,
+        deviation: float,
+        measurements: list[dict],
+        video_duration: float,
+        audio_duration: float,
+        video_start_time: float = 0.0,
+    ) -> dict | None:
+        """Replace an accepted but spread-out constant offset with its drift line.
+
+        Only when the samples cover a good part of the film and sit on the
+        line much better than on the constant; otherwise the constant stays.
+        """
+        if deviation < cls.DRIFT_MIN_DEVIATION:
+            return None
+        valid = [
+            item for item in measurements
+            if item and float(item.get("correlation") or 0.0) >= cls.SYNC_MIN_CORRELATION
+        ]
+        linear = cls._linear_fit(valid, video_duration, audio_duration)
+        if (
+            linear is None
+            or not linear["ok"]
+            or linear["deviation"] > cls.DRIFT_MAX_DEVIATION
+            or linear["span"] < cls.DRIFT_MIN_SPAN * video_duration
+        ):
+            return None
+        return cls._linear_result(linear, video_start_time)
 
     async def measure(self, payload: dict):
         # Each request gets isolated mutable state, so DUAL syncs can run
@@ -867,7 +930,10 @@ class SyncEngine:
             bool(reference_audio_url),
         )
         video_start_time = 0.0
-        if reference_audio_url:
+        # A muxed reference is the video's own audio: it already shares the
+        # video timeline, so the start-time correction (meant for a video-only
+        # stream with a separate audio rendition) would push the audio late.
+        if reference_audio_url and not validate_muxed_reference:
             video_start_time = await self._media_start_time(video_url, video_headers)
         reference_duration = video_duration
         reference_entries = []
@@ -1179,6 +1245,9 @@ class SyncEngine:
                     "audio_duration": audio_duration,
                     "measurements": measurements,
                 }
+                result.update(self._drift_refinement(
+                    deviation, measurements, video_duration, audio_duration, video_start_time
+                ) or {})
                 if reference_audio_url:
                     result["video_start_time"] = round(video_start_time, 3)
                 if validate_muxed_reference:

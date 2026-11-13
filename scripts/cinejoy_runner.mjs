@@ -259,15 +259,19 @@ async function resolve() {
       const playlistUrl = primaryEntry?.playlist;
       if (!playlistUrl) continue;
 
-      if (playlistUrl.includes("cheaptruckrepairs.cc")) {
-        const check = await fetchImpl(playlistUrl, fetchOptions({
-          headers: { "User-Agent": UA, Referer: `${BASE_URL}/`, Origin: BASE_URL },
-          signal: AbortSignal.timeout(3000),
-        })).catch(() => null);
-        if (!check || !check.ok) {
-          log(`Server ${server.name} playlist unreachable (${check?.status}), skipping...`);
-          continue;
-        }
+      const strictHost = playlistUrl.includes("cheaptruckrepairs.cc");
+      const check = await fetchImpl(playlistUrl, fetchOptions({
+        headers: { "User-Agent": UA, Referer: `${BASE_URL}/`, Origin: BASE_URL },
+        signal: AbortSignal.timeout(3000),
+      })).catch(() => null);
+      // Any host: a master answering 404/410 is a removed file, try the next
+      // server. A timeout only disqualifies the host known to need the probe.
+      if (check ? [404, 410].includes(check.status) || (strictHost && !check.ok) : strictHost) {
+        log(`Server ${server.name} playlist unreachable (${check?.status}), skipping...`);
+        lastError = new Error(`Cinejoy: ${server.name} playlist HTTP ${check?.status || "timeout"}`);
+        continue;
+      }
+      if (strictHost) {
         const text = await check.text();
         const allSubs = [...text.matchAll(/https?:\/\/[^\s"']+/g)].map(m => m[0]);
         const videoSub = allSubs.find(u => u.includes("/video/")) || allSubs[0];
