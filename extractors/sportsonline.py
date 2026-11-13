@@ -63,7 +63,10 @@ class SportsonlineExtractor(BaseExtractor):
     # slower than the plain HTTP path.
     REQUEST_TIMEOUT_TOTAL = 120
     CANDIDATE_TIMEOUT_SECONDS = 6.0
-    STREAM_CACHE_SECONDS = 30.0
+    # Solved URLs are reused for 10 minutes: reloads/zapping no longer trigger a
+    # fresh Turnstile solve. If the URL dies earlier, the manifest 403 path
+    # force-refreshes it automatically.
+    STREAM_CACHE_SECONDS = 600.0
     STREAM_CACHE_STALE_SECONDS = 900.0
     STREAM_CACHE_FAIL_BACKOFF_SECONDS = 15.0
     MAX_HOST_BACKOFF_SECONDS = 3600.0
