@@ -257,7 +257,12 @@ async function resolve() {
       const entries = Array.isArray(data?.stream) ? data.stream : [];
       const primaryEntry = entries.find((e) => e?.playlist) || entries[0];
       const playlistUrl = primaryEntry?.playlist;
-      if (!playlistUrl) continue;
+      // Same rule as the addon: some servers (e.g. Comet) hand out a raw .mkv
+      // that is not HLS and is refused by the CDN, so only an m3u8 counts.
+      if (!/^https?:\/\/[^\s]+\.m3u8(?:[?#].*)?$/i.test(String(playlistUrl || "").trim())) {
+        log(`Server ${server.name} returned no HLS playlist, skipping...`);
+        continue;
+      }
 
       const strictHost = playlistUrl.includes("cheaptruckrepairs.cc");
       const check = await fetchImpl(playlistUrl, fetchOptions({
