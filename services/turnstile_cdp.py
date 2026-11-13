@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import asyncio
 import atexit
+import base64
 import json
 import logging
 import os
@@ -66,6 +67,40 @@ _FIND_WIDGET = """
   const r = f.getBoundingClientRect();
   if (!r.width || !r.height) return null;
   return JSON.stringify({x: r.x + r.width / 2, y: r.y + r.height / 2});
+})()
+"""
+# Page state snapshotted when the gate never calls back (fingerprint debugging).
+_DIAG = """
+JSON.stringify({
+  t: document.title,
+  u: location.href,
+  n: document.documentElement ? document.documentElement.outerHTML.length : 0,
+  ifr: document.querySelectorAll('iframe').length,
+  ts: typeof window.turnstile,
+  box: !!document.querySelector('#turnstile-container'),
+  tok: (document.querySelector("input[name='cf-turnstile-response']") || {}).value ? 'set' : null,
+  ecfg: typeof window._econfig,
+  len: window._econfig ? String(window._econfig).length : 0
+})
+"""
+# The "trusted browser" variant of the player ships the signed URL in the page
+# config instead of gating it: read it before waiting for a POST.
+_READ_ECONFIG = """
+(() => {
+  try {
+    const val = window._econfig;
+    if (!val) return null;
+    const b64 = s => { s = s.replace(/-/g, '+').replace(/_/g, '/'); while (s.length % 4) s += '='; return atob(s); };
+    const d = b64(val);
+    const n = Math.ceil(d.length / 4);
+    const parts = [];
+    let o = 0;
+    for (let i = 0; i < 4; i++) { const p = d.slice(o, o + n); o += n; parts.push(p.slice(0, 3) + p.slice(4)); }
+    const order = [2, 0, 3, 1];
+    const out = ['', '', '', ''];
+    for (let i = 0; i < 4; i++) out[order[i]] = b64(parts[i]);
+    return out.join('');
+  } catch (e) { return null; }
 })()
 """
 
@@ -276,14 +311,22 @@ async def _solve_once(
     if headless:
         cmd.append("--headless=new")
     else:
-        # A real window (off-screen) passes Turnstile far more often than headless.
-        cmd.extend(["--window-position=-32000,-32000", "--window-size=1280,800"])
+        # A real window passes Turnstile far more often than headless. Hide it
+        # off-screen on Windows only: Xvfb is already invisible, and an
+        # off-screen window on Linux gets occluded/throttled instead.
+        position = "-32000,-32000" if os.name == "nt" else "0,0"
+        cmd.extend([f"--window-position={position}", "--window-size=1280,800"])
     cmd.extend([
         "--remote-debugging-port=0",
         f"--user-data-dir={profile}",
         "--no-first-run",
         "--no-default-browser-check",
-        "--disable-gpu",
+        # WebGL must work: Cloudflare fingerprints its absence.
+        "--enable-unsafe-swiftshader",
+        "--disable-background-timer-throttling",
+        "--disable-backgrounding-occluded-windows",
+        "--disable-renderer-backgrounding",
+        "--disable-ipc-flooding-protection",
         "--disable-dev-shm-usage",
         "--disable-blink-features=AutomationControlled",
         "--disable-extensions",
@@ -397,7 +440,9 @@ async def _drive(ws, page_url: str, timeout: float, ua: str) -> dict | None:
                         continue
                     if info.get("type") in ("iframe", "page"):
                         iframe_sid = new_sid if info.get("type") == "iframe" else iframe_sid
-                        for domain in ("Network.enable", "Page.enable", "Runtime.enable"):
+                        # Runtime.enable is a known CDP detection vector; evaluate
+                        # works without it.
+                        for domain in ("Network.enable", "Page.enable"):
                             try:
                                 await cdp.send(domain, {}, new_sid)
                             except Exception as e:
@@ -428,40 +473,87 @@ async def _drive(ws, page_url: str, timeout: float, ua: str) -> dict | None:
                     )
                     return solution
 
-            if iframe_sid and clicks < 4 and time.monotonic() >= next_probe:
+            if iframe_sid and time.monotonic() >= next_probe:
                 next_probe = time.monotonic() + 3
+                # Non-gated variant: the config already carries the signed URL.
                 try:
-                    probe = await cdp.send(
+                    plain = await cdp.send(
                         "Runtime.evaluate",
-                        {"expression": _FIND_WIDGET, "returnByValue": True},
+                        {"expression": _READ_ECONFIG, "returnByValue": True},
                         iframe_sid,
                     )
-                    raw = probe.get("result", {}).get("value")
+                    encoded = plain.get("result", {}).get("value")
                 except Exception as e:
-                    logger.debug("Turnstile solver: widget probe failed: %r", e)
-                    raw = None
-                if raw:
-                    pos = json.loads(raw)
-                    clicks += 1
-                    for kind in ("mousePressed", "mouseReleased"):
-                        try:
-                            await cdp.send(
-                                "Input.dispatchMouseEvent",
-                                {
-                                    "type": kind,
-                                    "x": pos["x"],
-                                    "y": pos["y"],
-                                    "button": "left",
-                                    "clickCount": 1,
-                                },
-                                iframe_sid,
-                            )
-                        except Exception as e:
-                            logger.debug("Turnstile solver: click failed: %r", e)
-                    logger.info(
-                        "Turnstile solver: clicked widget (%d/4)", clicks
-                    )
+                    logger.debug("Turnstile solver: _econfig read failed: %r", e)
+                    encoded = None
+                if isinstance(encoded, str) and encoded:
+                    try:
+                        config = json.loads(
+                            base64.b64decode(
+                                encoded + "=" * (-len(encoded) % 4)
+                            ).decode("utf-8")
+                        )
+                    except Exception as e:
+                        logger.debug("Turnstile solver: _econfig decode failed: %r", e)
+                        config = None
+                    if isinstance(config, dict) and (
+                        config.get("stream_url") or config.get("stream_url_nop2p")
+                    ):
+                        logger.info(
+                            "Turnstile solver: stream URL read from page config"
+                        )
+                        solution = {
+                            "success": True,
+                            "stream_url": config.get("stream_url"),
+                            "stream_url_nop2p": config.get("stream_url_nop2p"),
+                            "_solver_user_agent": ua,
+                        }
+                        return solution
+                if clicks < 4:
+                    try:
+                        probe = await cdp.send(
+                            "Runtime.evaluate",
+                            {"expression": _FIND_WIDGET, "returnByValue": True},
+                            iframe_sid,
+                        )
+                        raw = probe.get("result", {}).get("value")
+                    except Exception as e:
+                        logger.debug("Turnstile solver: widget probe failed: %r", e)
+                        raw = None
+                    if raw:
+                        pos = json.loads(raw)
+                        clicks += 1
+                        for kind in ("mousePressed", "mouseReleased"):
+                            try:
+                                await cdp.send(
+                                    "Input.dispatchMouseEvent",
+                                    {
+                                        "type": kind,
+                                        "x": pos["x"],
+                                        "y": pos["y"],
+                                        "button": "left",
+                                        "clickCount": 1,
+                                    },
+                                    iframe_sid,
+                                )
+                            except Exception as e:
+                                logger.debug("Turnstile solver: click failed: %r", e)
+                        logger.info(
+                            "Turnstile solver: clicked widget (%d/4)", clicks
+                        )
 
+        try:
+            diag = await cdp.send(
+                "Runtime.evaluate",
+                {"expression": _DIAG, "returnByValue": True},
+                iframe_sid or sid,
+            )
+            logger.warning(
+                "Turnstile solver: page state on timeout: %s",
+                (diag.get("result", {}) or {}).get("value"),
+            )
+        except Exception as e:
+            logger.debug("Turnstile solver: timeout diagnostics failed: %r", e)
         logger.warning(
             "Turnstile solver: no /turnstile/ response within %.0fs", timeout
         )
