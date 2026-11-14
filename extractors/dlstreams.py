@@ -470,11 +470,13 @@ class DLStreamsExtractor(BaseExtractor):
 
     def _build_player_urls(self, channel_id: str) -> list[str]:
         origin = self.entry_origin.rstrip("/")
-        # Player 1 first, like the site. The decode probe rejects a broken
-        # video track and the caller tries the next player automatically.
+        # The xstream player ("cast") is tried first: it is plain HTTP and works
+        # on datacenter IPs, while the premium player ("stream") rejects them
+        # with 403. The decode probe still validates every candidate and the
+        # caller tries the next player when the pinned one is dead.
         return [
-            f"{origin}/stream/stream-{channel_id}.php",
             f"{origin}/cast/stream-{channel_id}.php",
+            f"{origin}/stream/stream-{channel_id}.php",
             f"{origin}/watch/stream-{channel_id}.php",
             f"{origin}/plus/stream-{channel_id}.php",
             f"{origin}/casting/stream-{channel_id}.php",
