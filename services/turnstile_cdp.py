@@ -276,26 +276,46 @@ async def solve_player_stream(
 ) -> dict | None:
     """Load ``page_url``, solve the player Turnstile gate, return the POST body."""
     try:
-        return await _solve(page_url, proxy, timeout)
+        return await _solve(page_url, proxy, timeout, mode="stream")
     except Exception as e:
         logger.warning("Turnstile solver: failed for %s: %r", page_url, e)
         return None
 
 
-async def _solve(page_url: str, proxy: str | None, timeout: float) -> dict | None:
+async def solve_premium_ticket(
+    page_url: str, proxy: str | None = None, timeout: float = 45.0
+) -> dict | None:
+    """Solve the premium player Turnstile and return its playlist ticket.
+
+    After the challenge the player POSTs to ``/premiumtv/daddy.php?id=<id>`` and
+    gets ``{"ticket": "<epoch>.<ip>.<hmac>"}``; the edge token endpoint only
+    answers for the address that holds the ticket.
+    """
+    try:
+        return await _solve(page_url, proxy, timeout, mode="premium")
+    except Exception as e:
+        logger.warning("Turnstile solver: premium failed for %s: %r", page_url, e)
+        return None
+
+
+async def _solve(
+    page_url: str, proxy: str | None, timeout: float, mode: str = "stream"
+) -> dict | None:
     async with _SOLVE_LOCK:
         for attempt in (1, 2):
-            solution = await _solve_once(page_url, proxy, min(timeout, 30.0))
+            solution = await _solve_once(page_url, proxy, min(timeout, 30.0), mode)
             if solution:
                 return solution
             logger.info(
-                "Turnstile solver: attempt %d/2 did not capture the stream URL", attempt
+                "Turnstile solver: attempt %d/2 did not capture %s",
+                attempt,
+                "the premium ticket" if mode == "premium" else "the stream URL",
             )
         return None
 
 
 async def _solve_once(
-    page_url: str, proxy: str | None, timeout: float
+    page_url: str, proxy: str | None, timeout: float, mode: str = "stream"
 ) -> dict | None:
     chrome = find_chrome()
     if not chrome:
@@ -378,7 +398,7 @@ async def _solve_once(
             async with session.ws_connect(
                 version["webSocketDebuggerUrl"], max_msg_size=0
             ) as ws:
-                return await _drive(ws, page_url, timeout, ua)
+                return await _drive(ws, page_url, timeout, ua, mode)
     finally:
         try:
             proc.terminate()
@@ -411,7 +431,27 @@ def _read_devtools_version(port: int) -> dict:
         return json.load(response)
 
 
-async def _drive(ws, page_url: str, timeout: float, ua: str) -> dict | None:
+async def _response_json(cdp, request_id, session_id) -> dict | None:
+    """JSON body of a response; it can be briefly unavailable right after the event."""
+    for attempt in range(3):
+        try:
+            body = await cdp.send(
+                "Network.getResponseBody", {"requestId": request_id}, session_id
+            )
+            data = json.loads(body.get("body") or "")
+        except Exception as e:
+            logger.debug("Turnstile solver: body read failed: %r", e)
+            data = None
+        if isinstance(data, dict):
+            return data
+        if attempt < 2:
+            await asyncio.sleep(0.2)
+    return None
+
+
+async def _drive(
+    ws, page_url: str, timeout: float, ua: str, mode: str = "stream"
+) -> dict | None:
     cdp = _CDP(ws)
     try:
         target = await cdp.send("Target.createTarget", {"url": "about:blank"})
@@ -447,6 +487,7 @@ async def _drive(ws, page_url: str, timeout: float, ua: str) -> dict | None:
         actual_ua = None
         server_date = None
         challenge_urls: dict[str, str] = {}
+        captured: dict = {}
         while time.monotonic() < deadline:
             remaining = deadline - time.monotonic()
             try:
@@ -490,6 +531,37 @@ async def _drive(ws, page_url: str, timeout: float, ua: str) -> dict | None:
                             if key.lower() == "date":
                                 server_date = str(value)
                                 break
+                    if mode == "premium":
+                        # Ticket POST first, then the token GET that consumes it.
+                        # Only the JSON APIs: a document body is not JSON.
+                        wanted = None
+                        if params.get("type") in ("XHR", "Fetch"):
+                            if "premiumtv/daddy.php" in url:
+                                wanted = "ticket"
+                            elif "/api/playlist-token" in url:
+                                wanted = "token"
+                        if wanted:
+                            data = await _response_json(cdp, params.get("requestId"), esid)
+                            if wanted == "ticket" and (data or {}).get("ticket"):
+                                captured["ticket"] = str(data["ticket"])
+                                logger.info("Turnstile solver: premium ticket captured")
+                            elif wanted == "token" and (data or {}).get("token"):
+                                captured["token"] = str(data["token"])
+                                captured["k"] = data.get("k")
+                                captured["ttl"] = data.get("ttl")
+                                logger.info(
+                                    "Turnstile solver: premium playlist token captured"
+                                )
+                            if captured.get("ticket") and captured.get("token"):
+                                return {
+                                    "success": True,
+                                    "ticket": captured.get("ticket"),
+                                    "token": captured.get("token"),
+                                    "k": captured.get("k"),
+                                    "ttl": captured.get("ttl"),
+                                    "_solver_user_agent": actual_ua or ua,
+                                }
+                        continue
                     if "/turnstile/" not in url or "challenges.cloudflare.com" in url:
                         continue
                     try:
@@ -537,6 +609,7 @@ async def _drive(ws, page_url: str, timeout: float, ua: str) -> dict | None:
                     except Exception as e:
                         logger.debug("Turnstile solver: UA probe failed: %r", e)
                 # Non-gated variant: the config already carries the signed URL.
+                # The premium player has no _econfig: its URL comes from the token.
                 try:
                     plain = await cdp.send(
                         "Runtime.evaluate",
@@ -547,7 +620,7 @@ async def _drive(ws, page_url: str, timeout: float, ua: str) -> dict | None:
                 except Exception as e:
                     logger.debug("Turnstile solver: _econfig read failed: %r", e)
                     encoded = None
-                if isinstance(encoded, str) and encoded:
+                if mode == "stream" and isinstance(encoded, str) and encoded:
                     try:
                         config = json.loads(
                             base64.b64decode(
@@ -603,6 +676,20 @@ async def _drive(ws, page_url: str, timeout: float, ua: str) -> dict | None:
                             "Turnstile solver: clicked widget (%d/4)", clicks
                         )
 
+        if mode == "premium" and captured.get("ticket"):
+            # The ticket alone is enough for the caller's own token GET.
+            logger.warning(
+                "Turnstile solver: premium ticket captured, no playlist token within %.0fs",
+                timeout,
+            )
+            return {
+                "success": True,
+                "ticket": captured.get("ticket"),
+                "token": None,
+                "k": None,
+                "ttl": None,
+                "_solver_user_agent": actual_ua or ua,
+            }
         try:
             diag = await cdp.send(
                 "Runtime.evaluate",
@@ -635,7 +722,9 @@ async def _drive(ws, page_url: str, timeout: float, ua: str) -> dict | None:
             except Exception as e:
                 logger.debug("Turnstile solver: clock skew check failed: %r", e)
         logger.warning(
-            "Turnstile solver: no /turnstile/ response within %.0fs", timeout
+            "Turnstile solver: no %s within %.0fs",
+            "premium response" if mode == "premium" else "/turnstile/ response",
+            timeout,
         )
         return None
     finally:

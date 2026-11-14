@@ -1291,6 +1291,7 @@ class HLSProxyStreamingMixin:
                         stream_url,
                         headers,
                         route_key=premium_route_key,
+                        proxy=session_proxy,
                     )
                 except Exception as _pt_exc:
                     logger.debug(
@@ -1676,6 +1677,7 @@ class HLSProxyStreamingMixin:
                                 headers,
                                 force=True,
                                 route_key=premium_route_key,
+                                proxy=session_proxy,
                             )
                             if fresh_url != stream_url:
                                 logger.info(

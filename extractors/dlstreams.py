@@ -79,6 +79,22 @@ _premium_token_locks: Dict[tuple, asyncio.Lock] = {}
 # of the token it was fetched with even if the cache was renewed meanwhile.
 _premium_segment_keys: Dict[str, bytes] = {}
 _PREMIUM_SEGMENT_KEYS_MAX = 512
+# The premium player releases a ticket (~12h, bound to the solver's address and
+# carried by the epoch in front of it) only after its own Turnstile; the token
+# endpoint answers it, and nothing else, with a playlist token.
+# (edge, slug, route) -> (ticket, monotonic deadline)
+_premium_tickets: Dict[tuple, tuple] = {}
+_PREMIUM_TICKET_DEFAULT_TTL = 11 * 3600.0
+
+
+def _premium_ticket_deadline(ticket: str) -> float:
+    """Monotonic deadline from the epoch prefix of a premium ticket."""
+    try:
+        epoch = float(str(ticket).split(".", 1)[0])
+    except (TypeError, ValueError):
+        return time.monotonic() + _PREMIUM_TICKET_DEFAULT_TTL
+    remaining = epoch - time.time()
+    return time.monotonic() + max(60.0, min(remaining, _PREMIUM_TICKET_DEFAULT_TTL))
 
 
 def _b64url_decode(value: str) -> bytes:
@@ -160,9 +176,33 @@ def invalidate_premium_playlist_token(playlist_url: str, route_key: str = "") ->
         _premium_tokens.pop(key, None)
 
 
+async def _premium_curl_get(
+    url: str, headers: dict, timeout: float, proxy: str | None = None
+) -> tuple[int, str]:
+    """GET a premium edge URL with Chrome TLS impersonation.
+
+    The edge fingerprints TLS: aiohttp is answered 403 even with a valid
+    ticket/token, curl_cffi's Chrome profile is answered 200.
+    """
+    from curl_cffi.requests import AsyncSession
+
+    kwargs = {"impersonate": "chrome", "timeout": timeout}
+    if proxy:
+        kwargs["proxy"] = str(proxy).replace("socks5h://", "socks5://")
+    try:
+        from curl_cffi.requests import AsyncSession
+
+        async with AsyncSession(**kwargs) as curl_session:
+            resp = await curl_session.get(url, headers=headers)
+            return resp.status_code, resp.text or ""
+    except Exception as exc:
+        logger.debug("DLStreams: curl_cffi fetch of %s failed: %s", url, exc)
+        return 0, ""
+
+
 async def premium_playlist_token(
     session, playlist_url: str, headers: dict = None, force: bool = False,
-    route_key: str = "",
+    route_key: str = "", ticket: str | None = None, proxy: str | None = None,
 ) -> str | None:
     """Per-viewer playlist token for the premium edge (cached until ~half TTL)."""
     parts = premium_playlist_parts(playlist_url)
@@ -181,6 +221,12 @@ async def premium_playlist_token(
         cached = _premium_tokens.get(key)
         if cached and not force and cached[1] > now:
             return cached[0]
+        if ticket is None:
+            # The proxy path calls in without a ticket: reuse the one the
+            # extractor already solved for this edge/slug/route.
+            cached_ticket = _premium_tickets.get(key)
+            if cached_ticket and cached_ticket[1] > now:
+                ticket = cached_ticket[0]
         origin = premium_token_origin(headers, playlist_url)
         token_headers = {
             "Origin": origin,
@@ -191,17 +237,30 @@ async def premium_playlist_token(
             "Accept": "*/*",
         }
         try:
+            token_query = f"slug={slug}"
+            if ticket:
+                # Without the ticket the endpoint answers 403.
+                token_query += f"&tk={urllib.parse.quote(ticket)}"
+            token_url = f"{edge}{PREMIUM_TOKEN_PATH}?{token_query}"
+            data = None
             async with session.get(
-                f"{edge}{PREMIUM_TOKEN_PATH}?slug={slug}",
+                token_url,
                 headers=token_headers,
                 timeout=ClientTimeout(total=10),
             ) as resp:
-                if resp.status != 200:
+                if resp.status == 200:
+                    data = await resp.json(content_type=None)
+                else:
                     logger.debug(
                         "DLStreams: premium token for %s -> HTTP %s", slug, resp.status
                     )
-                    return cached[0] if cached else None
-                data = await resp.json(content_type=None)
+            if data is None:
+                # Same TLS fingerprint gate as the playlist: retry impersonated.
+                status, body = await _premium_curl_get(token_url, token_headers, 10, proxy)
+                if status == 200 and body:
+                    data = json.loads(body)
+            if data is None:
+                return cached[0] if cached else None
         except Exception as exc:
             logger.debug("DLStreams: premium token for %s failed: %s", slug, exc)
             return cached[0] if cached else None
@@ -226,13 +285,14 @@ async def premium_playlist_token(
 
 async def ensure_premium_playlist_url(
     session, playlist_url: str, headers: dict = None, force: bool = False,
-    route_key: str = "",
+    route_key: str = "", ticket: str | None = None, proxy: str | None = None,
 ) -> str:
     """Playlist URL carrying a fresh premium token (unchanged otherwise)."""
     if premium_playlist_parts(playlist_url) is None:
         return playlist_url
     token = await premium_playlist_token(
-        session, playlist_url, headers, force=force, route_key=route_key
+        session, playlist_url, headers, force=force, route_key=route_key,
+        ticket=ticket, proxy=proxy,
     )
     if not token:
         return playlist_url
@@ -679,7 +739,9 @@ class DLStreamsExtractor(BaseExtractor):
                 return decodes
             return True
 
-    async def _with_premium_token(self, session, stream_url: str, headers: dict) -> str:
+    async def _with_premium_token(
+        self, session, stream_url: str, headers: dict, ticket: str | None = None
+    ) -> str:
         """Attach a fresh premium edge playlist token when the URL needs one."""
         try:
             return await ensure_premium_playlist_url(
@@ -687,10 +749,33 @@ class DLStreamsExtractor(BaseExtractor):
                 stream_url,
                 headers,
                 route_key=(getattr(self, "last_used_proxy", None) or "direct"),
+                ticket=ticket,
+                proxy=getattr(self, "_session_proxy", None),
             )
         except Exception as exc:
             logger.debug("DLStreams: premium token refresh failed for %s: %s", stream_url, exc)
             return stream_url
+
+    async def _solve_premium_ticket(self, page_url: str) -> str | None:
+        """Solve Turnstile on the premium player and return its ticket."""
+        if str(os.getenv("DLSTREAMS_TURNSTILE_SOLVER", "1")).strip().lower() in {"0", "off", "false", "no"}:
+            return None
+        try:
+            from services.turnstile_cdp import solve_premium_ticket
+        except Exception as e:
+            logger.debug("DLStreams: premium solver unavailable: %s", e)
+            return None
+        try:
+            solution = await solve_premium_ticket(
+                page_url, proxy=getattr(self, "_session_proxy", None)
+            )
+        except Exception as e:
+            logger.warning("DLStreams: premium solver failed: %s", e)
+            return None
+        if not solution or not solution.get("success") or not solution.get("ticket"):
+            return None
+        logger.info("DLStreams: premium ticket obtained for %s", page_url)
+        return solution["ticket"]
 
     async def _solve_gated_player(self, page_url: str) -> tuple[str, str | None] | None:
         """Solve the xstream Turnstile gate in headless Chromium (best effort)."""
@@ -720,6 +805,27 @@ class DLStreamsExtractor(BaseExtractor):
         if not stream_url:
             return None
         return stream_url, solution.get("_solver_user_agent")
+
+    async def _fetch_playlist(
+        self, session, url: str, headers: dict, timeout: float
+    ) -> tuple[int, str]:
+        """Fetch a playlist; premium edges require Chrome TLS impersonation."""
+        if premium_playlist_parts(url) is None:
+            async with session.get(url, headers=headers, timeout=timeout) as resp:
+                return resp.status, (await resp.text() if resp.status == 200 else "")
+        # The premium edge 403s aiohttp; after the token the segments point to
+        # the TikTok CDN, so only the playlist itself needs impersonation.
+        curl_headers = {
+            "Referer": "https://dembed.st/",
+            "Origin": "https://dembed.st",
+        }
+        for key, value in (headers or {}).items():
+            if key.lower() not in {"referer", "origin", "user-agent"}:
+                curl_headers[key] = value
+        status, body = await _premium_curl_get(
+            url, curl_headers, timeout, getattr(self, "_session_proxy", None)
+        )
+        return status, (body if status == 200 else "")
 
     async def _is_stream_alive(
         self, session, stream_url: str, headers: dict, budget: float | None = None
@@ -752,11 +858,12 @@ class DLStreamsExtractor(BaseExtractor):
         stream_url = await self._with_premium_token(session, stream_url, headers)
 
         try:
-            async with session.get(stream_url, headers=headers, timeout=_timeout(10)) as resp:
-                if resp.status != 200:
-                    logger.debug("DLStreams: validation of %s -> HTTP %s", stream_url, resp.status)
-                    return False
-                master = await resp.text()
+            status, master = await self._fetch_playlist(
+                session, stream_url, headers, _timeout(10)
+            )
+            if status != 200:
+                logger.debug("DLStreams: validation of %s -> HTTP %s", stream_url, status)
+                return False
             if "#EXTM3U" not in master[:8000] and "#EXT-X-" not in master[:8000]:
                 logger.debug("DLStreams: validation of %s -> not a playlist", stream_url)
                 return False
@@ -768,11 +875,12 @@ class DLStreamsExtractor(BaseExtractor):
                     logger.debug("DLStreams: validation of %s -> no variant found", stream_url)
                     return False
                 variant = await self._with_premium_token(session, variant, headers)
-                async with session.get(variant, headers=headers, timeout=_timeout(8)) as resp:
-                    if resp.status != 200:
-                        logger.debug("DLStreams: validation variant %s -> HTTP %s", variant, resp.status)
-                        return False
-                    current_body = await resp.text()
+                status, current_body = await self._fetch_playlist(
+                    session, variant, headers, _timeout(8)
+                )
+                if status != 200:
+                    logger.debug("DLStreams: validation variant %s -> HTTP %s", variant, status)
+                    return False
                 current_url = variant
                 if "#EXTM3U" not in current_body[:8000]:
                     return False
@@ -1048,7 +1156,37 @@ class DLStreamsExtractor(BaseExtractor):
                 # A dead Player 1 URL must not hide a working Player 2.
                 # The premium edge needs a per-viewer token on the playlist URL,
                 # so hand over the tokenized URL (validation bundles it too).
-                stream_url = await self._with_premium_token(session, stream_url, playback_headers)
+                # Only the premium player gates that token behind Turnstile;
+                # its ticket lasts hours, so Chrome opens on a cache miss only.
+                premium_ticket = None
+                premium_parts = premium_playlist_parts(stream_url)
+                if premium_parts and (
+                    "dembed.st" in iframe_src or "premiumtv" in iframe_src
+                ):
+                    ticket_key = (
+                        premium_parts[0],
+                        premium_parts[1],
+                        getattr(self, "last_used_proxy", None) or "direct",
+                    )
+                    cached_ticket = _premium_tickets.get(ticket_key)
+                    if cached_ticket and cached_ticket[1] > time.monotonic():
+                        premium_ticket = cached_ticket[0]
+                    else:
+                        solve_started = time.monotonic()
+                        # The embedding player page: loading dembed.st directly
+                        # serves a stub without the Turnstile widget.
+                        premium_ticket = await self._solve_premium_ticket(candidate)
+                        # Chromium runs outside the extraction budget: hand the
+                        # remaining work the time the solver consumed.
+                        deadline += time.monotonic() - solve_started
+                        if premium_ticket:
+                            _premium_tickets[ticket_key] = (
+                                premium_ticket,
+                                _premium_ticket_deadline(premium_ticket),
+                            )
+                stream_url = await self._with_premium_token(
+                    session, stream_url, playback_headers, ticket=premium_ticket
+                )
                 budget = _remaining()
                 if is_pin and not last_pin_try:
                     budget = min(budget, self.PIN_ATTEMPT_BUDGET)

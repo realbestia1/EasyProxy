@@ -17,6 +17,9 @@ PROTECTED_CURL_DOMAINS = (
     # VidXgo CDN playlists/segments are served from *.d2b.you and are
     # noticeably slower through the generic aiohttp path.
     "d2b.you",
+    # Premium dlstreams edges answer 403 to aiohttp and 200 to browser
+    # impersonation (the playlists, not the TikTok CDN segments).
+    "wedd48c.top",
 )
 MANIFEST_ONLY_CURL_DOMAINS = ("torrentio", "strem.fun")
 
