@@ -895,9 +895,20 @@ class DLStreamsExtractor(BaseExtractor):
             probe_headers = {k: v for k, v in headers.items() if k.lower() != "range"}
             if encrypted:
                 probe_headers["Range"] = "bytes=0-4095"
-            if not await self._segment_carries_video(
-                session, segment, probe_headers, _timeout(12), encrypted=encrypted
-            ):
+            try:
+                segment_ok = await self._segment_carries_video(
+                    session, segment, probe_headers, _timeout(12), encrypted=encrypted
+                )
+            except asyncio.TimeoutError:
+                # Premium segments live on the TikTok CDN: a slow probe is
+                # transient and must not discard an otherwise valid playlist.
+                if premium_playlist_parts(stream_url) is None:
+                    raise
+                logger.info(
+                    "DLStreams: premium segment probe timed out, accepting playlist"
+                )
+                segment_ok = True
+            if not segment_ok:
                 return False
             # AES key, if the variant uses one
             key_match = re.search(r'#EXT-X-KEY:[^\n]*URI="([^"]+)"', current_body)
