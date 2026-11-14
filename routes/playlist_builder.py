@@ -125,6 +125,9 @@ class PlaylistBuilder:
                     # to the generic proxy/manifest instead of the extractor.
                     encoded_url = urllib.parse.quote(logical_line, safe='')
                     processed_url_content = f"{base_url}/extractor/video.m3u8?host=sportsonline&redirect_stream=true&d={encoded_url}"
+                elif 'tvizle.tr' in logical_line and '/extractor/' not in logical_line:
+                    encoded_url = urllib.parse.quote(logical_line, safe='')
+                    processed_url_content = f"{base_url}/extractor/video.m3u8?host=tvizle&redirect_stream=true&d={encoded_url}"
                 elif 'fctv33' in logical_line or 'mpgreatestclgczbmiddle' in logical_line:
                     encoded_url = urllib.parse.quote(logical_line, safe='')
                     processed_url_content = f"{base_url}/extractor/video.m3u8?host=fctv33&redirect_stream=true&d={encoded_url}"

@@ -306,6 +306,9 @@ _ENTRIES = (
                          lambda url, parsed: url.lower().startswith("htsport://")),
            url_proxy="url", host_proxy="url", key_name="htsport",
            host_build_name="htsport", proxy_extractor_name="htsport"),
+    _Entry("tvizle", TVizleExtractor, hosts=("tvizle",),
+           match=_host_endswith("tvizle.tr"),
+           url_proxy="url", key_name="tvizle"),
     _Entry("livetv", LiveTVExtractor, hosts=("livetv",), match=_sub("livetv", lower=True),
            url_proxy="livetv.sx"),
 )
