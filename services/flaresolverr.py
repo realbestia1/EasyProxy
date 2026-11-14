@@ -767,6 +767,42 @@ class FlareSolverrManager:
 
 
 
+    @staticmethod
+
+    def _has_ram_headroom() -> bool:
+
+        """Refuse to spawn Chromium when the box is almost out of RAM."""
+
+        try:
+
+            import psutil
+
+            available_mb = psutil.virtual_memory().available / (1024 ** 2)
+
+        except Exception:
+
+            return True
+
+        minimum = float(os.getenv("FLARESOLVERR_MIN_AVAILABLE_MB", "400"))
+
+        if available_mb < minimum:
+
+            logger.warning(
+
+                "FlareSolverr: only %.0f MB RAM available (need %.0f MB), skipping solver",
+
+                available_mb,
+
+                minimum,
+
+            )
+
+            return False
+
+        return True
+
+
+
     async def solve(
 
         self,
@@ -792,6 +828,10 @@ class FlareSolverrManager:
                 "Route FlareSolverr assente: direct fallback disabilitato mentre WARP è attivo"
 
             )
+
+        if not self._has_ram_headroom():
+
+            raise FlareSolverrError("low RAM: FlareSolverr skipped")
 
 
 

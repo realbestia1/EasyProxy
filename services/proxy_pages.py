@@ -917,6 +917,36 @@ class HLSProxyPagesMixin:
             "error": _EXTRACTOR_TEST_STATE["error"],
         })
 
+    # Extractors that launch a browser (Turnstile solver) and can exhaust the RAM
+    # of small instances during the bulk test. vixsrc (FlareSolverr) is not listed
+    # here: it is already protected by the dynamic available-RAM check.
+    _BROWSER_TEST_EXTRACTORS = frozenset({"sportsonline", "dlstreams"})
+
+    @classmethod
+    def _extractor_test_limits(cls, configured: dict) -> tuple[int, list[str]]:
+        """Concurrency and skipped extractors for the bulk test (RAM aware)."""
+        try:
+            import psutil
+            total_gb = psutil.virtual_memory().total / (1024 ** 3)
+        except Exception:
+            total_gb = 4.0
+        if total_gb < 2.0:
+            skipped = sorted(name for name in configured if name in cls._BROWSER_TEST_EXTRACTORS)
+            logger.warning(
+                "Extractor test: %.1f GB RAM detected, running sequentially and "
+                "skipping browser-based extractors: %s",
+                total_gb,
+                ", ".join(skipped) or "-",
+            )
+            return 1, skipped
+        if total_gb < 4.0:
+            logger.warning(
+                "Extractor test: %.1f GB RAM detected, running with concurrency 2",
+                total_gb,
+            )
+            return 2, []
+        return 5, []
+
     async def _run_extractor_test_job(self, headers):
         from extractors.test_urls import REMOTE_TEST_URLS_URL
 
@@ -941,8 +971,12 @@ class HLSProxyPagesMixin:
 
             configured = {k: u for k, u in urls.items() if u}
             skipped = sorted(k for k, u in urls.items() if not u)
+            limit, low_memory_skipped = self._extractor_test_limits(configured)
+            for name in low_memory_skipped:
+                configured.pop(name, None)
+            skipped = sorted(set(skipped) | set(low_memory_skipped))
             results = []
-            sem = asyncio.Semaphore(5)
+            sem = asyncio.Semaphore(limit)
 
             async def _test(name, url):
                 async with sem:

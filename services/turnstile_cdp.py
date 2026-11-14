@@ -38,6 +38,8 @@ _DEFAULT_UA_VERSION = "124.0.0.0"
 _XVFB_LOCK = asyncio.Lock()
 _XVFB_PROCESS: subprocess.Popen | None = None
 _XVFB_DISPLAY: str | None = None
+# Chromium needs headroom: on a 1 GB box launching it can trigger the OOM killer.
+_MIN_AVAILABLE_MB = float(os.getenv("TURNSTILE_MIN_AVAILABLE_MB", "400"))
 
 
 def _build_user_agent(chrome_path: str) -> str:
@@ -326,6 +328,19 @@ async def _solve_once(
     if not chrome:
         logger.warning("Turnstile solver: Chrome non trovato (TURNSTILE_CHROME_PATH)")
         return None
+
+    try:
+        import psutil
+        available_mb = psutil.virtual_memory().available / (1024 ** 2)
+        if available_mb < _MIN_AVAILABLE_MB:
+            logger.warning(
+                "Turnstile solver: only %.0f MB RAM available (need %.0f MB), skipping browser solve",
+                available_mb,
+                _MIN_AVAILABLE_MB,
+            )
+            return None
+    except Exception as exc:
+        logger.debug("Turnstile solver: RAM check failed: %r", exc)
 
     if proxy and "@" in proxy:
         # Chromium cannot authenticate to a proxy from the command line.
