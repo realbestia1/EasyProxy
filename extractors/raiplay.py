@@ -237,6 +237,8 @@ class RaiPlayExtractor(BaseExtractor):
                 hostname.endswith(".rai.it")
                 or hostname.endswith(".akamaized.net")
                 or hostname.endswith(".msvdn.net")
+                # The relinker sends datacenter IPs to this Rai CDN.
+                or hostname.endswith(".netrw.it")
             )
         ):
             raise RuntimeError("RaiPlay returned an unsupported media URL")
