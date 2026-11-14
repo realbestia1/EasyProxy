@@ -118,6 +118,11 @@ _READ_ECONFIG = """
 """
 
 
+def _is_stale_session(exc: Exception) -> bool:
+    """True when a CDP call targets a detached iframe session."""
+    return "session with given id not found" in str(exc).lower()
+
+
 def find_chrome() -> str | None:
     """Locate a Chromium/Chrome binary (bundled FlareSolverr copy first)."""
     candidates: list[str] = []
@@ -607,19 +612,25 @@ async def _drive(
                         )
                         actual_ua = (res_ua.get("result", {}) or {}).get("value") or None
                     except Exception as e:
+                        if _is_stale_session(e):
+                            iframe_sid = None
                         logger.debug("Turnstile solver: UA probe failed: %r", e)
                 # Non-gated variant: the config already carries the signed URL.
                 # The premium player has no _econfig: its URL comes from the token.
-                try:
-                    plain = await cdp.send(
-                        "Runtime.evaluate",
-                        {"expression": _READ_ECONFIG, "returnByValue": True},
-                        iframe_sid,
-                    )
-                    encoded = plain.get("result", {}).get("value")
-                except Exception as e:
-                    logger.debug("Turnstile solver: _econfig read failed: %r", e)
-                    encoded = None
+                encoded = None
+                if iframe_sid:
+                    try:
+                        plain = await cdp.send(
+                            "Runtime.evaluate",
+                            {"expression": _READ_ECONFIG, "returnByValue": True},
+                            iframe_sid,
+                        )
+                        encoded = plain.get("result", {}).get("value")
+                    except Exception as e:
+                        if _is_stale_session(e):
+                            iframe_sid = None
+                        logger.debug("Turnstile solver: _econfig read failed: %r", e)
+                        encoded = None
                 if mode == "stream" and isinstance(encoded, str) and encoded:
                     try:
                         config = json.loads(
@@ -643,7 +654,7 @@ async def _drive(
                             "_solver_user_agent": actual_ua or ua,
                         }
                         return solution
-                if clicks < 4:
+                if iframe_sid and clicks < 4:
                     try:
                         probe = await cdp.send(
                             "Runtime.evaluate",
@@ -652,6 +663,8 @@ async def _drive(
                         )
                         raw = probe.get("result", {}).get("value")
                     except Exception as e:
+                        if _is_stale_session(e):
+                            iframe_sid = None
                         logger.debug("Turnstile solver: widget probe failed: %r", e)
                         raw = None
                     if raw:
