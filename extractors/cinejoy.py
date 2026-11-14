@@ -106,14 +106,6 @@ class CinejoyExtractor(BaseExtractor):
             env["CINEJOY_PROXY"] = str(runner_proxy)
         else:
             env.pop("CINEJOY_PROXY", None)
-        try:
-            required_resolution = int(kwargs.get("required_resolution") or 0)
-        except (TypeError, ValueError):
-            required_resolution = 0
-        if required_resolution >= 2160:
-            env["CINEJOY_REQUIRE_4K"] = "1"
-        else:
-            env.pop("CINEJOY_REQUIRE_4K", None)
         if kwargs.get("background_refresh") or kwargs.get("force_refresh"):
             env["CINEJOY_DEBUG"] = "1"
 

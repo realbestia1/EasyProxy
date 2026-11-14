@@ -229,18 +229,19 @@ async function getServers() {
 
 async function resolve() {
   const target = parseTarget(input);
-  const require4k = process.env.CINEJOY_REQUIRE_4K === "1";
   log("Target:", target);
 
   const servers = await getServers();
   const with4k = servers.filter((s) => s["4k"] === true);
   const nebula = servers.filter((s) => s.name === "Nebula");
   const others = servers.filter((s) => !s["4k"] && s.name !== "Nebula");
-  // Always seek 4K (highest resolution) first, fallback to 1080p unless require4k is set
-  const candidateServers = require4k ? with4k : [...with4k, ...nebula, ...others];
+  // Il 4K si prova per primo, ma senza restringere la lista: se nessun server
+  // 4K ha una playlist valida si scende a Nebula/1080p. La qualita' finale la
+  // sceglie il DUAL manifest (_pick_video), che degrada alla variante migliore.
+  const candidateServers = [...with4k, ...nebula, ...others];
 
   if (candidateServers.length === 0) {
-    throw new Error(require4k ? "No active 4K Cinejoy server found" : "No active Cinejoy server found");
+    throw new Error("No active Cinejoy server found");
   }
 
   const isMovie = target.type === "movie";
