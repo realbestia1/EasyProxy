@@ -63,7 +63,6 @@ PREMIUM_PLAYLIST_RE = re.compile(
     r"^(?P<edge>https?://[^/]+)/(?P<slug>premium\d+)/index\.m3u8$", re.IGNORECASE
 )
 PREMIUM_TOKEN_PATH = "/api/playlist-token"
-PREMIUM_TOKEN_ORIGINS = ("https://dembed.st", "https://dlive.sx")
 PREMIUM_TOKEN_DEFAULT_ORIGIN = "https://dembed.st"
 PREMIUM_TOKEN_DEFAULT_TTL = 120.0
 PREMIUM_TOKEN_MIN_TTL = 20.0
@@ -151,14 +150,13 @@ def premium_token_origin(headers: dict = None, url: str = "") -> str:
         (headers or {}).get("origin"),
         (headers or {}).get("Referer"),
         (headers or {}).get("referer"),
-        url,
+        url if isinstance(url, str) else "",
     ):
         if not value:
             continue
-        parsed = urlparse(value if "://" in str(value) else f"https://{value}")
-        origin = f"{parsed.scheme}://{parsed.netloc}"
-        if any(origin == allowed for allowed in PREMIUM_TOKEN_ORIGINS):
-            return origin
+        parsed = urlparse(str(value))
+        if parsed.scheme in ("http", "https") and parsed.netloc:
+            return f"{parsed.scheme}://{parsed.netloc}"
     return PREMIUM_TOKEN_DEFAULT_ORIGIN
 
 
@@ -256,7 +254,9 @@ async def premium_playlist_token(
                     )
             if data is None:
                 # Same TLS fingerprint gate as the playlist: retry impersonated.
-                status, body = await _premium_curl_get(token_url, token_headers, 10, proxy)
+                status, body = await _premium_curl_get(
+                    token_url, {"Referer": f"{origin}/", "Origin": origin}, 10, proxy
+                )
                 if status == 200 and body:
                     data = json.loads(body)
             if data is None:
@@ -817,9 +817,17 @@ class DLStreamsExtractor(BaseExtractor):
                 return resp.status, (await resp.text() if resp.status == 200 else "")
         # The premium edge 403s aiohttp; after the token the segments point to
         # the TikTok CDN, so only the playlist itself needs impersonation.
+        origin = (
+            (headers or {}).get("Origin")
+            or (headers or {}).get("origin")
+            or (headers or {}).get("Referer")
+            or (headers or {}).get("referer")
+            or PREMIUM_TOKEN_DEFAULT_ORIGIN
+        )
+        origin = str(origin).rstrip("/")
         curl_headers = {
-            "Referer": "https://dembed.st/",
-            "Origin": "https://dembed.st",
+            "Referer": f"{origin}/",
+            "Origin": origin,
         }
         for key, value in (headers or {}).items():
             if key.lower() not in {"referer", "origin", "user-agent"}:

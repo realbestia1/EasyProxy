@@ -1,3 +1,4 @@
+import re
 import time
 import urllib.parse
 
@@ -72,6 +73,9 @@ def should_use_curl_cffi(stream_url: str, is_special_cdn: bool, has_curl_cffi: b
     if not has_curl_cffi or is_special_cdn:
         return False
     if host_needs_impersonation(value):
+        return True
+    # Premium dlstreams playlists: the edge host rotates, the path shape does not.
+    if re.search(r"/premium\d+/index\.m3u8(?:\?|$)", value):
         return True
     if not any(domain in value for domain in PROTECTED_CURL_DOMAINS):
         return False
