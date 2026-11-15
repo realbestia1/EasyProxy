@@ -155,7 +155,32 @@ def prepare_flaresolverr() -> None:
     print("Patched FlareSolverr ready.")
 
 
+def ensure_node_modules() -> None:
+    """PPV/NTV runners import happy-dom; easyproxy.spec bundles node_modules."""
+    node = shutil.which("node") or next(
+        (str(p) for p in (BIN_DIR / "node.exe", ROOT_DIR / "node.exe") if p.is_file()), None
+    )
+    if not node:
+        print("WARNING: node not found. Install Node.js or place node.exe in bin/, "
+              "otherwise PPV/NTV extraction will fail in the exe.")
+
+    marker = ROOT_DIR / "node_modules" / "happy-dom" / "package.json"
+    if marker.exists():
+        print("happy-dom already installed.")
+        return
+    npm = shutil.which("npm")
+    if not npm:
+        print("WARNING: npm not found. Install Node.js and run "
+              "'npm install --no-save happy-dom@20.10.6' before building, "
+              "otherwise PPV/NTV extraction will fail in the exe.")
+        return
+    print("Installing happy-dom for the PPV/NTV runners...")
+    subprocess.run([npm, "install", "--no-save", "happy-dom@20.10.6"],
+                   cwd=ROOT_DIR, check=True)
+
+
 def build_easyproxy_exe() -> None:
+    ensure_node_modules()
     print("Building EasyProxy.exe with PyInstaller...")
     subprocess.run(
         [sys.executable, "-m", "PyInstaller", "easyproxy.spec", "--clean", "-y"],
