@@ -27,6 +27,7 @@ from config import (
 )
 import config as _cfg
 from extractors.base import BaseExtractor, ExtractorError
+from extractors import dlstreams_embed
 
 logger = logging.getLogger(__name__)
 
@@ -1095,6 +1096,33 @@ class DLStreamsExtractor(BaseExtractor):
                                 logger.debug("DLStreams: following nested iframe %s", nested_src)
                                 iframe_src = nested_src
                                 iframe_html = await resp.text()
+                # Ported MIT embed families (extractors/dlstreams_embed.py).
+                # Checked before the legacy patterns; None falls through to
+                # them, so the premium/Turnstile path is untouched.
+                detected = dlstreams_embed.extract_playable(iframe_html, iframe_src)
+                if not detected and (
+                    dlstreams_embed.is_blogger_player_page(iframe_src)
+                    or dlstreams_embed.is_wikisport_page(iframe_src)
+                ):
+                    # Hop pages (blogspot player / wikisport) build the next
+                    # document in their script instead of an iframe.
+                    async def _fetch_hop(hop_url: str, referer: str) -> str:
+                        try:
+                            async with session.get(
+                                hop_url,
+                                headers={**headers, "Referer": referer},
+                                timeout=_timeout(self.CANDIDATE_TIMEOUT_SECONDS),
+                            ) as hop_resp:
+                                return await hop_resp.text() if hop_resp.status == 200 else ""
+                        except Exception as hop_err:
+                            logger.debug("DLStreams: hop %s failed: %s", hop_url, hop_err)
+                            return ""
+
+                    iframe_html, iframe_src = await dlstreams_embed.resolve_chain(
+                        iframe_html, iframe_src, _fetch_hop
+                    )
+                    detected = dlstreams_embed.extract_playable(iframe_html, iframe_src)
+
                 # JSON-escaped URLs ("https:\/\/...") in inline player configs.
                 iframe_html = iframe_html.replace("\\/", "/")
 
@@ -1104,11 +1132,11 @@ class DLStreamsExtractor(BaseExtractor):
                 #  2) classic: source:window.atob('...') / atob('...')
                 #  3) direct: source: 'https://...m3u8'
                 #  4) fallback: any https://...m3u8 URL in page
-                stream_url = None
+                stream_url = detected["url"] if detected else None
                 solver_ua = None
 
                 m_cfg = re.search(r"window\._econfig\s*=\s*['\"]([^'\"]{100,})['\"]", iframe_html)
-                if m_cfg:
+                if m_cfg and not stream_url:
                     stream_url = _decode_barecrop_econfig(m_cfg.group(1))
                     if stream_url:
                         logger.debug("DLStreams: decoded _econfig stream URL: %s", stream_url)
@@ -1172,6 +1200,9 @@ class DLStreamsExtractor(BaseExtractor):
                     "Sec-Fetch-Mode": "cors",
                     "Sec-Fetch-Site": "cross-site",
                 }
+                if detected:
+                    # Family transport hints (full embed URL as Referer).
+                    playback_headers.update(detected["headers"])
                 
                 # Return the first stream that is actually playable from here.
                 # A dead Player 1 URL must not hide a working Player 2.
