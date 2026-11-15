@@ -1,7 +1,8 @@
 #!/usr/bin/env node
 // ppv_runner.mjs - ppv.st resolver (API -> embed /fetch -> wasm decrypt).
 //
-// Usage: node scripts/ppv_runner.mjs <event_url>   (e.g. https://ppv.st/live/nfl-network)
+// Usage: node scripts/ppv_runner.mjs <event_url|embed_url>   (e.g. https://ppv.st/live/nfl-network,
+//        https://taifood-blog.asia/embed/nfl/2026-11-15/kc-atl or the bare path nfl/2026-11-15/kc-atl)
 // Outputs JSON to stdout: {"m3u8": "...", "embedOrigin": "...", "embedPath": "...", "slug": "...", "status": 200}
 //
 // Requires Node >= 18 (WebAssembly + native fetch) and happy-dom in node_modules.
@@ -25,6 +26,10 @@ const TIMEOUT_MS = 30000;
 
 // API domain failover chain - tried in order until one answers.
 const API_DOMAINS = ['ppv.tj', 'ppvs.pk', 'ppv.rw', 'ppv.ms', 'ppv.bi', 'ppv.ug'];
+
+// ntv.cx (same provider) already hands out the final embed URL, so its API
+// response can be passed straight in and the ppv API lookup is skipped.
+const EMBED_HOST = 'taifood-blog.asia';
 
 const WASM_DIR = path.join(path.dirname(fileURLToPath(import.meta.url)), 'ppv');
 const WASM_JS = pathToFileURL(path.join(WASM_DIR, 'gasm.js')).href;
@@ -95,6 +100,25 @@ function embedFromSource(source) {
   const prefix = '/embed/';
   if (!u.pathname.startsWith(prefix)) throw new Error(`unexpected embed url ${raw}`);
   return { origin: u.origin, path: u.pathname.slice(prefix.length) };
+}
+
+// ntv.cx passes the embed URL/path directly: no ppv API lookup needed.
+function embedFromInput(eventUrl) {
+  const raw = String(eventUrl || '').trim();
+  if (!raw) return null;
+  if (!/^https?:\/\//i.test(raw)) {
+    // Bare embed path, e.g. "nfl/2026-11-15/kc-atl".
+    const bare = raw.replace(/^\/+/, '');
+    if (!bare || bare.startsWith('live/')) return null;
+    return { origin: `https://${EMBED_HOST}`, path: bare.replace(/^embed\//, '') };
+  }
+  try {
+    const u = new URL(raw);
+    if (u.hostname.endsWith(EMBED_HOST) && u.pathname.startsWith('/embed/')) return embedFromSource(raw);
+  } catch {
+    // not an embed url - fall back to the ppv API below
+  }
+  return null;
 }
 
 async function fetchMeta(uri) {
@@ -350,7 +374,7 @@ setTimeout(() => fail(new Error(`timeout after ${TIMEOUT_MS}ms`)), TIMEOUT_MS).u
   const uri = parseInput(eventUrl);
   L('uri', uri);
 
-  const embed = await fetchMeta(uri);
+  const embed = embedFromInput(eventUrl) || (await fetchMeta(uri));
   L('embed', embed.origin, embed.path);
 
   const { island, body } = await postEmbedFetch(embed);

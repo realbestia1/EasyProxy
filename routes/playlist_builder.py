@@ -137,6 +137,12 @@ class PlaylistBuilder:
                 elif re.search(r'ppv(?:s)?\.(?:st|tj|pk|rw|ms|bi|ug)(?:[/?#]|$)', logical_line) and '/extractor/' not in logical_line:
                     encoded_url = urllib.parse.quote(logical_line, safe='')
                     processed_url_content = f"{base_url}/extractor/video.m3u8?host=ppv&redirect_stream=true&d={encoded_url}"
+                elif re.search(r'ntvs?\.cx(?:[/?#]|$)', logical_line) and '/extractor/' not in logical_line:
+                    encoded_url = urllib.parse.quote(logical_line, safe='')
+                    processed_url_content = f"{base_url}/extractor/video.m3u8?host=ntv&redirect_stream=true&d={encoded_url}"
+                elif re.search(r'(?:streamcorner\.(?:foo|cloud|fun)|strmcrnr\.st)(?:[/?#]|$)', logical_line) and '/extractor/' not in logical_line:
+                    encoded_url = urllib.parse.quote(logical_line, safe='')
+                    processed_url_content = f"{base_url}/extractor/video.m3u8?host=streamcorner&redirect_stream=true&d={encoded_url}"
                 elif 'fctv33' in logical_line or 'mpgreatestclgczbmiddle' in logical_line:
                     encoded_url = urllib.parse.quote(logical_line, safe='')
                     processed_url_content = f"{base_url}/extractor/video.m3u8?host=fctv33&redirect_stream=true&d={encoded_url}"

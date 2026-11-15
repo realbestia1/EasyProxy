@@ -9,12 +9,18 @@ with ``QUALITY``, ``SOURCE_SUFFIX``, slug and the per-quality ``_0x`` token map 
 import json
 import logging
 import re
+import time
 from typing import Any
 from urllib.parse import urlsplit
 
 from extractors.base import BaseExtractor, ExtractorError
 
 logger = logging.getLogger(__name__)
+
+RESULT_CACHE_TTL = 60  # i reload del manifest non devono rieffettuare l'estrazione
+_CACHE_MAX = 50
+# Cache a livello di modulo: proxy_extractor crea/ritira un estrattore per richiesta.
+_RESULT_CACHE: dict[str, tuple[float, dict]] = {}
 
 
 class StreamFreeExtractor(BaseExtractor):
@@ -85,6 +91,15 @@ class StreamFreeExtractor(BaseExtractor):
 
     async def extract(self, url: str, **kwargs) -> dict[str, Any]:
         self._apply_routing_kwargs(url, kwargs)
+        route_key = f"{self.bypass_warp_active}:{self._force_direct}:{self._forced_proxy}"
+        cache_key = f"{url.strip()}:{route_key}"
+        force = bool(kwargs.get("force_refresh")) or str(kwargs.get("force", "")).lower() == "true"
+
+        cached = None if force else _RESULT_CACHE.get(cache_key)
+        if cached and cached[0] > time.time():
+            logger.debug("StreamFree: cache hit for %s", cache_key)
+            return dict(cached[1])
+        logger.debug("StreamFree: cache miss for %s", cache_key)
 
         embed_url, player_url = await self._resolve_embed(url)
         parts = urlsplit(embed_url)
@@ -128,8 +143,12 @@ class StreamFreeExtractor(BaseExtractor):
             raise ExtractorError(f"StreamFree: signed playlist not a manifest (HTTP {check.status})")
 
         logger.info("StreamFree: %s -> %s", slug, dest.split("?")[0])
-        return self._result(dest, {
+        result = self._result(dest, {
             "User-Agent": self.base_headers["User-Agent"],
             "Referer": embed_url,
             "Origin": origin,
         })
+        _RESULT_CACHE[cache_key] = (time.time() + RESULT_CACHE_TTL, dict(result))
+        if len(_RESULT_CACHE) > _CACHE_MAX:
+            _RESULT_CACHE.pop(min(_RESULT_CACHE, key=lambda k: _RESULT_CACHE[k][0]), None)
+        return result

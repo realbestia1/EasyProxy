@@ -34,6 +34,8 @@ import config_store
 logger = logging.getLogger(__name__)
 
 _SOLVE_LOCK = asyncio.Lock()
+# One Chromium at a time across every CDP resolver: they share the profile.
+BROWSER_LOCK = _SOLVE_LOCK
 _DEFAULT_UA_VERSION = "124.0.0.0"
 _XVFB_LOCK = asyncio.Lock()
 _XVFB_PROCESS: subprocess.Popen | None = None
@@ -328,12 +330,17 @@ async def _solve(
         return None
 
 
-async def _solve_once(
-    page_url: str, proxy: str | None, timeout: float, mode: str = "stream"
-) -> dict | None:
+async def launch_browser(
+    label: str = "Turnstile solver", proxy: str | None = None
+) -> tuple[subprocess.Popen, dict, str] | None:
+    """Start Chromium on the persistent profile: ``(process, devtools, UA)``.
+
+    The other CDP resolvers reuse this so the profile, the RAM guard and the
+    headless fallback behave the same everywhere.
+    """
     chrome = find_chrome()
     if not chrome:
-        logger.warning("Turnstile solver: Chrome non trovato (TURNSTILE_CHROME_PATH)")
+        logger.warning("%s: Chrome non trovato (TURNSTILE_CHROME_PATH)", label)
         return None
 
     try:
@@ -341,18 +348,19 @@ async def _solve_once(
         available_mb = psutil.virtual_memory().available / (1024 ** 2)
         if available_mb < _MIN_AVAILABLE_MB:
             logger.warning(
-                "Turnstile solver: only %.0f MB RAM available (need %.0f MB), skipping browser solve",
+                "%s: only %.0f MB RAM available (need %.0f MB), skipping browser solve",
+                label,
                 available_mb,
                 _MIN_AVAILABLE_MB,
             )
             return None
     except Exception as exc:
-        logger.debug("Turnstile solver: RAM check failed: %r", exc)
+        logger.debug("%s: RAM check failed: %r", label, exc)
 
     if proxy and "@" in proxy:
         # Chromium cannot authenticate to a proxy from the command line.
         logger.warning(
-            "Turnstile solver: authenticated proxy not supported by Chromium, skipping"
+            "%s: authenticated proxy not supported by Chromium, skipping", label
         )
         return None
 
@@ -399,7 +407,7 @@ async def _solve_once(
         # The browser must leave on the same route as the extraction.
         cmd.append(f"--proxy-server={proxy.replace('socks5h://', 'socks5://')}")
     cmd.append("about:blank")
-    logger.debug("Turnstile solver: launching (headless=%s): %s", headless, " ".join(cmd[:6]))
+    logger.debug("%s: launching (headless=%s): %s", label, headless, " ".join(cmd[:6]))
 
     proc = subprocess.Popen(
         cmd,
@@ -411,16 +419,32 @@ async def _solve_once(
     try:
         port = await _wait_devtools_port(profile)
         if not port:
-            logger.warning("Turnstile solver: DevToolsActivePort not written")
-            return None
+            logger.warning("%s: DevToolsActivePort not written", label)
+            raise RuntimeError("DevToolsActivePort not written")
 
         version = await asyncio.to_thread(_read_devtools_version, port)
-        logger.info(
-            "Turnstile solver: browser %s, UA %s",
-            version.get("Browser"),
-            ua,
-        )
+    except Exception:
+        try:
+            proc.terminate()
+            proc.wait(timeout=10)
+        except Exception:
+            try:
+                proc.kill()
+            except Exception:
+                pass
+        return None
+    logger.info("%s: browser %s, UA %s", label, version.get("Browser"), ua)
+    return proc, version, ua
 
+
+async def _solve_once(
+    page_url: str, proxy: str | None, timeout: float, mode: str = "stream"
+) -> dict | None:
+    launched = await launch_browser(proxy=proxy)
+    if not launched:
+        return None
+    proc, version, ua = launched
+    try:
         async with aiohttp.ClientSession() as session:
             async with session.ws_connect(
                 version["webSocketDebuggerUrl"], max_msg_size=0

@@ -1,5 +1,6 @@
 aiohttp
 aiohttp-socks
+brotli
 python-dotenv
 beautifulsoup4
 lxml

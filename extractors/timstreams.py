@@ -8,9 +8,11 @@ and hand the signed HLS URL to ``Hls.loadSource()``; a Go anti-sandbox probe in
 (no browser) and returns the manifest URL, verified from the same process.
 """
 
+import asyncio
 import logging
 import os
 import re
+import time
 from typing import Any
 from urllib.parse import urlparse
 
@@ -20,10 +22,28 @@ from services.socks_bridge import get_http_bridge_for_proxy
 
 logger = logging.getLogger(__name__)
 
+RESULT_CACHE_TTL = 60  # i reload del manifest non devono rieffettuare l'estrazione
+_CACHE_MAX = 50
+# Cache a livello di modulo: proxy_extractor crea/ritira un estrattore per richiesta.
+_RESULT_CACHE: dict[str, tuple[float, dict]] = {}
+
 _RUNNER = os.path.join(
     os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
     "scripts",
     "timstreams_runner.mjs",
+)
+
+_RUNNER_ATTEMPTS = 3
+_RUNNER_RETRY_DELAY = 1.5
+# The player host is flaky (ECONNRESET / rate-limit / unreadable manifest): those
+# are worth a retry, a bad slug or a 404 is not.
+_RETRYABLE = (
+    "page fetch failed",
+    "timeout",
+    "manifest not readable",
+    "econnreset",
+    "connect timeout",
+    "fetch failed",
 )
 
 
@@ -58,7 +78,7 @@ class TimStreamsExtractor(BaseExtractor):
             "Accept": "application/json",
             "Referer": url,
         }
-        resp = await self._make_request(api, headers=headers, retries=1)
+        resp = await self._make_request(api, headers=headers, retries=3)
         payload = resp.json if resp.status == 200 else {}
         streams = ((payload.get("item") or {}).get("streams") or []) if isinstance(payload, dict) else []
         player_url = str((streams[0] or {}).get("url") or "").strip() if streams else ""
@@ -67,8 +87,31 @@ class TimStreamsExtractor(BaseExtractor):
         logger.info("TimStreams: %s -> %s", slug, player_url[:80])
         return player_url
 
+    async def _run_player(self, player_url: str, env: dict) -> dict:
+        """Run the player runner, retrying the transient player-host failures."""
+        for attempt in range(1, _RUNNER_ATTEMPTS + 1):
+            try:
+                return await run_node_runner(_RUNNER, [player_url], env, timeout=45, label="TimStreams")
+            except ExtractorError as exc:
+                if attempt == _RUNNER_ATTEMPTS or not any(m in str(exc).lower() for m in _RETRYABLE):
+                    raise
+                logger.warning("TimStreams: attempt %d/%d failed (%s), retrying",
+                               attempt, _RUNNER_ATTEMPTS, exc)
+                await asyncio.sleep(_RUNNER_RETRY_DELAY)
+        raise ExtractorError("TimStreams: runner attempts exhausted")
+
     async def extract(self, url: str, **kwargs) -> dict[str, Any]:
         self._apply_routing_kwargs(url, kwargs)
+        route_key = f"{self.bypass_warp_active}:{self._force_direct}:{self._forced_proxy}"
+        cache_key = f"{url.strip()}:{route_key}"
+        force = bool(kwargs.get("force_refresh")) or str(kwargs.get("force", "")).lower() == "true"
+
+        cached = None if force else _RESULT_CACHE.get(cache_key)
+        if cached and cached[0] > time.time():
+            logger.debug("TimStreams: cache hit for %s", cache_key)
+            return dict(cached[1])
+        logger.debug("TimStreams: cache miss for %s", cache_key)
+
         player_url = await self._resolve_player_url(url)
 
         proxy = await self._resolve_proxy(player_url)
@@ -84,7 +127,7 @@ class TimStreamsExtractor(BaseExtractor):
         if kwargs.get("background_refresh") or kwargs.get("force_refresh"):
             env["TIMSTREAMS_DEBUG"] = "1"
 
-        data = await run_node_runner(_RUNNER, [player_url], env, timeout=30, label="TimStreams")
+        data = await self._run_player(player_url, env)
         m3u8 = str(data.get("m3u8") or "").strip()
         if not m3u8:
             raise ExtractorError("TimStreams: video not found (no m3u8 captured)")
@@ -97,4 +140,8 @@ class TimStreamsExtractor(BaseExtractor):
         }
 
         logger.info("TimStreams: extracted %s", m3u8[:100])
-        return self._result(m3u8, headers)
+        result = self._result(m3u8, headers)
+        _RESULT_CACHE[cache_key] = (time.time() + RESULT_CACHE_TTL, dict(result))
+        if len(_RESULT_CACHE) > _CACHE_MAX:
+            _RESULT_CACHE.pop(min(_RESULT_CACHE, key=lambda k: _RESULT_CACHE[k][0]), None)
+        return result

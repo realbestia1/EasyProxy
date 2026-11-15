@@ -61,6 +61,8 @@ _MODULES = (
     ("extractors.timstreams", ("TimStreamsExtractor",)),
     ("extractors.streamfree", ("StreamFreeExtractor",)),
     ("extractors.ppv", ("PPVExtractor",)),
+    ("extractors.ntv", ("NTVExtractor",)),
+    ("extractors.streamcorner", ("StreamcornerExtractor",)),
 )
 
 # Stand-ins used when extractors.ads is unavailable, so the ADS pattern users

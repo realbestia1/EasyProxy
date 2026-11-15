@@ -287,7 +287,7 @@ async function verifyAndFinish(url) {
 }
 
 (async () => {
-  // Overall ceiling: never outlive the Python-side 30s.
+  // Overall ceiling: never outlive the Python-side 45s.
   setTimeout(() => emit({ error: 'timeout (no m3u8)' }, 1), 25000).unref();
 
   // /plum.js is wasm_exec + plum_boot.js: the page needs it before its inline
@@ -302,12 +302,20 @@ async function verifyAndFinish(url) {
   }
 
   // The player page decides everything: on failure say which host and route.
+  // The host drops connections under load (ECONNRESET), so one network retry.
   let pageRes;
-  try {
-    pageRes = await routedFetch(INPUT, { headers: { 'User-Agent': UA, redirect: 'follow' } });
-  } catch (error) {
-    emit({ error: `page fetch failed for ${u.host} (${proxyDispatcher ? 'proxy' : 'direct'}): ${describeError(error)}` }, 1);
-    return;
+  for (let attempt = 1; ; attempt += 1) {
+    try {
+      pageRes = await routedFetch(INPUT, { headers: { 'User-Agent': UA, redirect: 'follow' } });
+      break;
+    } catch (error) {
+      L('PAGE-ERR', attempt, describeError(error));
+      if (attempt >= 2) {
+        emit({ error: `page fetch failed for ${u.host}${u.pathname} (${proxyDispatcher ? 'proxy' : 'direct'}): ${describeError(error)}` }, 1);
+        return;
+      }
+      await sleep(1000);
+    }
   }
   const html = await pageRes.text();
   finalUrl = pageRes.url || INPUT;

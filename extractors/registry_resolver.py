@@ -321,6 +321,16 @@ _ENTRIES = (
            match=_any_of(*[_host_endswith(domain) for domain in
                            ("ppv.st", "ppv.tj", "ppvs.pk", "ppv.rw", "ppv.ms", "ppv.bi", "ppv.ug")]),
            url_proxy="url", key_name="ppv"),
+    # Same provider as ppv.st, served through the same runner and bridge.
+    _Entry("ntv", NTVExtractor, hosts=("ntv", "ntvs"),
+           match=_any_of(_host_endswith("ntv.cx"), _host_endswith("ntvs.cx")),
+           url_proxy="url", key_name="ntv"),
+    _Entry("streamcorner", StreamcornerExtractor, hosts=("streamcorner", "strmcrnr"),
+           match=_any_of(_host_endswith("streamcorner.foo"),
+                         _host_endswith("streamcorner.cloud"),
+                         _host_endswith("streamcorner.fun"),
+                         _host_endswith("strmcrnr.st")),
+           url_proxy="url", key_name="streamcorner"),
 )
 
 _BY_NAME = {entry.name: entry for entry in _ENTRIES}
