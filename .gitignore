@@ -10,9 +10,13 @@ dlstreams_activity.txt
 /scripts/*
 # keep scripts required at runtime in the image
 !/scripts/embedst_runner.mjs
+!/scripts/timstreams_runner.mjs
 !/scripts/vidfast_runner.mjs
 !/scripts/wireproxy_ctl.sh
 !/scripts/cinejoy_runner.mjs
+!/scripts/ppv_runner.mjs
+!/scripts/ppv/
+!/scripts/ppv/**
 !/scripts/pow_solver.js
 !/scripts/build_windows_dist.py
 !/scripts/get_version.py

@@ -309,8 +309,18 @@ _ENTRIES = (
     _Entry("tvizle", TVizleExtractor, hosts=("tvizle",),
            match=_host_endswith("tvizle.tr"),
            url_proxy="url", key_name="tvizle"),
+    _Entry("timstreams", TimStreamsExtractor, hosts=("timstreams", "tim-streams"),
+           match=_sub("tim-streams.com", "ehgembxe.cfd", lower=True),
+           url_proxy="url", key_name="timstreams"),
     _Entry("livetv", LiveTVExtractor, hosts=("livetv",), match=_sub("livetv", lower=True),
            url_proxy="livetv.sx"),
+    _Entry("streamfree", StreamFreeExtractor, hosts=("streamfree", "strmfree"),
+           match=_any_of(_sub("streamfree.top/player/", lower=True), _sub("strmfree.st/embed/", lower=True)),
+           url_proxy="url", key_name="streamfree"),
+    _Entry("ppv", PPVExtractor, hosts=("ppv",),
+           match=_any_of(*[_host_endswith(domain) for domain in
+                           ("ppv.st", "ppv.tj", "ppvs.pk", "ppv.rw", "ppv.ms", "ppv.bi", "ppv.ug")]),
+           url_proxy="url", key_name="ppv"),
 )
 
 _BY_NAME = {entry.name: entry for entry in _ENTRIES}

@@ -128,6 +128,15 @@ class PlaylistBuilder:
                 elif 'tvizle.tr' in logical_line and '/extractor/' not in logical_line:
                     encoded_url = urllib.parse.quote(logical_line, safe='')
                     processed_url_content = f"{base_url}/extractor/video.m3u8?host=tvizle&redirect_stream=true&d={encoded_url}"
+                elif 'tim-streams.com' in logical_line and '/extractor/' not in logical_line:
+                    encoded_url = urllib.parse.quote(logical_line, safe='')
+                    processed_url_content = f"{base_url}/extractor/video.m3u8?host=timstreams&redirect_stream=true&d={encoded_url}"
+                elif 'streamfree.top' in logical_line and '/extractor/' not in logical_line:
+                    encoded_url = urllib.parse.quote(logical_line, safe='')
+                    processed_url_content = f"{base_url}/extractor/video.m3u8?host=streamfree&redirect_stream=true&d={encoded_url}"
+                elif re.search(r'ppv(?:s)?\.(?:st|tj|pk|rw|ms|bi|ug)(?:[/?#]|$)', logical_line) and '/extractor/' not in logical_line:
+                    encoded_url = urllib.parse.quote(logical_line, safe='')
+                    processed_url_content = f"{base_url}/extractor/video.m3u8?host=ppv&redirect_stream=true&d={encoded_url}"
                 elif 'fctv33' in logical_line or 'mpgreatestclgczbmiddle' in logical_line:
                     encoded_url = urllib.parse.quote(logical_line, safe='')
                     processed_url_content = f"{base_url}/extractor/video.m3u8?host=fctv33&redirect_stream=true&d={encoded_url}"

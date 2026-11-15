@@ -53,6 +53,10 @@ if Path('data/geoip').is_file():
     datas.append(('data/geoip', 'data'))
 if Path('data/geoip6').is_file():
     datas.append(('data/geoip6', 'data'))
+# Node deps for scripts/*.mjs runners (happy-dom, used by ppv_runner.mjs).
+# Lands in _MEIPASS/scripts/node_modules, where the runner resolves it from.
+if Path('node_modules').is_dir():
+    datas.append(('node_modules', 'scripts/node_modules'))
 
 # Collect curl_cffi and pywidevine data files if present
 datas += collect_data_files('curl_cffi')

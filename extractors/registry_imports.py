@@ -58,6 +58,9 @@ _MODULES = (
     ("extractors.matchora", ("MatchoraExtractor",)),
     ("extractors.htsport", ("HTSportExtractor",)),
     ("extractors.tvizle", ("TVizleExtractor",)),
+    ("extractors.timstreams", ("TimStreamsExtractor",)),
+    ("extractors.streamfree", ("StreamFreeExtractor",)),
+    ("extractors.ppv", ("PPVExtractor",)),
 )
 
 # Stand-ins used when extractors.ads is unavailable, so the ADS pattern users

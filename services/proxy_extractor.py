@@ -148,6 +148,9 @@ class HLSProxyExtractorHandlerMixin:
                         "scorezone",
                         "matchora",
                         "htsport",
+                        "timstreams",
+                        "streamfree",
+                        "ppv",
                     ],
                     "examples": [
                         f"{get_public_base_url(request)}/extractor/video?d=https://vavoo.to/channel/123",
@@ -159,6 +162,9 @@ class HLSProxyExtractorHandlerMixin:
                         f"{get_public_base_url(request)}/extractor/video.m3u8?host=htsport&d=https://htsport.info/calciohd.htm",
                         f"{get_public_base_url(request)}/extractor/video.m3u8?host=matchora&d=https://matchora.pro/embed/channel/692391",
                         f"{get_public_base_url(request)}/extractor/video?host=tvizle&d=https://tvizle.tr/izle/trt-1",
+                        f"{get_public_base_url(request)}/extractor/video.m3u8?host=timstreams&d=https://tim-streams.com/channel/abc",
+                        f"{get_public_base_url(request)}/extractor/video?host=streamfree&d=https://streamfree.top/player/football/new-england-patriots-vs-detroit-lions",
+                        f"{get_public_base_url(request)}/extractor/video?host=ppv&d=https://ppv.st/live/nfl-network",
                         f"{get_public_base_url(request)}/extractor/video?d=BASE64_STRING",
                     ],
                 }

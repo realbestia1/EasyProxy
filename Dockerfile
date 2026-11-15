@@ -17,6 +17,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     tor-geoipdb \
     tar \
     nodejs \
+    npm \
     node-undici \
     netcat-openbsd \
     procps \
@@ -83,6 +84,8 @@ RUN sed -i 's/\r$//' entrypoint.sh scripts/wireproxy_ctl.sh
 # Node's ESM resolver does not search Debian's global module directory for a
 # bare import. Expose the apt-installed undici package from the app module
 # tree so the VidFast runner can use HTTP ProxyAgent when WARP is selected.
+RUN npm install --no-cache --no-save --prefix /app happy-dom@20.10.6
+
 RUN mkdir -p /app/node_modules \
     && ln -s /usr/share/nodejs/undici /app/node_modules/undici
 
