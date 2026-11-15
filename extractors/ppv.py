@@ -12,6 +12,7 @@ from typing import Any
 
 from extractors.base import BaseExtractor, ExtractorError
 from extractors.node_runner import run_node_runner
+from services.ppv_bridge import bridge_manifest_url, ensure_bridge
 from services.socks_bridge import get_http_bridge_for_proxy
 
 logger = logging.getLogger(__name__)
@@ -57,11 +58,21 @@ class PPVExtractor(BaseExtractor):
             raise ExtractorError("PPV: resolver returned no playable URL")
 
         # The CDN playlist/segments want the embed page as referer.
+        referer = f"{embed_origin}/embed/{embed_path}"
         headers = {
             "User-Agent": self.base_headers["User-Agent"],
-            "Referer": f"{embed_origin}/embed/{embed_path}",
+            "Referer": referer,
             "Origin": embed_origin,
         }
 
+        # The CDN 403s every non-Node TLS stack, so playback goes through the
+        # local Node bridge that rewrites playlists and serves the segments.
+        try:
+            base = await ensure_bridge()
+            destination = bridge_manifest_url(base, m3u8, referer)
+        except Exception as exc:
+            logger.warning("PPV: bridge unavailable (%s), returning CDN url", exc)
+            destination = m3u8
+
         logger.info("PPV extracted: %s", m3u8[:90])
-        return self._result(m3u8, headers)
+        return self._result(destination, headers)

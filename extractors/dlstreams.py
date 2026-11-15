@@ -1353,7 +1353,8 @@ class DLStreamsExtractor(BaseExtractor):
                     exc_info=True,
                 )
 
-            raise ExtractorError("Could not retrieve manifest via extraction.") from direct_error
+            detail = f": {str(direct_error)[:200]}" if direct_error else ""
+            raise ExtractorError(f"Could not retrieve manifest via extraction{detail}") from direct_error
 
         except asyncio.CancelledError:
             raise

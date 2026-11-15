@@ -301,7 +301,14 @@ async function verifyAndFinish(url) {
     L('PLUM-ERR', describeError(error));
   }
 
-  const pageRes = await routedFetch(INPUT, { headers: { 'User-Agent': UA, redirect: 'follow' } });
+  // The player page decides everything: on failure say which host and route.
+  let pageRes;
+  try {
+    pageRes = await routedFetch(INPUT, { headers: { 'User-Agent': UA, redirect: 'follow' } });
+  } catch (error) {
+    emit({ error: `page fetch failed for ${u.host} (${proxyDispatcher ? 'proxy' : 'direct'}): ${describeError(error)}` }, 1);
+    return;
+  }
   const html = await pageRes.text();
   finalUrl = pageRes.url || INPUT;
   const base = new URL(finalUrl);

@@ -39,10 +39,11 @@ let proxyDispatcher = null;
 // Node's built-in fetch rejects dispatchers built by a differently-versioned
 // undici, so when a proxy dispatcher is active fetch must come from that module.
 let realFetch = globalThis.fetch.bind(globalThis);
-if (process.env.PPV_PROXY && /^https?:\/\//i.test(process.env.PPV_PROXY)) {
+const PROXY_URL = process.env.PPV_PROXY || process.env.EMBEDST_PROXY;
+if (PROXY_URL && /^https?:\/\//i.test(PROXY_URL)) {
   try {
     const undici = await import('undici');
-    proxyDispatcher = new undici.ProxyAgent(process.env.PPV_PROXY);
+    proxyDispatcher = new undici.ProxyAgent(PROXY_URL);
     realFetch = undici.fetch.bind(undici);
   } catch (error) {
     console.error('[ppv] HTTP proxy unavailable, continuing direct:', error && error.message);
