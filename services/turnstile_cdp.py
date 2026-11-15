@@ -151,14 +151,39 @@ def find_chrome() -> str | None:
             candidates.append(
                 str(base / "flaresolverr-linux" / "_internal" / "chrome" / name)
             )
+    if os.name == "nt":
+        # Per-user install is the default for accounts without admin rights.
+        local_app = os.environ.get("LOCALAPPDATA", "")
+        if local_app:
+            for rel in (
+                r"Google\Chrome\Application\chrome.exe",
+                r"Chromium\Application\chrome.exe",
+                r"Microsoft\Edge\Application\msedge.exe",
+                r"BraveSoftware\Brave-Browser\Application\brave.exe",
+            ):
+                candidates.append(os.path.join(local_app, rel))
     candidates.extend(
         (
             r"C:\Program Files\Google\Chrome\Application\chrome.exe",
             r"C:\Program Files (x86)\Google\Chrome\Application\chrome.exe",
             r"C:\Program Files (x86)\Microsoft\Edge\Application\msedge.exe",
             r"C:\Program Files\Microsoft\Edge\Application\msedge.exe",
+            r"C:\Program Files\BraveSoftware\Brave-Browser\Application\brave.exe",
+            r"C:\Program Files\Chromium\Application\chrome.exe",
         )
     )
+    if os.name != "nt":
+        # PATH can be minimal in containers: probe the usual install paths too.
+        candidates.extend(
+            (
+                "/usr/bin/chromium",
+                "/usr/bin/chromium-browser",
+                "/usr/bin/google-chrome",
+                "/usr/bin/google-chrome-stable",
+                "/snap/bin/chromium",
+                "/opt/google/chrome/chrome",
+            )
+        )
     candidates.extend(
         str(path)
         for name in ("chrome", "chromium", "chromium-browser", "google-chrome", "google-chrome-stable", "msedge", "microsoft-edge")
@@ -175,6 +200,7 @@ def find_chrome() -> str | None:
         if os.name != "nt" and not os.access(candidate, os.X_OK):
             continue
         return candidate
+    logger.warning("Chrome not found. Tried: %s", ", ".join(candidates[:10]))
     return None
 
 
