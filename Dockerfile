@@ -2,6 +2,8 @@
 # Optimized EasyProxy runtime
 # Compatible with AMD64 and ARM64 (Oracle VPS)
 
+FROM node:22-bookworm-slim AS nodebin
+
 FROM python:3.12-slim-bookworm
 
 # 1. Environment Settings
@@ -31,6 +33,13 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     dumb-init \
     ca-certificates \
     && rm -rf /var/lib/apt/lists/*
+
+# Debian bookworm ships Node 18; happy-dom requires >= 20 and the runners
+# rely on modern ESM behaviour. Use the official Node 22 binary.
+COPY --from=nodebin /usr/local/bin/node /usr/local/bin/node
+COPY --from=nodebin /usr/local/lib/node_modules /usr/local/lib/node_modules
+RUN ln -sf /usr/local/lib/node_modules/npm/bin/npm-cli.js /usr/local/bin/npm \
+ && node --version
 
 # FlareSolverr is part of this image, but EasyProxy starts it only on-demand
 # when VixSrc returns a Cloudflare challenge.

@@ -31,6 +31,9 @@ PAGE_CACHE_TTL = 180  # 3 minuti di cache
 class HTSportExtractor(BaseExtractor):
     """Extractor per pagine ed eventi di htsport.info."""
 
+    # DLStreams delegation can take up to 120s; give the whole chain headroom.
+    REQUEST_TIMEOUT_TOTAL = 130
+
     def __init__(self, request_headers: Optional[dict] = None, proxies: Optional[list] = None, bypass_warp: bool = False):
         super().__init__(request_headers or {}, proxies, extractor_name="htsport", bypass_warp=bypass_warp)
         self.base_headers = {

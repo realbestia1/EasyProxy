@@ -15,7 +15,11 @@
 //
 // Requires Node >= 18 (WebAssembly + native fetch).
 
+import { webcrypto } from 'node:crypto';
 import vm from 'node:vm';
+
+// Node 18 has no global WebCrypto: fall back to node:crypto's implementation.
+const nativeCrypto = globalThis.crypto ?? webcrypto;
 
 const DEBUG = process.env.TIMSTREAMS_DEBUG === '1' || process.argv.includes('--debug');
 function L(...a) { if (DEBUG) console.error('[timstreams]', ...a); }
@@ -200,8 +204,8 @@ const win = {
 };
 // crypto.subtle decrypt is how the payload is opened; log the algorithm.
 win.crypto = {
-  getRandomValues: (a) => globalThis.crypto.getRandomValues(a),
-  subtle: new Proxy(globalThis.crypto.subtle, {
+  getRandomValues: (a) => nativeCrypto.getRandomValues(a),
+  subtle: new Proxy(nativeCrypto.subtle, {
     get(target, prop) {
       const value = target[prop];
       if (typeof value === 'function' && ['decrypt', 'encrypt', 'importKey', 'deriveKey', 'digest'].includes(prop)) {
