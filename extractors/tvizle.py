@@ -52,12 +52,16 @@ class TVizleExtractor(BaseExtractor):
     async def extract(self, url: str, **kwargs) -> dict:
         self._apply_routing_kwargs(url, kwargs)
         parsed = urlparse(url)
+        origin = f"{parsed.scheme}://{parsed.netloc}"
+        user_agent = self._request_header("User-Agent", self.base_headers["User-Agent"])
+        if parsed.path.rstrip("/").endswith("/api/yayin"):
+            # Already the site's playlist endpoint: the proxy re-resolves extractors
+            # for the destination URL, so return it unchanged instead of re-parsing.
+            return self._result(url, {"User-Agent": user_agent, "Referer": f"{origin}/", "Accept": "*/*"})
         match = self.SLUG_RE.search(parsed.path)
         if not match:
             raise ExtractorError("TVizle: channel slug not found in URL")
         slug = match.group(1)
-        origin = f"{parsed.scheme}://{parsed.netloc}"
-        user_agent = self._request_header("User-Agent", self.base_headers["User-Agent"])
 
         page_headers = {
             "User-Agent": user_agent,

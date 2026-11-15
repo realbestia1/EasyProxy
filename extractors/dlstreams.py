@@ -343,10 +343,10 @@ def _decode_barecrop_econfig(enc: str) -> str | None:
 class DLStreamsExtractor(BaseExtractor):
     """Extractor for daddy live / dlstreams streams."""
 
-    # Return before the request layer kills the task at 30s: an unresponsive
-    # dlive.sx would otherwise burn 10s per candidate, hit the outer timeout
-    # and turn concurrent requests into 500s.
-    EXTRACT_BUDGET_SECONDS = 20.0
+    # 7 players x slow container network: one candidate can spend ~18s
+    # (6s page + 6s iframe + 6s probe), so 20s was gone after the first player.
+    # 40s covers a couple of candidates and still fits REQUEST_TIMEOUT_TOTAL.
+    EXTRACT_BUDGET_SECONDS = 40.0
     # The Turnstile solver may cold-start Chromium (up to ~60s for two attempts).
     REQUEST_TIMEOUT_TOTAL = 120
     CANDIDATE_TIMEOUT_SECONDS = 6

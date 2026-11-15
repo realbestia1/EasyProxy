@@ -164,8 +164,15 @@ def find_chrome() -> str | None:
         if path
     )
     for candidate in candidates:
-        if candidate and os.path.isfile(candidate):
-            return candidate
+        if not candidate or not os.path.isfile(candidate):
+            continue
+        # A FlareSolverr bundle built on Windows ships chrome.exe; on POSIX it
+        # must never shadow the real browser.
+        if os.name != "nt" and candidate.lower().endswith(".exe"):
+            continue
+        if os.name != "nt" and not os.access(candidate, os.X_OK):
+            continue
+        return candidate
     return None
 
 
