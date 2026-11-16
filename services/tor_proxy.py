@@ -657,6 +657,36 @@ async def _terminate_stale_tor() -> list[int]:
     return victims
 
 
+def _data_dir_locked() -> bool:
+    """True when another Tor instance holds the data-directory lock."""
+    lock_path = os.path.join(TOR_DATA_DIR, "lock")
+    try:
+        fd = os.open(lock_path, os.O_RDWR)
+    except OSError:
+        return False
+    try:
+        if os.name == "nt":
+            import msvcrt
+
+            try:
+                msvcrt.locking(fd, msvcrt.LK_NBLCK, 1)
+            except OSError:
+                return True
+            os.lseek(fd, 0, os.SEEK_SET)
+            msvcrt.locking(fd, msvcrt.LK_UNLCK, 1)
+        else:
+            import fcntl
+
+            try:
+                fcntl.lockf(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            except OSError:
+                return True
+            fcntl.lockf(fd, fcntl.LOCK_UN)
+        return False
+    finally:
+        os.close(fd)
+
+
 async def _start() -> None:
     global _process, _bootstrap_level
     async with _lock:
@@ -673,6 +703,7 @@ async def _start() -> None:
         host, port = _split_bind(get_bind())
         deadline = time.monotonic() + TOR_BOOTSTRAP_TIMEOUT
         ready = False
+        stale_waits = 0
         process = None
         try:
             while time.monotonic() < deadline:
@@ -708,10 +739,24 @@ async def _start() -> None:
                                     "Terminated stale Tor process(es) %s holding the proxy; retrying",
                                     killed,
                                 )
-                            else:
+                            elif await asyncio.to_thread(_data_dir_locked):
+                                stale_waits += 1
                                 logger.warning(
-                                    "Another Tor instance is still shutting down; retrying in 5s"
+                                    "Tor data directory %s is locked by another process; waiting for it to exit",
+                                    TOR_DATA_DIR,
                                 )
+                                wait_until = min(deadline, time.monotonic() + 10)
+                                while time.monotonic() < wait_until and await asyncio.to_thread(_data_dir_locked):
+                                    await asyncio.sleep(1)
+                                if await asyncio.to_thread(_data_dir_locked):
+                                    if stale_waits >= 3:
+                                        raise TorError(
+                                            f"Tor data directory {TOR_DATA_DIR} is locked by another instance "
+                                            "(another EasyProxy process or container sharing the same folder). "
+                                            "Close it and retry."
+                                        )
+                                    await asyncio.sleep(2)
+                            else:
                                 await asyncio.sleep(5)
                             respawn = True
                             break
