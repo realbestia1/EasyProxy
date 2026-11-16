@@ -123,6 +123,29 @@ _READ_ECONFIG = """
 """
 
 
+# Player already live with no gate: no POST /turnstile/ ever arrives, the URL is
+# in the DOM, in the player object or already in the resource timing.
+_READ_STREAM_URL = """
+(() => {
+  try {
+    const v = document.querySelector('video');
+    const cands = [];
+    if (v) { cands.push(v.currentSrc, v.src); }
+    const pick = (obj) => {
+      if (!obj) return;
+      const opts = obj.options || obj.config || {};
+      cands.push(opts.source, opts.file, opts.src, obj.src);
+    };
+    pick(window.player); pick(window.clapprPlayer); pick(window.jwplayer); pick(window.__player);
+    const entries = performance.getEntriesByType('resource') || [];
+    for (const e of entries) if (/\\.m3u8(\\?|$)/i.test(e.name)) cands.push(e.name);
+    const hit = cands.find(u => typeof u === 'string' && /^https?:/.test(u) && /\\.m3u8(\\?|$)/i.test(u));
+    return hit || null;
+  } catch (e) { return null; }
+})()
+"""
+
+
 def _is_stale_session(exc: Exception) -> bool:
     """True when a CDP call targets a detached iframe session."""
     return "session with given id not found" in str(exc).lower()
@@ -641,6 +664,8 @@ async def _drive(
         iframe_sid = None
         clicks = 0
         next_probe = time.monotonic() + 3
+        # A live player may never POST /turnstile/: read its URL instead.
+        next_fallback = time.monotonic() + 9
         actual_ua = None
         server_date = None
         challenge_urls: dict[str, str] = {}
@@ -877,6 +902,38 @@ async def _drive(
                         logger.info(
                             "Turnstile solver: clicked widget (%d/4)", clicks
                         )
+
+            if mode == "stream" and time.monotonic() >= next_fallback:
+                next_fallback = time.monotonic() + 2
+                # Ungated player: it starts on its own and the signed URL is
+                # already there, so no POST /turnstile/ will ever arrive. Probe
+                # the player session(s) first, then the top document.
+                candidates = [iframe_sid] + list(child_sessions.values()) + [sid]
+                for probe_sid in dict.fromkeys(s for s in candidates if s):
+                    try:
+                        res = await cdp.send(
+                            "Runtime.evaluate",
+                            {"expression": _READ_STREAM_URL, "returnByValue": True},
+                            probe_sid,
+                        )
+                    except Exception as e:
+                        if _is_stale_session(e) and probe_sid == iframe_sid:
+                            iframe_sid = None
+                        logger.debug(
+                            "Turnstile solver: stream URL probe failed: %r", e
+                        )
+                        continue
+                    hit = (res.get("result", {}) or {}).get("value")
+                    if isinstance(hit, str) and hit:
+                        logger.info(
+                            "Turnstile solver: stream URL read from player (fallback)"
+                        )
+                        return {
+                            "success": True,
+                            "stream_url": hit,
+                            "stream_url_nop2p": None,
+                            "_solver_user_agent": actual_ua or ua,
+                        }
 
         if mode == "premium" and captured.get("ticket"):
             # The ticket alone is enough for the caller's own token GET.

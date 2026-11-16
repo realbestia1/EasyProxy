@@ -81,7 +81,9 @@ class HTSportExtractor(BaseExtractor):
         except Exception as e:
             if isinstance(e, ExtractorError):
                 raise
-            raise ExtractorError(f"Failed to fetch HTSport page {page_url}: {e}")
+            raise ExtractorError(
+                f"HTSport page fetch failed ({type(e).__name__}): {e} [url={page_url}]"
+            )
 
         # Cerca iframes nella pagina
         iframes = re.findall(r'<iframe[^>]+src=["\']([^"\']+)["\']', html, re.IGNORECASE)
