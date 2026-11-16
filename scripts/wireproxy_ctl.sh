@@ -79,7 +79,11 @@ start_wireproxy() {
         return 1
     fi
 
-    : > "$LOG_FILE" 2>/dev/null || true
+    # Keep the previous run's tail (crash diagnostics) instead of truncating.
+    if [ -s "$LOG_FILE" ]; then
+        tail -c 200000 "$LOG_FILE" > "${LOG_FILE}.prev" 2>/dev/null || true
+    fi
+    printf '=== wireproxy start %s ===\n' "$(date -u '+%Y-%m-%dT%H:%M:%SZ')" >> "$LOG_FILE"
     "$WIREPROXY_BIN" -c "$WIREPROXY_CONFIG" >>"$LOG_FILE" 2>&1 &
     pid=$!
     printf '%s\n' "$pid" > "$PID_FILE"

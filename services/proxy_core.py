@@ -378,6 +378,18 @@ class HLSProxyCoreMixin:
         except Exception as exc:
             return "unknown", f"status check error={type(exc).__name__}"
 
+    @staticmethod
+    def _wireproxy_log_tail(limit: int = 8) -> str:
+        """Flatten the last wireproxy log lines into one short reason suffix."""
+        path = os.getenv("WG_LOG_FILE") or "/var/log/wireproxy.log"
+        try:
+            with open(path, "r", encoding="utf-8", errors="replace") as fh:
+                lines = fh.readlines()[-limit:]
+        except OSError:
+            return ""
+        text = " | ".join(" ".join(line.split()) for line in lines if line.strip())
+        return text[:400]
+
     async def _probe_warp(self, timeout_sec: float = 8.0) -> tuple[bool, str]:
         """Check wireproxy process, SOCKS listener, and real WARP HTTP path."""
         _ENABLE_WARP = _shared.ENABLE_WARP
@@ -389,6 +401,11 @@ class HLSProxyCoreMixin:
         self._warp_ip = ""
 
         process_state, process_detail = await self._wireproxy_process_state()
+        down_log = ""
+        if process_state == "down":
+            tail = self._wireproxy_log_tail()
+            if tail:
+                down_log = f" log={tail}"
         socket_error = None
         try:
             _reader, writer = await asyncio.wait_for(
@@ -404,7 +421,7 @@ class HLSProxyCoreMixin:
             component = "wireproxy_process" if process_state == "down" else "wireproxy_socket"
             return False, (
                 f"component={component} process={process_state}({process_detail}) "
-                f"socks=down error={socket_error}"
+                f"socks=down error={socket_error}{down_log}"
             )
 
         try:
@@ -425,12 +442,12 @@ class HLSProxyCoreMixin:
             if resp.status != 200:
                 return False, (
                     f"component=warp_tunnel process={process_state} socks=up "
-                    f"http_status={resp.status}"
+                    f"http_status={resp.status}{down_log}"
                 )
             if warp_state not in {"on", "plus"}:
                 return False, (
                     f"component=warp_tunnel process={process_state} socks=up "
-                    f"warp={warp_state or 'unknown'}"
+                    f"warp={warp_state or 'unknown'}{down_log}"
                 )
 
             self._warp_ip = trace.get("ip", "")
@@ -443,7 +460,7 @@ class HLSProxyCoreMixin:
             suffix = f" detail={detail}" if detail else ""
             return False, (
                 f"component=warp_tunnel process={process_state} socks=up "
-                f"error={type(exc).__name__}{suffix}"
+                f"error={type(exc).__name__}{suffix}{down_log}"
             )
 
     async def _warp_keepalive(self):

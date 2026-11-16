@@ -116,8 +116,13 @@ async def ensure_bridge() -> str:
         return _base_url
 
 
-def bridge_manifest_url(base: str, m3u8: str, referer: str) -> str:
-    return f"{base}/m?u={quote(m3u8, safe='')}&r={quote(referer or '', safe='')}"
+def bridge_manifest_url(base: str, m3u8: str, referer: str, proxy: str | None = None) -> str:
+    url = f"{base}/m?u={quote(m3u8, safe='')}&r={quote(referer or '', safe='')}"
+    if proxy:
+        # The bridge fetches upstream through the same proxy as the runner, so
+        # the minted token and the egress IP match.
+        url += f"&x={quote(str(proxy), safe='')}"
+    return url
 
 
 async def shutdown_bridge() -> None:

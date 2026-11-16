@@ -69,7 +69,8 @@ class PPVExtractor(BaseExtractor):
         # local Node bridge that rewrites playlists and serves the segments.
         try:
             base = await ensure_bridge()
-            destination = bridge_manifest_url(base, m3u8, referer)
+            # The bridge must egress from the same IP the token was minted for.
+            destination = bridge_manifest_url(base, m3u8, referer, proxy=runner_proxy)
         except Exception as exc:
             logger.warning("PPV: bridge unavailable (%s), returning CDN url", exc)
             destination = m3u8

@@ -13,6 +13,7 @@
 
 import http from 'node:http';
 import https from 'node:https';
+import { Readable } from 'node:stream';
 
 const DEBUG = process.env.PPV_DEBUG === '1';
 function L(...a) { if (DEBUG) console.error('[ppv-bridge]', ...a); }
@@ -75,12 +76,68 @@ function request(target, referer, extraHeaders = {}, redirects = 0) {
   });
 }
 
-function local(path, url, referer) {
-  const q = `u=${encodeURIComponent(url)}&r=${encodeURIComponent(referer || '')}`;
-  return `http://127.0.0.1:${port}/${path}?${q}`;
+// The token is minted through a proxy by the runner, so playback has to egress
+// from the same IP: ?x=<http proxy> routes every upstream fetch through it.
+const proxyClients = new Map();
+
+async function proxiedRequest(target, referer, extraHeaders, proxy) {
+  let client = proxyClients.get(proxy);
+  if (!client) {
+    // Node's built-in fetch refuses dispatchers built by a differently-versioned
+    // undici, so fetch has to come from the module that built the dispatcher.
+    const undici = await import('undici');
+    client = {
+      fetch: undici.fetch.bind(undici),
+      agent: new undici.ProxyAgent({ uri: proxy, requestTls: { ciphers: CDN_CIPHERS } }),
+    };
+    proxyClients.set(proxy, client);
+  }
+  const headers = { 'User-Agent': UA, 'Accept-Encoding': 'identity', ...extraHeaders };
+  if (referer) headers.Referer = referer;
+  // Idle timeout like the direct path: segments can legitimately take a while.
+  const controller = new AbortController();
+  let timer = setTimeout(() => controller.abort(new Error('upstream timeout')), TIMEOUT_MS);
+  const touch = () => {
+    clearTimeout(timer);
+    timer = setTimeout(() => controller.abort(new Error('upstream timeout')), TIMEOUT_MS);
+  };
+  const done = () => clearTimeout(timer);
+  let res;
+  try {
+    res = await client.fetch(target, {
+      headers,
+      dispatcher: client.agent,
+      redirect: 'follow',
+      signal: controller.signal,
+    });
+  } catch (error) {
+    done();
+    throw error;
+  }
+  const stream = res.body ? Readable.fromWeb(res.body) : Readable.from([]);
+  stream.on('data', touch);
+  stream.on('end', done);
+  stream.on('close', done);
+  stream.on('error', done);
+  return { status: res.status, headers: res.headers, stream };
 }
 
-function rewriteManifest(text, baseUrl, referer) {
+async function openUpstream(target, referer, extraHeaders, proxy) {
+  if (proxy) return proxiedRequest(target, referer, extraHeaders, proxy);
+  const upstream = await request(target, referer, extraHeaders);
+  return { status: upstream.statusCode || 0, headers: upstream.headers, stream: upstream };
+}
+
+function headerValue(headers, name) {
+  return typeof headers.get === 'function' ? headers.get(name) : headers[name];
+}
+
+function local(path, url, referer, proxy) {
+  const q = `u=${encodeURIComponent(url)}&r=${encodeURIComponent(referer || '')}`;
+  return `http://127.0.0.1:${port}/${path}?${q}${proxy ? `&x=${encodeURIComponent(proxy)}` : ''}`;
+}
+
+function rewriteManifest(text, baseUrl, referer, proxy) {
   const isMaster = text.includes('#EXT-X-STREAM-INF');
   return text.split(/\r?\n/).map((line) => {
     const value = line.trim();
@@ -89,14 +146,14 @@ function rewriteManifest(text, baseUrl, referer) {
       if (!value.includes('URI="')) return line;
       return line.replace(/URI="([^"]*)"/g, (match, uri) => {
         try {
-          return `URI="${local('s', new URL(uri, baseUrl).href, referer)}"`;
+          return `URI="${local('s', new URL(uri, baseUrl).href, referer, proxy)}"`;
         } catch {
           return match;
         }
       });
     }
     try {
-      return local(isMaster ? 'm' : 's', new URL(value, baseUrl).href, referer);
+      return local(isMaster ? 'm' : 's', new URL(value, baseUrl).href, referer, proxy);
     } catch {
       return line;
     }
@@ -112,28 +169,28 @@ function sendError(res, status, text) {
   res.end(`${text}\n`);
 }
 
-async function handleManifest(res, target, referer) {
-  const upstream = await request(target, referer);
-  if (upstream.statusCode !== 200) {
-    upstream.resume();
-    return sendError(res, 502, `upstream HTTP ${upstream.statusCode}`);
+async function handleManifest(res, target, referer, proxy) {
+  const upstream = await openUpstream(target, referer, {}, proxy);
+  if (upstream.status !== 200) {
+    upstream.stream.resume();
+    return sendError(res, 502, `upstream HTTP ${upstream.status}`);
   }
   const chunks = [];
   let size = 0;
   await new Promise((resolve, reject) => {
-    upstream.on('data', (chunk) => {
+    upstream.stream.on('data', (chunk) => {
       size += chunk.length;
       if (size > MAX_MANIFEST) {
-        upstream.destroy();
+        upstream.stream.destroy();
         reject(new Error('manifest too large'));
         return;
       }
       chunks.push(chunk);
     });
-    upstream.on('end', resolve);
-    upstream.on('error', reject);
+    upstream.stream.on('end', resolve);
+    upstream.stream.on('error', reject);
   });
-  const body = rewriteManifest(Buffer.concat(chunks).toString('utf8'), target, referer);
+  const body = rewriteManifest(Buffer.concat(chunks).toString('utf8'), target, referer, proxy);
   res.writeHead(200, {
     'Content-Type': 'application/vnd.apple.mpegurl',
     'Content-Length': Buffer.byteLength(body),
@@ -142,17 +199,18 @@ async function handleManifest(res, target, referer) {
   res.end(body);
 }
 
-async function handleSegment(req, res, target, referer) {
+async function handleSegment(req, res, target, referer, proxy) {
   const extra = req.headers.range ? { Range: req.headers.range } : {};
-  const upstream = await request(target, referer, extra);
+  const upstream = await openUpstream(target, referer, extra, proxy);
 
   const headers = { 'Cache-Control': 'no-store' };
   for (const name of ['content-type', 'content-length', 'content-range', 'accept-ranges']) {
-    if (upstream.headers[name]) headers[name] = upstream.headers[name];
+    const value = headerValue(upstream.headers, name);
+    if (value) headers[name] = value;
   }
-  res.writeHead(upstream.statusCode || 502, headers);
-  upstream.pipe(res);
-  upstream.on('error', () => res.destroy());
+  res.writeHead(upstream.status || 502, headers);
+  upstream.stream.pipe(res);
+  upstream.stream.on('error', () => res.destroy());
 }
 
 const server = http.createServer((req, res) => {
@@ -170,12 +228,14 @@ const server = http.createServer((req, res) => {
 
   const target = parsed.searchParams.get('u') || '';
   const referer = parsed.searchParams.get('r') || '';
+  const proxy = parsed.searchParams.get('x') || '';
   if (!/^https?:\/\//i.test(target)) return sendError(res, 400, 'missing or invalid url');
+  if (proxy && !/^https?:\/\//i.test(proxy)) return sendError(res, 400, 'invalid proxy');
 
-  L(parsed.pathname, target);
+  L(parsed.pathname, target, proxy ? `via ${proxy}` : 'direct');
   const run = parsed.pathname === '/m'
-    ? () => handleManifest(res, target, referer)
-    : () => handleSegment(req, res, target, referer);
+    ? () => handleManifest(res, target, referer, proxy)
+    : () => handleSegment(req, res, target, referer, proxy);
   Promise.resolve()
     .then(run)
     .catch((error) => {

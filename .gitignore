@@ -19,6 +19,7 @@ dlstreams_activity.txt
 !/scripts/ppv/
 !/scripts/ppv/**
 !/scripts/pow_solver.js
+!/scripts/AGENTS.md
 !/scripts/build_windows_dist.py
 !/scripts/get_version.py
 config.json

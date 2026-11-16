@@ -1046,6 +1046,16 @@ class HLSProxyStreamingMixin:
             forced_proxy, bypass_warp
         )
         request._ps_forced_proxy = forced_proxy
+
+        # A local bridge must never ride a proxy/WARP tunnel: the far end would
+        # try to reach the other machine's loopback.
+        if (urllib.parse.urlparse(str(stream_url)).hostname or "").lower() in {"127.0.0.1", "localhost", "::1"}:
+            logger.debug("loopback target: forcing direct route")
+            bypass_warp = True
+            bypass_proxies = True
+            force_direct = True
+            forced_proxy = None
+            request._ps_forced_proxy = None
         session = None
         session_proxy = None
 
