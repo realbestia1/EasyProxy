@@ -577,7 +577,7 @@ class SportsonlineExtractor(BaseExtractor):
                             "Found M3U8 URL after Turnstile-gated retry: %s", m3u8_url
                         )
                         return self._result(m3u8_url, playback_headers)
-                    solved = await self._solve_gated_stream(main_url)
+                    solved = await self._solve_gated_stream(iframe_url, parent_url=main_url)
                     if solved:
                         solved_stream, solver_ua = solved
                         m3u8_url = self._normalize_stream_url(solved_stream, iframe_url)
@@ -657,8 +657,14 @@ class SportsonlineExtractor(BaseExtractor):
             logger.exception(f"Sportsonline extraction failed for {url}")
             raise ExtractorError(f"Extraction failed: {str(e)}")
 
-    async def _solve_gated_stream(self, page_url: str) -> tuple[str, str | None] | None:
-        """Solve the player Turnstile gate in headless Chromium (best effort)."""
+    async def _solve_gated_stream(
+        self, page_url: str, parent_url: str | None = None
+    ) -> tuple[str, str | None] | None:
+        """Solve the player Turnstile gate in headless Chromium (best effort).
+
+        ``parent_url`` is the channel page embedding the player iframe: the
+        player only serves its config when loaded from there.
+        """
         if str(os.getenv("SPORTSONLINE_TURNSTILE_SOLVER", "1")).strip().lower() in {"0", "off", "false", "no"}:
             return None
         try:
@@ -667,7 +673,9 @@ class SportsonlineExtractor(BaseExtractor):
             logger.debug("Sportsonline: Turnstile solver unavailable: %s", e)
             return None
         try:
-            solution = await solve_player_stream(page_url, proxy=self._session_proxy)
+            solution = await solve_player_stream(
+                page_url, proxy=self._session_proxy, parent_url=parent_url
+            )
         except Exception as e:
             logger.warning("Sportsonline: Turnstile solver failed: %s", e)
             return None

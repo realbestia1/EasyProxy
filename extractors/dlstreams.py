@@ -759,7 +759,9 @@ class DLStreamsExtractor(BaseExtractor):
             logger.debug("DLStreams: premium token refresh failed for %s: %s", stream_url, exc)
             return stream_url
 
-    async def _solve_premium_ticket(self, page_url: str) -> str | None:
+    async def _solve_premium_ticket(
+        self, page_url: str, parent_url: str | None = None
+    ) -> str | None:
         """Solve Turnstile on the premium player and return its ticket."""
         if str(os.getenv("DLSTREAMS_TURNSTILE_SOLVER", "1")).strip().lower() in {"0", "off", "false", "no"}:
             return None
@@ -770,7 +772,9 @@ class DLStreamsExtractor(BaseExtractor):
             return None
         try:
             solution = await solve_premium_ticket(
-                page_url, proxy=getattr(self, "_session_proxy", None)
+                page_url,
+                proxy=getattr(self, "_session_proxy", None),
+                parent_url=parent_url,
             )
         except Exception as e:
             logger.warning("DLStreams: premium solver failed: %s", e)
@@ -780,8 +784,15 @@ class DLStreamsExtractor(BaseExtractor):
         logger.info("DLStreams: premium ticket obtained for %s", page_url)
         return solution["ticket"]
 
-    async def _solve_gated_player(self, page_url: str) -> tuple[str, str | None] | None:
-        """Solve the xstream Turnstile gate in headless Chromium (best effort)."""
+    async def _solve_gated_player(
+        self, page_url: str, parent_url: str | None = None
+    ) -> tuple[str, str | None] | None:
+        """Solve the xstream Turnstile gate in headless Chromium (best effort).
+
+        ``parent_url`` is the page embedding the player iframe: the player only
+        serves its config when loaded from there (a direct navigation gets
+        ``Sec-Fetch-Site: none`` and bounces to xstream.to).
+        """
         if str(os.getenv("DLSTREAMS_TURNSTILE_SOLVER", "1")).strip().lower() in {"0", "off", "false", "no"}:
             return None
         try:
@@ -791,7 +802,9 @@ class DLStreamsExtractor(BaseExtractor):
             return None
         try:
             solution = await solve_player_stream(
-                page_url, proxy=getattr(self, "_session_proxy", None)
+                page_url,
+                proxy=getattr(self, "_session_proxy", None),
+                parent_url=parent_url,
             )
         except Exception as e:
             logger.warning("DLStreams: Turnstile solver failed: %s", e)
@@ -1168,7 +1181,7 @@ class DLStreamsExtractor(BaseExtractor):
 
                 if not stream_url and m_cfg:
                     # The xstream player is Turnstile-gated: let the browser solve it.
-                    solved = await self._solve_gated_player(candidate)
+                    solved = await self._solve_gated_player(iframe_src, parent_url=candidate)
                     if solved:
                         stream_url, solver_ua = solved
                         logger.info(
@@ -1227,7 +1240,9 @@ class DLStreamsExtractor(BaseExtractor):
                         solve_started = time.monotonic()
                         # The embedding player page: loading dembed.st directly
                         # serves a stub without the Turnstile widget.
-                        premium_ticket = await self._solve_premium_ticket(candidate)
+                        premium_ticket = await self._solve_premium_ticket(
+                            iframe_src, parent_url=candidate
+                        )
                         # Chromium runs outside the extraction budget: hand the
                         # remaining work the time the solver consumed.
                         deadline += time.monotonic() - solve_started
