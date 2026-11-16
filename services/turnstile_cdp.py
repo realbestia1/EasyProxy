@@ -21,6 +21,7 @@ import logging
 import os
 import re
 import shutil
+import socket
 import subprocess
 import sys
 import time
@@ -245,17 +246,73 @@ def find_chrome() -> str | None:
     return None
 
 
-def _profile_dir() -> str:
-    """Persistent Chromium profile: cookies/clearance survive across solves."""
-    override = os.getenv("TURNSTILE_PROFILE_DIR", "").strip()
-    path = override or os.path.join(config_store.CONFIG_DIR, "turnstile-profile")
-    os.makedirs(path, exist_ok=True)
+def _clean_profile(path: str) -> None:
+    """Drop the lock/port files a dead Chromium leaves behind."""
     for name in ("SingletonLock", "SingletonSocket", "SingletonCookie", "DevToolsActivePort"):
         try:
             os.unlink(os.path.join(path, name))
         except OSError:
             pass
+
+
+def _kill_profile_chrome(profile: str) -> None:
+    """Kill a leftover Chromium still holding ``profile`` (it blocks the new one)."""
+    if os.name != "nt":
+        try:
+            killed = subprocess.run(
+                ["pkill", "-f", f"user-data-dir={profile}"],
+                timeout=5,
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+            ).returncode == 0
+        except Exception as e:
+            logger.debug("Turnstile solver: pkill failed: %r", e)
+            return
+        if killed:
+            # Give it a moment to release the Singleton files.
+            time.sleep(0.5)
+        return
+    try:
+        import psutil
+    except Exception as e:
+        logger.debug("Turnstile solver: psutil unavailable: %r", e)
+        return
+    needle = f"user-data-dir={profile}".lower()
+    for proc in psutil.process_iter(["name", "cmdline"]):
+        name = (proc.info.get("name") or "").lower()
+        if name not in ("chrome.exe", "msedge.exe"):
+            continue
+        if not any(needle in str(arg).lower() for arg in proc.info.get("cmdline") or []):
+            continue
+        try:
+            proc.kill()
+            logger.info("Turnstile solver: killed leftover %s (pid %s)", name, proc.pid)
+        except Exception as e:
+            logger.debug("Turnstile solver: kill %s failed: %r", name, e)
+
+
+def _profile_dir() -> str:
+    """Persistent Chromium profile: cookies/clearance survive across solves."""
+    override = os.getenv("TURNSTILE_PROFILE_DIR", "").strip()
+    path = override or os.path.join(config_store.CONFIG_DIR, "turnstile-profile")
+    os.makedirs(path, exist_ok=True)
+    _clean_profile(path)
     return path
+
+
+def _chrome_log_tail(path: str, lines: int = 10) -> str:
+    """Last lines of the Chrome stderr log, for DevToolsActivePort failures."""
+    try:
+        with open(path, "rb") as fh:
+            try:
+                fh.seek(-8192, os.SEEK_END)
+            except OSError:
+                fh.seek(0)
+            raw = fh.read().decode("utf-8", "replace")
+    except OSError:
+        return ""
+    tail = " | ".join(raw.splitlines()[-lines:]).strip()
+    return tail[-800:]
 
 
 def _stop_xvfb() -> None:
@@ -272,6 +329,26 @@ def _stop_xvfb() -> None:
     _XVFB_PROCESS = None
 
 
+def _display_alive(display: str) -> bool:
+    """True when the X socket of ``display`` accepts a connection.
+
+    A socket file outlives a crashed Xvfb: connecting is the only check that
+    tells a live server from a stale one.
+    """
+    if not hasattr(socket, "AF_UNIX"):
+        return True
+    number = display.lstrip(":").split(".")[0]
+    sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+    sock.settimeout(0.5)
+    try:
+        sock.connect(f"/tmp/.X11-unix/X{number}")
+        return True
+    except OSError:
+        return False
+    finally:
+        sock.close()
+
+
 async def _ensure_display() -> str | None:
     """Display for headed Chromium: existing X11, or a private Xvfb."""
     global _XVFB_PROCESS, _XVFB_DISPLAY
@@ -284,27 +361,44 @@ async def _ensure_display() -> str | None:
         return existing
     async with _XVFB_LOCK:
         if _XVFB_DISPLAY:
-            return _XVFB_DISPLAY
+            if _XVFB_PROCESS is not None and _XVFB_PROCESS.poll() is None:
+                return _XVFB_DISPLAY
+            # Xvfb died: DISPLAY would point at a dead server and Chrome would
+            # exit before writing DevToolsActivePort.
+            logger.warning(
+                "Turnstile solver: Xvfb on %s is gone, restarting", _XVFB_DISPLAY
+            )
+            _XVFB_PROCESS = None
+            _XVFB_DISPLAY = None
         xvfb = shutil.which("Xvfb")
         if not xvfb:
             return None
         for number in range(99, 105):
             display = f":{number}"
             if os.path.exists(f"/tmp/.X11-unix/X{number}"):
-                _XVFB_DISPLAY = display
-                return display
+                if _display_alive(display):
+                    _XVFB_DISPLAY = display
+                    return display
+                logger.debug(
+                    "Turnstile solver: stale X socket on %s, skipping", display
+                )
+                continue
             proc = subprocess.Popen(
                 [xvfb, display, "-screen", "0", "1280x800x24", "-nolisten", "tcp"],
                 stdout=subprocess.DEVNULL,
                 stderr=subprocess.DEVNULL,
             )
             await asyncio.sleep(0.5)
-            if proc.poll() is None:
+            if proc.poll() is None and _display_alive(display):
                 _XVFB_PROCESS = proc
                 _XVFB_DISPLAY = display
                 atexit.register(_stop_xvfb)
                 logger.info("Turnstile solver: started Xvfb on %s", display)
                 return display
+            try:
+                proc.kill()
+            except OSError:
+                pass
         return None
 
 
@@ -459,6 +553,10 @@ async def launch_browser(
             env["DISPLAY"] = display
 
     profile = _profile_dir()
+    # A previous Chrome can stay alive and keep the profile locked, which makes
+    # the new one exit before writing DevToolsActivePort.
+    _kill_profile_chrome(profile)
+    _clean_profile(profile)
     ua = _build_user_agent(chrome)
     cmd = [chrome]
     if headless:
@@ -494,17 +592,33 @@ async def launch_browser(
     cmd.append("about:blank")
     logger.debug("%s: launching (headless=%s): %s", label, headless, " ".join(cmd[:6]))
 
+    # Chrome's stderr explains an early exit (profile lock, dead DISPLAY).
+    log_path = os.path.join(config_store.CONFIG_DIR, "chrome-solver.log")
+    log = subprocess.DEVNULL
+    try:
+        os.makedirs(config_store.CONFIG_DIR, exist_ok=True)
+        log = open(log_path, "ab")
+    except OSError as e:
+        logger.debug("%s: cannot open %s: %r", label, log_path, e)
+
     proc = subprocess.Popen(
         cmd,
         env=env,
-        stdout=subprocess.DEVNULL,
-        stderr=subprocess.DEVNULL,
+        stdout=log,
+        stderr=log,
         creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
     )
+    if log is not subprocess.DEVNULL:
+        log.close()
     try:
         port = await _wait_devtools_port(profile)
         if not port:
-            logger.warning("%s: DevToolsActivePort not written", label)
+            tail = _chrome_log_tail(log_path)
+            logger.warning(
+                "%s: DevToolsActivePort not written%s",
+                label,
+                f" (chrome log: {tail})" if tail else "",
+            )
             raise RuntimeError("DevToolsActivePort not written")
 
         version = await asyncio.to_thread(_read_devtools_version, port)

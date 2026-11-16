@@ -15,6 +15,10 @@ logger = logging.getLogger(__name__)
 
 _SOCKS_SCHEMES = ("socks5://", "socks5h://", "socks4://", "socks4a://")
 
+# Client handler tasks spawned by asyncio.start_server, so shutdown can cancel
+# them instead of leaving them pending to be destroyed by the loop.
+_ACTIVE_HANDLERS: "set[asyncio.Task]" = set()
+
 
 def _normalize_socks_url(url: str) -> str:
     """python_socks rejects the socks5h/socks4a scheme spellings (it already
@@ -28,6 +32,7 @@ def _normalize_socks_url(url: str) -> str:
 
 
 async def _pipe(reader: asyncio.StreamReader, writer: asyncio.StreamWriter):
+    cancelled = False
     try:
         while True:
             data = await reader.read(65536)
@@ -35,6 +40,9 @@ async def _pipe(reader: asyncio.StreamReader, writer: asyncio.StreamWriter):
                 break
             writer.write(data)
             await writer.drain()
+    except asyncio.CancelledError:
+        cancelled = True
+        raise
     except Exception:
         pass
     finally:
@@ -42,7 +50,9 @@ async def _pipe(reader: asyncio.StreamReader, writer: asyncio.StreamWriter):
         # unread data makes the stack send RST, which discards what we already
         # forwarded. handle_client closes both writers once both pipes are done.
         try:
-            if writer.can_write_eof():
+            if cancelled:
+                writer.close()
+            elif writer.can_write_eof():
                 writer.write_eof()
         except Exception:
             pass
@@ -50,6 +60,9 @@ async def _pipe(reader: asyncio.StreamReader, writer: asyncio.StreamWriter):
 
 def _create_client_handler(upstream_socks_url: str):
     async def handle_client(client_reader: asyncio.StreamReader, client_writer: asyncio.StreamWriter):
+        task = asyncio.current_task()
+        if task is not None:
+            _ACTIVE_HANDLERS.add(task)
         # Bound before the try: the finally block closes it even when the
         # client disconnects before the upstream socket is created.
         up_writer = None
@@ -117,6 +130,9 @@ def _create_client_handler(upstream_socks_url: str):
                     _pipe(up_reader, client_writer),
                     return_exceptions=True,
                 )
+        except asyncio.CancelledError:
+            logger.debug("Socks bridge handler cancelled for %s", upstream_socks_url)
+            raise
         except Exception as exc:
             logger.debug("Socks bridge error forwarding to %s: %s", upstream_socks_url, exc)
             try:
@@ -125,13 +141,15 @@ def _create_client_handler(upstream_socks_url: str):
             except Exception:
                 pass
         finally:
+            if task is not None:
+                _ACTIVE_HANDLERS.discard(task)
             # Both directions are drained by now (or the bridge is aborting), so
             # a full close no longer truncates peer data.
             for stream in filter(None, (up_writer, client_writer)):
                 try:
                     stream.close()
                     await stream.wait_closed()
-                except Exception:
+                except (Exception, asyncio.CancelledError):
                     pass
 
     return handle_client
@@ -181,14 +199,31 @@ class SocksHttpBridgeManager:
 
     async def close_all(self):
         async with self._lock:
-            for url, server in list(self._servers.items()):
+            servers = list(self._servers.values())
+            self._servers.clear()
+            self._ports.clear()
+
+            for server in servers:
                 try:
                     server.close()
+                except Exception:
+                    pass
+
+            # Server.close() stops accepting but leaves accepted handlers
+            # running (and since 3.12 wait_closed() waits for their
+            # connections too), so cancel them before waiting.
+            tasks = [t for t in list(_ACTIVE_HANDLERS) if not t.done()]
+            for task in tasks:
+                task.cancel()
+            if tasks:
+                await asyncio.gather(*tasks, return_exceptions=True)
+            _ACTIVE_HANDLERS.clear()
+
+            for server in servers:
+                try:
                     await server.wait_closed()
                 except Exception:
                     pass
-            self._servers.clear()
-            self._ports.clear()
 
 
 _BRIDGE_MANAGER = SocksHttpBridgeManager()

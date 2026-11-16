@@ -24,8 +24,8 @@ _RUNNER = os.path.join(
     "scripts",
     "vidfast_runner.mjs",
 )
-_MOVIE_RE = re.compile(r"^/movie/\d+/?$", re.IGNORECASE)
-_TV_RE = re.compile(r"^/tv/\d+/\d+/\d+/?$", re.IGNORECASE)
+_MOVIE_RE = re.compile(r"^/movie/(?:\d+|tt\d+)/?$", re.IGNORECASE)
+_TV_RE = re.compile(r"^/tv/(?:\d+|tt\d+)/\d+/\d+/?$", re.IGNORECASE)
 
 
 class VidFastExtractor:

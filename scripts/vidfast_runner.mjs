@@ -35,7 +35,7 @@ if (!inputUrl) {
 
 const pageUrl = new URL(inputUrl).href;
 const pageOrigin = new URL(pageUrl).origin;
-const STREAM_PROBE_TIMEOUT_MS = 10000;
+const STREAM_PROBE_TIMEOUT_MS = 25000;
 const minimumStreamHeight = Number(process.env.VIDFAST_MIN_HEIGHT || 0);
 const userAgent =
   "Mozilla/5.0 (Windows NT 10.0; Win64; x64) " +
@@ -316,27 +316,35 @@ async function playerFetch(input, init = {}) {
 context.fetch = playerFetch;
 
 async function probeStreamManifest(url) {
-  const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(), STREAM_PROBE_TIMEOUT_MS);
-  try {
-    const response = await nativeFetch(url, fetchOptions({
-      headers: mergedHeaders({
-        accept: "application/vnd.apple.mpegurl,*/*",
-        "accept-encoding": "gzip, identity;q=1, *;q=0",
-        range: "bytes=0-",
-      }, `${pageOrigin}/`),
-      signal: controller.signal,
-    }));
-    storeCookies(response);
-    if (!response.ok) throw new Error(`stream HTTP ${response.status}`);
-    const body = await response.text();
-    if (!body.includes("#EXTM3U")) throw new Error("stream response is not an HLS manifest");
-    return body;
-  } catch (error) {
-    if (error?.name === "AbortError") throw new Error("stream manifest probe timed out");
-    throw error;
-  } finally {
-    clearTimeout(timeout);
+  for (let attempt = 1; ; attempt += 1) {
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), STREAM_PROBE_TIMEOUT_MS);
+    try {
+      const response = await nativeFetch(url, fetchOptions({
+        headers: mergedHeaders({
+          accept: "application/vnd.apple.mpegurl,*/*",
+          "accept-encoding": "gzip, identity;q=1, *;q=0",
+          range: "bytes=0-",
+        }, `${pageOrigin}/`),
+        signal: controller.signal,
+      }));
+      storeCookies(response);
+      if (!response.ok) throw new Error(`stream HTTP ${response.status}`);
+      const body = await response.text();
+      if (!body.includes("#EXTM3U")) throw new Error("stream response is not an HLS manifest");
+      return body;
+    } catch (error) {
+      if (error?.name === "AbortError") {
+        if (attempt === 1) {
+          log("stream manifest probe timed out, retrying once");
+          continue;
+        }
+        throw new Error("stream manifest probe timed out");
+      }
+      throw error;
+    } finally {
+      clearTimeout(timeout);
+    }
   }
 }
 
@@ -598,7 +606,11 @@ async function finish(streamUrl) {
   if (minimumStreamHeight > 0) {
     const is4k = minimumStreamHeight >= 2160;
     const hasTarget = resolutions.some(item => is4k ? (item.w >= 3800 || item.h >= 2140) : (item.h >= minimumStreamHeight - 16));
-    if (!hasTarget) throw new Error(`no HLS variant near ${minimumStreamHeight}p (highest is ${maxResolution}p)`);
+    if (!hasTarget) {
+      const msg = `no HLS variant near ${minimumStreamHeight}p (highest is ${maxResolution}p)`;
+      if (process.env.VIDFAST_STRICT_RES === "1") throw new Error(msg);
+      console.warn(`[vidfast] ${msg}, continuing with the master playlist`);
+    }
   }
   return {
     url: streamUrl,
