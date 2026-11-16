@@ -61,7 +61,7 @@ DEFAULT_CONFIG = {
     # egress IPs, so keep that resolver direct. Cinejoy's gateway and its video
     # CDNs both work through WARP (the CDNs can 404 some datacenter ranges).
     # PPV's CDN rejects WARP egress with HTTP 403; keep its resolver direct.
-    "warp_off_extractors": ["sportsonline", "ppv"],
+    "warp_off_extractors": ["sportsonline", "ppv", "htsport"],
     "proxy_off_extractors": [],
     "proxy_exclude_domains": [],
     # Force the highest video variant (no adaptive bitrate). Can be enabled per
