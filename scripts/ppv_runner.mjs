@@ -40,6 +40,19 @@ async function loadWasmModule() {
   return import(`${WASM_JS}?${wasmLoadGeneration}`);
 }
 
+// The CDN edge 403s TLS ClientHellos outside its allowlist. Node's default
+// (long) cipher list is refused, OpenSSL's/Python's default list is accepted,
+// so the playlist check uses the same list - direct and through the proxy.
+const CDN_CIPHERS = [
+  'ECDHE-ECDSA-AES256-GCM-SHA384', 'ECDHE-RSA-AES256-GCM-SHA384',
+  'ECDHE-ECDSA-AES128-GCM-SHA256', 'ECDHE-RSA-AES128-GCM-SHA256',
+  'ECDHE-ECDSA-CHACHA20-POLY1305', 'ECDHE-RSA-CHACHA20-POLY1305',
+  'ECDHE-ECDSA-AES256-SHA384', 'ECDHE-RSA-AES256-SHA384',
+  'ECDHE-ECDSA-AES128-SHA256', 'ECDHE-RSA-AES128-SHA256',
+  'DHE-RSA-AES256-GCM-SHA384', 'DHE-RSA-AES128-GCM-SHA256',
+  'DHE-RSA-AES256-SHA256', 'DHE-RSA-AES128-SHA256',
+].join(':');
+
 let proxyDispatcher = null;
 // Node's built-in fetch rejects dispatchers built by a differently-versioned
 // undici, so when a proxy dispatcher is active fetch must come from that module.
@@ -48,7 +61,7 @@ const PROXY_URL = process.env.PPV_PROXY || process.env.EMBEDST_PROXY;
 if (PROXY_URL && /^https?:\/\//i.test(PROXY_URL)) {
   try {
     const undici = await import('undici');
-    proxyDispatcher = new undici.ProxyAgent(PROXY_URL);
+    proxyDispatcher = new undici.ProxyAgent({ uri: PROXY_URL, requestTls: { ciphers: CDN_CIPHERS } });
     realFetch = undici.fetch.bind(undici);
   } catch (error) {
     console.error('[ppv] HTTP proxy unavailable, continuing direct:', error && error.message);
@@ -322,20 +335,6 @@ async function decryptStreamUrl(island, body, embed, slug) {
 // ---------------------------------------------------------------------------
 // Playlist check
 // ---------------------------------------------------------------------------
-// The CDN edge 403s TLS ClientHellos outside its allowlist. Node's default
-// (long) cipher list is refused, OpenSSL's/Python's default list is accepted,
-// so the check uses the same list. Only this request needs it; all real
-// playlist/segment traffic goes through the Python proxy.
-const CDN_CIPHERS = [
-  'ECDHE-ECDSA-AES256-GCM-SHA384', 'ECDHE-RSA-AES256-GCM-SHA384',
-  'ECDHE-ECDSA-AES128-GCM-SHA256', 'ECDHE-RSA-AES128-GCM-SHA256',
-  'ECDHE-ECDSA-CHACHA20-POLY1305', 'ECDHE-RSA-CHACHA20-POLY1305',
-  'ECDHE-ECDSA-AES256-SHA384', 'ECDHE-RSA-AES256-SHA384',
-  'ECDHE-ECDSA-AES128-SHA256', 'ECDHE-RSA-AES128-SHA256',
-  'DHE-RSA-AES256-GCM-SHA384', 'DHE-RSA-AES128-GCM-SHA256',
-  'DHE-RSA-AES256-SHA256', 'DHE-RSA-AES128-SHA256',
-].join(':');
-
 async function fetchPlaylist(url, headers) {
   if (proxyDispatcher) {
     const res = await routedFetch(url, { headers });
