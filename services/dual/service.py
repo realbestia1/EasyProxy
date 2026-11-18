@@ -412,6 +412,31 @@ async def prepare_subtitle_data(body: dict, request: web.Request) -> dict:
     }
 
 
+async def prepare_external_subtitle_data(body: dict, request: web.Request) -> dict:
+    """Register one video-source SRT rendition served on the video timeline."""
+    token = str(body.get("token") or "")
+    if not sessions.valid(token):
+        raise DualServiceError(401, "DUAL session required")
+    routing = from_values(request.query, body)
+    try:
+        sid = subtitles.register_external(
+            str(body.get("url") or ""),
+            language=str(body.get("language") or ""),
+            name=str(body.get("name") or ""),
+            headers=body.get("headers") if isinstance(body.get("headers"), dict) else {},
+            routing=routing,
+        )
+    except (ValueError, OSError) as exc:
+        raise DualServiceError(400, str(exc)) from exc
+    return {
+        "sid": sid,
+        "url": _subtitle_url(request, sid, token),
+        "language": str(body.get("language") or ""),
+        "name": str(body.get("name") or ""),
+        "routing": as_payload(routing),
+    }
+
+
 async def subtitle_playlist(request: web.Request) -> web.Response:
     sid = request.match_info["sid"]
     token = _require_session(request)
@@ -419,6 +444,8 @@ async def subtitle_playlist(request: web.Request) -> web.Response:
     rate_nano = _query_int(request, "r", 1_000_000_000)
     try:
         metadata = subtitles.metadata(sid)
+        if metadata.get("external"):
+            metadata = await subtitles.ensure_loaded(sid)
         offset, rate = offset_ms / 1000.0, rate_nano / 1_000_000_000
         timeline = subtitles.timeline(metadata, offset, rate)
         if not timeline:
@@ -448,6 +475,11 @@ async def subtitle_playlist(request: web.Request) -> web.Response:
         )
     except FileNotFoundError as exc:
         raise DualServiceError(410, "subtitle session expired") from exc
+    except AssetFetchError as exc:
+        raise DualServiceError(exc.status, {
+            "code": "SUBTITLE_NETWORK_ERROR",
+            "message": str(exc),
+        }) from exc
     except ValueError as exc:
         raise DualServiceError(404, str(exc)) from exc
 
@@ -654,6 +686,7 @@ __all__ = [
     "memory_stats",
     "prepare_audio",
     "prepare_audio_data",
+    "prepare_external_subtitle_data",
     "prepare_subtitle_data",
     "subtitles",
     "sync_audio",

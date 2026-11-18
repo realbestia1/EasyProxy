@@ -26,6 +26,29 @@ _RUNNER = os.path.join(
 )
 _MOVIE_RE = re.compile(r"^/movie/(?:\d+|tt\d+)/?$", re.IGNORECASE)
 _TV_RE = re.compile(r"^/tv/(?:\d+|tt\d+)/\d+/\d+/?$", re.IGNORECASE)
+_MAX_SUBTITLES = 80
+
+
+def _sanitize_subtitles(value: Any) -> list[dict]:
+    """Keep the runner's extra subtitle files, in the same shape."""
+    if not isinstance(value, list):
+        return []
+    entries: list[dict] = []
+    for item in value:
+        if not isinstance(item, dict):
+            continue
+        url = str(item.get("url") or "").strip()
+        if not url.startswith(("http://", "https://")):
+            continue
+        entries.append({
+            "display": str(item.get("display") or "")[:80],
+            "language": str(item.get("language") or "")[:16],
+            "url": url,
+            "encoding": str(item.get("encoding") or "")[:16],
+        })
+        if len(entries) >= _MAX_SUBTITLES:
+            break
+    return entries
 
 
 class VidFastExtractor:
@@ -150,5 +173,6 @@ class VidFastExtractor:
             "selected_proxy": self.last_used_proxy,
             "force_direct": direct_requested,
             "bypass_warp": bypass_warp,
+            "subtitles": _sanitize_subtitles(payload.get("subtitles")),
         }
 

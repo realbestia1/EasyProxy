@@ -8,6 +8,7 @@ mapped with the same transform the audio store applies to its fragments:
 
 from __future__ import annotations
 
+import asyncio
 import base64
 import hashlib
 import re
@@ -124,6 +125,60 @@ def as_webvtt(data: bytes) -> str | None:
     return None
 
 
+def srt_to_webvtt(data: bytes) -> tuple[str, float]:
+    """Convert one SRT payload to WebVTT and return the last cue end."""
+    try:
+        text = data.decode("utf-8")
+    except UnicodeDecodeError:
+        text = data.decode("cp1252", errors="replace")
+    text = text.lstrip("\ufeff").replace("\r\n", "\n").replace("\r", "\n")
+    output = ["WEBVTT", ""]
+    duration = 0.0
+    expect_number = True
+    for line in text.split("\n"):
+        if not line.strip():
+            if output[-1] != "":
+                output.append("")
+            expect_number = True
+            continue
+        if expect_number and line.strip().isdigit():
+            # SRT cue number; WebVTT does not need it.
+            expect_number = False
+            continue
+        expect_number = False
+        match = _CUE.match(line)
+        if match:
+            end = _seconds(match.group(3))
+            duration = max(duration, end)
+            line = (
+                f"{match.group(1)}{_stamp(_seconds(match.group(2)))}"
+                f" --> {_stamp(end)}{match.group(4)}"
+            )
+        output.append(line)
+    return "\n".join(output).strip() + "\n", duration
+
+
+def _vtt_duration(text: str) -> float:
+    duration = 0.0
+    for line in text.splitlines():
+        match = _CUE.match(line)
+        if match:
+            duration = max(duration, _seconds(match.group(3)))
+    return duration
+
+
+def _safe_headers(headers: dict | None) -> dict[str, str]:
+    return {
+        str(header): str(value).strip()
+        for header, value in (headers or {}).items()
+        if re.fullmatch(r"[A-Za-z0-9-]+", str(header))
+        and str(value).strip()
+        and len(str(value).strip()) <= 1024
+        and "\r" not in str(value)
+        and "\n" not in str(value)
+    }
+
+
 class SubtitleStore:
     """Hold one subtitle rendition per audio prep and shift it on demand.
 
@@ -162,6 +217,12 @@ class SubtitleStore:
         return self._track(sid)["metadata"]
 
     def timeline(self, metadata: dict, offset: float = 0.0, rate: float = 1.0):
+        if metadata.get("external"):
+            if metadata.get("vtt") is None:
+                raise ValueError("subtitle track not loaded")
+            return [
+                {"idx": 0, "start": 0.0, "trim": 0.0, "duration": metadata["duration"]}
+            ]
         return AudioStore.timeline(metadata, offset, rate)
 
     async def register(
@@ -190,15 +251,7 @@ class SubtitleStore:
         else:
             # Valid HLS subtitles can be unencrypted.
             key = b""
-        safe_headers = {
-            str(header): str(value).strip()
-            for header, value in (headers or {}).items()
-            if re.fullmatch(r"[A-Za-z0-9-]+", str(header))
-            and str(value).strip()
-            and len(str(value).strip()) <= 1024
-            and "\r" not in str(value)
-            and "\n" not in str(value)
-        }
+        safe_headers = _safe_headers(headers)
         map_uri = _INIT.search(playlist)
         init_url = urljoin(base_url, map_uri.group(1)) if map_uri else ""
         if init_url and not valid_public_url(init_url):
@@ -236,6 +289,62 @@ class SubtitleStore:
         }
         self._remember(sid, metadata, key)
         return sid
+
+    def register_external(
+        self,
+        url: str,
+        language: str = "",
+        name: str = "",
+        headers: dict | None = None,
+        routing: RoutingOptions | None = None,
+    ) -> str:
+        """Register an external SRT file; it is downloaded on first use."""
+        url = str(url or "").strip()
+        if len(url) > MAX_PLAYLIST_BYTES or not valid_public_url(url):
+            raise ValueError("subtitle URL is not public HTTPS")
+        routing = routing or self.default_routing
+        routing_key = (
+            f"{int(routing.warp_off)}|{int(routing.proxy_off)}|{routing.forced_proxy or ''}"
+        )
+        sid = hashlib.sha1(
+            f"{url}|{language}|{name}|{routing_key}".encode()
+        ).hexdigest()[:16]
+        metadata = {
+            "external": url,
+            "language": str(language or ""),
+            "name": str(name or ""),
+            "headers": _safe_headers(headers),
+            "routing": routing,
+            "vtt": None,
+            "duration": 0.0,
+        }
+        self._remember(sid, metadata, b"")
+        self._tracks[sid]["lock"] = asyncio.Lock()
+        return sid
+
+    async def ensure_loaded(self, sid: str) -> dict:
+        """Download and convert one external SRT, once per track."""
+        track = self._track(sid)
+        metadata = track["metadata"]
+        if not metadata.get("external") or metadata.get("vtt") is not None:
+            return metadata
+        lock = track.get("lock")
+        if lock is None:
+            lock = track["lock"] = asyncio.Lock()
+        async with lock:
+            if metadata.get("vtt") is None:
+                data = await self._fetch(metadata, metadata["external"])
+                text = as_webvtt(data)
+                duration = 0.0
+                if text is None:
+                    text, duration = srt_to_webvtt(data)
+                else:
+                    duration = _vtt_duration(text)
+                if duration <= 0.0:
+                    raise ValueError("subtitle track has no cues")
+                metadata["vtt"] = text
+                metadata["duration"] = duration
+        return metadata
 
     async def _fetch(self, metadata: dict, url: str) -> bytes:
         with tempfile.TemporaryDirectory(prefix="dual-sub-") as directory:
@@ -295,6 +404,13 @@ class SubtitleStore:
         """Return one subtitle asset already mapped onto the audio timeline."""
         track = self._track(sid)
         metadata = track["metadata"]
+        if metadata.get("external"):
+            if index != 0:
+                raise ValueError("subtitle segment outside timeline")
+            return (
+                str((await self.ensure_loaded(sid))["vtt"]).encode("utf-8"),
+                "text/vtt; charset=utf-8",
+            )
         entry = next(
             (item for item in self.timeline(metadata, offset, rate) if item["idx"] == index),
             None,
@@ -328,4 +444,4 @@ class SubtitleStore:
         return removed
 
 
-__all__ = ["SubtitleStore", "as_webvtt", "shift_webvtt"]
+__all__ = ["SubtitleStore", "as_webvtt", "shift_webvtt", "srt_to_webvtt"]

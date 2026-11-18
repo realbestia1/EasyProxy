@@ -36,6 +36,7 @@ if (!inputUrl) {
 const pageUrl = new URL(inputUrl).href;
 const pageOrigin = new URL(pageUrl).origin;
 const STREAM_PROBE_TIMEOUT_MS = 25000;
+const SUBTITLE_FETCH_TIMEOUT_MS = 15000;
 const minimumStreamHeight = Number(process.env.VIDFAST_MIN_HEIGHT || 0);
 const userAgent =
   "Mozilla/5.0 (Windows NT 10.0; Win64; x64) " +
@@ -348,6 +349,64 @@ async function probeStreamManifest(url) {
   }
 }
 
+// The player fetches subtitles separately from the HLS master: the movie/TV
+// page id goes to the same-origin /wyzie endpoint, which answers with a JSON
+// list of {display, language, url, encoding}. The bundle patches host globals
+// (URLSearchParams stops stringifying), so the query is built by hand.
+function subtitleRequestUrl(url) {
+  const parsed = new URL(url);
+  const match = parsed.pathname.match(/^\/(movie|tv)\/(\d+|tt\d+)(?:\/(\d+)\/(\d+))?\/?$/i);
+  if (!match) return "";
+  let query = `id=${encodeURIComponent(match[2])}`;
+  if (match[1].toLowerCase() === "tv") {
+    if (!match[3] || !match[4]) return "";
+    query += `&season=${encodeURIComponent(match[3])}&episode=${encodeURIComponent(match[4])}`;
+  }
+  return `${parsed.origin}/wyzie?${query}`;
+}
+
+function sanitizeSubtitle(item) {
+  if (!item || typeof item !== "object") return null;
+  const url = typeof item.url === "string" ? item.url.trim() : "";
+  if (!/^https?:\/\//i.test(url)) return null;
+  const text = (value, limit) => typeof value === "string" ? value.trim().slice(0, limit) : "";
+  return {
+    display: text(item.display, 80),
+    language: text(item.language, 16),
+    url,
+    encoding: text(item.encoding, 16),
+  };
+}
+
+async function fetchSubtitles() {
+  const target = subtitleRequestUrl(pageUrl);
+  if (!target) return [];
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), SUBTITLE_FETCH_TIMEOUT_MS);
+  try {
+    const response = await nativeFetch(target, fetchOptions({
+      headers: mergedHeaders({ accept: "application/json, text/plain, */*" }, pageUrl),
+      signal: controller.signal,
+    }));
+    if (!response.ok) throw new Error(`subtitles HTTP ${response.status}`);
+    const list = await response.json();
+    if (!Array.isArray(list)) throw new Error("subtitle list is not an array");
+    const entries = [];
+    for (const item of list) {
+      const entry = sanitizeSubtitle(item);
+      if (!entry) continue;
+      entries.push(entry);
+      if (entries.length >= 80) break;
+    }
+    return entries;
+  } catch (error) {
+    fs.writeSync(2, "[vidfast] subtitles unavailable: " + describeError(error) + "\n");
+    return [];
+  } finally {
+    clearTimeout(timeout);
+  }
+}
+
 const modules = {};
 const cache = {};
 function defineExports(exports, map) {
@@ -596,7 +655,10 @@ function currentStreamUrl() {
 }
 
 async function finish(streamUrl) {
-  const manifest = await probeStreamManifest(streamUrl);
+  const [manifest, subtitles] = await Promise.all([
+    probeStreamManifest(streamUrl),
+    fetchSubtitles(),
+  ]);
   const resolutions = [...manifest.matchAll(/RESOLUTION=(\d+)x(\d+)/gi)]
     .map(match => ({ w: Number(match[1]), h: Number(match[2]) }))
     .filter(item => Number.isFinite(item.w) && Number.isFinite(item.h));
@@ -616,6 +678,7 @@ async function finish(streamUrl) {
     url: streamUrl,
     headers: { "User-Agent": userAgent, Referer: pageUrl, Origin: pageOrigin },
     server: "VidFast",
+    subtitles,
   };
 }
 

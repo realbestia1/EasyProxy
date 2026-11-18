@@ -27,6 +27,28 @@ _RUNNER = os.path.join(
 )
 
 _CINEJOY_HOST_PATTERN = re.compile(r"^(?:www\.)?cinejoy\.[a-z]{2,}$")
+_MAX_SUBTITLES = 80
+
+
+def _sanitize_subtitles(value: Any) -> list[dict]:
+    """Keep the runner's video-source subtitle files, in the same shape."""
+    if not isinstance(value, list):
+        return []
+    entries: list[dict] = []
+    for item in value:
+        if not isinstance(item, dict):
+            continue
+        url = str(item.get("url") or "").strip()
+        if not url.startswith(("http://", "https://")):
+            continue
+        entries.append({
+            "display": str(item.get("display") or "")[:80],
+            "language": str(item.get("language") or "")[:16],
+            "url": url,
+        })
+        if len(entries) >= _MAX_SUBTITLES:
+            break
+    return entries
 
 
 class CinejoyExtractor(BaseExtractor):
@@ -121,5 +143,7 @@ class CinejoyExtractor(BaseExtractor):
         headers.setdefault("Origin", "https://cinejoy.to")
 
         logger.info("Cinejoy: extracted stream %s", stream_url[:100])
-        return self._result(stream_url, headers)
+        result = self._result(stream_url, headers)
+        result["subtitles"] = _sanitize_subtitles(payload.get("subtitles"))
+        return result
 

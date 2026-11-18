@@ -216,6 +216,39 @@ async function encryptedRequest(path, payload) {
   return openResponse(responseBytes, request);
 }
 
+// Video-source subtitles come from the same gateway entry, separate from the
+// HLS master: [{type:"vtt", id:"en", url, language}]. Keep the ones we can serve.
+function sanitizeSubtitles(entry) {
+  const captions = Array.isArray(entry?.captions) ? entry.captions : [];
+  const entries = [];
+  const seenUrls = new Set();
+  const seenLanguages = new Set();
+  for (const caption of captions) {
+    if (!caption || typeof caption !== "object") continue;
+    const url = typeof caption.url === "string" ? caption.url.trim() : "";
+    if (!/^https?:\/\//i.test(url)) continue;
+    const type = String(caption.type || "").trim().toLowerCase();
+    let path = "";
+    try {
+      path = new URL(url).pathname.toLowerCase();
+    } catch {
+      continue;
+    }
+    if (type !== "vtt" && !path.endsWith(".vtt")) continue;
+    const language = String(caption.language || caption.id || "").slice(0, 16);
+    if (seenUrls.has(url) || (language && seenLanguages.has(language))) continue;
+    seenUrls.add(url);
+    if (language) seenLanguages.add(language);
+    entries.push({
+      display: String(caption.id || caption.language || "subtitle").slice(0, 80),
+      language,
+      url,
+    });
+    if (entries.length >= 80) break;
+  }
+  return entries;
+}
+
 async function getServers() {
   const res = await fetchImpl(`${API_URL}/servers`, fetchOptions({
     headers: { "User-Agent": UA, Referer: `${BASE_URL}/`, Origin: BASE_URL },
@@ -327,6 +360,7 @@ async function resolve() {
         },
         server: server.name,
         target,
+        subtitles: sanitizeSubtitles(primaryEntry),
       };
     } catch (err) {
       log(`Server ${server.name} error:`, err.message);
