@@ -61,6 +61,10 @@ _LANGUAGE_ALIASES = {
 }
 _SAFE_HEADERS = re.compile(r"^[A-Za-z0-9-]+$")
 _DUAL_SYNC_TIMEOUT_SECONDS = 120
+# Cloudflare's 524 fires after ~100 s without an origin response; start
+# streaming the master with margin instead of waiting for the whole build.
+DUAL_STREAM_AFTER_SECONDS = 45.0
+_DUAL_HEARTBEAT = b"# EasyProxy DUAL sync in progress\n"
 
 
 def _dual_error_code(error: BaseException) -> str:
@@ -1390,6 +1394,55 @@ class HLSProxyDualMixin:
                 status=502,
             )
 
+    async def _stream_dual_master(self, request, task: asyncio.Task):
+        """Send a chunked HLS master now and finish it when the build ends.
+
+        A cold DUAL build can exceed Cloudflare's ~100 s origin timeout; the
+        heartbeats are valid HLS comment lines that keep the edge reading.
+        """
+        logger.warning(
+            "[DUAL] master build still running after %.1fs; streaming early to keep the edge alive",
+            DUAL_STREAM_AFTER_SECONDS,
+        )
+        response = web.StreamResponse(
+            status=200,
+            headers={
+                "Access-Control-Allow-Origin": "*",
+                "Cache-Control": "no-store",
+                "Content-Type": "application/vnd.apple.mpegurl",
+            },
+        )
+        try:
+            await response.prepare(request)
+            await response.write(b"#EXTM3U\n")
+            # A heartbeat right away keeps the edge happy while the build runs.
+            await response.write(_DUAL_HEARTBEAT)
+            while not task.done():
+                await asyncio.wait({task}, timeout=10.0)
+                if not task.done():
+                    await response.write(_DUAL_HEARTBEAT)
+            try:
+                result = task.result()
+            except Exception:  # noqa: BLE001 - headers are gone, report as HLS
+                logger.exception("[DUAL] master build failed after streaming started")
+                await response.write(b"#EXT-X-ENDLIST\n")
+            else:
+                lines = str((result or {}).get("m3u8") or "").splitlines()
+                if lines and lines[0].strip() == "#EXTM3U":
+                    # HLS allows exactly one #EXTM3U, already sent above.
+                    lines = lines[1:]
+                text = "\n".join(lines)
+                if text:
+                    await response.write((text + "\n").encode("utf-8"))
+            await response.write_eof()
+            return response
+        except (ConnectionResetError, asyncio.CancelledError):
+            task.cancel()
+            raise
+        finally:
+            if not task.done():
+                task.cancel()
+
     async def handle_dual_server_m3u8(self, request):
         """Build a combined HLS master from a Base64 JSON descriptor."""
         if not check_password(request):
@@ -1409,7 +1462,11 @@ class HLSProxyDualMixin:
             ).strip().lower()
             if bypass_query in {"1", "true", "yes", "on"}:
                 body["bypass_audio_language"] = True
-            result = await self._build_dual_result(request, body)
+            task = asyncio.create_task(self._build_dual_result(request, body))
+            done, _ = await asyncio.wait({task}, timeout=DUAL_STREAM_AFTER_SECONDS)
+            if not done:
+                return await self._stream_dual_master(request, task)
+            result = task.result()
             return web.Response(
                 text=result["m3u8"],
                 content_type="application/vnd.apple.mpegurl",

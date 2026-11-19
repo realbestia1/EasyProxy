@@ -950,8 +950,10 @@ class HLSProxyCoreMixin:
                 )
                 return unwrapped
 
-        # Fast path: not a PNG at all -> nothing to do.
-        if not content.startswith(png_sig):
+        # Fast path: not a PNG/WebP wrapper -> nothing to do. WebP wrappers
+        # whose image payload does not decode (a fake RIFF/WEBP header glued
+        # in front of the TS) still need the sync-byte scan below.
+        if not is_image:
             return content
 
         # Generic path: scan for the first TS sync byte (0x47) that repeats at
