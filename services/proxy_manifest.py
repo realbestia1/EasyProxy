@@ -31,6 +31,7 @@ from services.proxy_shared import (
     request_log_context,
     safe_log_route,
 )
+import services.extractor_subtitles as extractor_subtitles
 
 
 _LEGACY_REDIRECT_CACHE: dict = {}
@@ -478,6 +479,17 @@ class HLSProxyManifestHandlerMixin:
                 # dal proxy scelto dall'estrattore.
                 SELECTED_PROXY_CONTEXT.set(selected_proxy)
 
+                if result.get("subtitles"):
+                    extractor_subtitles.remember(
+                        stream_key,
+                        result.get("subtitles"),
+                        stream_headers,
+                        bypass_warp,
+                        bypass_proxies,
+                        selected_proxy,
+                        extractor_key or "",
+                    )
+
                 if selected_proxy:
                     logger.debug(f"🎯 Final selected proxy for manifest: {selected_proxy}")
 
@@ -686,6 +698,7 @@ class HLSProxyManifestHandlerMixin:
                         extractor_key if 'extractor_key' in locals() else request.query.get("extractor_key"),
                         "hls",
                     ),
+                    external_subtitles=extractor_subtitles.lookup(stream_key),
                 )
                 return web.Response(
                     text=rewritten_manifest,

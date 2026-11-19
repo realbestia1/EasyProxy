@@ -20,6 +20,7 @@ import config as _config
 from yarl import URL
 from extractors.base import ExtractorError, RateLimitError
 from services.proxy_shared import seal_clearkey
+import services.extractor_subtitles as extractor_subtitles
 
 
 def _protected_extractor_params(result: dict) -> dict[str, str]:
@@ -327,6 +328,17 @@ class HLSProxyExtractorHandlerMixin:
                 )
                 selected_proxy = None
             SELECTED_PROXY_CONTEXT.set(selected_proxy)
+
+            if result.get("subtitles"):
+                extractor_subtitles.remember(
+                    stream_key,
+                    result.get("subtitles"),
+                    stream_headers,
+                    bypass_warp,
+                    BYPASS_PROXIES_CONTEXT.get() or bypass_proxies,
+                    selected_proxy,
+                    extractor_key or "",
+                )
 
             logger.debug(f"Extractor Debug: Extractor result selected_proxy: {selected_proxy}")
 

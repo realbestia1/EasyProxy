@@ -16,6 +16,7 @@ sys.path.insert(0, getattr(sys, '_MEIPASS', os.path.dirname(os.path.abspath(__fi
 from services.proxy import HLSProxy
 from config import PORT, RECORDINGS_DIR, APP_VERSION
 from services.dual import service as dual_service
+from services import extractor_subtitles
 from services import wg_tunnels
 from services import tor_proxy
 from services.recording_manager import RecordingManager
@@ -48,6 +49,7 @@ def create_app():
     app['proxy'] = proxy
     app['dual_service'] = dual_service
     dual_service.install(app, dual_cache_dir)
+    extractor_subtitles.install(app)
 
     # Initialize recording manager for DVR functionality
     recording_manager = RecordingManager(

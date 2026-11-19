@@ -464,6 +464,73 @@ class ManifestRewriter:
         return reordered
 
     @staticmethod
+    def _inject_external_subtitles(
+        text: str,
+        proxy_base: str,
+        api_password: str,
+        entries: list,
+    ) -> str:
+        """Advertise extractor subtitle files as TYPE=SUBTITLES renditions."""
+        if not entries or "#EXT-X-STREAM-INF:" not in text:
+            return text
+        lines = text.split("\n")
+        group = ""
+        add_attr = True
+        for line in lines:
+            stripped = line.strip()
+            if not stripped.startswith("#EXT-X-STREAM-INF:"):
+                continue
+            existing = attributes(stripped).get("SUBTITLES", "")
+            if existing:
+                group, add_attr = existing, False
+                break
+        if not group:
+            for line in lines:
+                stripped = line.strip()
+                if not stripped.startswith("#EXT-X-MEDIA:"):
+                    continue
+                found = attributes(stripped)
+                if found.get("TYPE", "").upper() == "SUBTITLES" and found.get("GROUP-ID"):
+                    group = found["GROUP-ID"]
+                    break
+        if not group:
+            group = "easyproxy-subs"
+        query = (
+            f"?api_password={urllib.parse.quote(api_password, safe='')}"
+            if api_password
+            else ""
+        )
+        media_lines = []
+        for entry in entries:
+            sid = str(entry.get("sid") or "")
+            if not re.fullmatch(r"[0-9a-f]{16}", sid):
+                continue
+            name = str(entry.get("name") or entry.get("language") or sid).replace('"', "'")
+            language = str(entry.get("language") or "").replace('"', "'")
+            language_attr = f',LANGUAGE="{language}"' if language else ""
+            media_lines.append(
+                f'#EXT-X-MEDIA:TYPE=SUBTITLES,GROUP-ID="{group}",NAME="{name}"{language_attr},'
+                f'DEFAULT={"YES" if entry.get("default") else "NO"},'
+                f'AUTOSELECT={"YES" if entry.get("autoselect", True) else "NO"}'
+                f'{",FORCED=YES" if entry.get("forced") else ""},'
+                f'URI="{proxy_base}/subs/{sid}/subtitles.m3u8{query}"'
+            )
+        if not media_lines:
+            return text
+        output = []
+        inserted = False
+        for line in lines:
+            stripped = line.strip()
+            if stripped.startswith("#EXT-X-STREAM-INF:"):
+                if not inserted:
+                    output.extend(media_lines)
+                    inserted = True
+                if add_attr and not attributes(stripped).get("SUBTITLES"):
+                    line = f'{line.rstrip()},SUBTITLES="{group}"'
+            output.append(line)
+        return "\n".join(output)
+
+    @staticmethod
     async def rewrite_manifest_urls(
         manifest_content: str,
         base_url: str,
@@ -482,6 +549,7 @@ class ManifestRewriter:
         stream_key: str = None,
         max_res: bool = False,
         dual_video_track: int = 0,
+        external_subtitles: list[dict] | None = None,
     ) -> str:
         """Riscrive gli URL nei manifest HLS per passare attraverso il proxy."""
         lines = ManifestRewriter._order_shared_audio_variants(manifest_content.split("\n"))
@@ -651,7 +719,14 @@ class ManifestRewriter:
             rewritten_lines.append(cleaned_inf)
             rewritten_lines.append(proxy_variant_url)
 
-            return ManifestRewriter._ensure_hls_version("\n".join(rewritten_lines))
+            return ManifestRewriter._ensure_hls_version(
+                ManifestRewriter._inject_external_subtitles(
+                    "\n".join(rewritten_lines),
+                    proxy_base,
+                    api_password,
+                    external_subtitles,
+                )
+            )
 
         # --- Logica Standard ---
         header_params = "".join(
@@ -933,4 +1008,7 @@ class ManifestRewriter:
                 line for line in rewritten_lines
                 if "/proxy/hls/segment" in line and not line.startswith("#")
             ])
+        text = ManifestRewriter._inject_external_subtitles(
+            text, proxy_base, api_password, external_subtitles
+        )
         return ManifestRewriter._ensure_hls_version(text)

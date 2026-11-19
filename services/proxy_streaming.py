@@ -7,6 +7,7 @@ from concurrent.futures import ThreadPoolExecutor
 import aiohttp
 from services.dual.video import byte_range, video_only
 import services.dual.prefetch as dual_prefetch
+import services.extractor_subtitles as extractor_subtitles
 import config as _config
 from config import is_proxy_alive
 import services.proxy_shared as _shared
@@ -1922,6 +1923,7 @@ class HLSProxyStreamingMixin:
                         stream_key=stream_key or request.query.get("stream_key"),
                         max_res=self._request_forces_max_res(request, extractor_key, "hls"),
                         dual_video_track=dual_video_track,
+                        external_subtitles=extractor_subtitles.lookup(stream_key),
                     )
                     return web.Response(text=rewritten, headers={
                         "Content-Type": "application/vnd.apple.mpegurl",
