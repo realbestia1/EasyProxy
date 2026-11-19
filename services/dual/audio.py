@@ -126,6 +126,13 @@ class AudioStore:
             raise ValueError("unsupported audio language")
         segments, durations, key_line = self._parse_playlist(playlist, base_url)
         self._validate_segments(segments)
+        # fMP4 audio renditions carry their moov in a separate init segment.
+        init = ""
+        map_match = re.search(r'#EXT-X-MAP:URI="([^"]+)"', playlist)
+        if map_match:
+            init = urljoin(base_url, map_match.group(1))
+            if not valid_public_url(init):
+                raise ValueError("audio init URL is not public HTTPS")
         if len(durations) < len(segments):
             raise ValueError("audio durations do not match segments")
         if key_b64:
@@ -167,6 +174,7 @@ class AudioStore:
                 "headers": safe_headers,
                 "routing": routing,
                 "source_fingerprint": self.source_fingerprint(segments),
+                "init": init,
             }
             self._remember(hid, metadata, key)
         return hid
@@ -381,10 +389,22 @@ class AudioStore:
                 (work / "enc.key").write_bytes(key_bytes)
                 iv = f",IV={metadata['iv']}" if metadata.get("iv") else ""
                 key_line = f'#EXT-X-KEY:METHOD=AES-128,URI="enc.key"{iv}\n'
+            init_line = ""
+            version = 3
+            if metadata.get("init"):
+                await self._download(
+                    metadata["init"],
+                    metadata.get("headers") or {},
+                    work / "init.mp4",
+                    metadata.get("routing"),
+                )
+                init_line = '#EXT-X-MAP:URI="init.mp4"\n'
+                version = 7
             (work / "input.m3u8").write_text(
-                "#EXTM3U\n#EXT-X-VERSION:3\n"
+                f"#EXTM3U\n#EXT-X-VERSION:{version}\n"
                 f"#EXT-X-TARGETDURATION:{int(metadata['durs'][index]) + 1}\n"
                 f"{key_line}"
+                f"{init_line}"
                 f"#EXTINF:{metadata['durs'][index]:.6f},\nsrc.ts\n#EXT-X-ENDLIST\n"
             )
             command = ["ffmpeg", "-v", "error", "-allowed_extensions", "ALL", "-protocol_whitelist", "file,crypto", "-i", "input.m3u8"]

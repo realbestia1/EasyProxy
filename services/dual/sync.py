@@ -532,7 +532,8 @@ class SyncEngine:
             available += metadata["durs"][item]
             if available >= local_seek + sample_seconds + 5:
                 break
-        lines = ["#EXTM3U", "#EXT-X-VERSION:3", "#EXT-X-PLAYLIST-TYPE:VOD",
+        init_url = str(metadata.get("init") or "")
+        lines = ["#EXTM3U", f"#EXT-X-VERSION:{7 if init_url else 3}", "#EXT-X-PLAYLIST-TYPE:VOD",
                  f"#EXT-X-TARGETDURATION:{int(max(metadata['durs'][item] for item in selected)) + 1}"]
         key_bytes = self.audio.key_bytes(hid)
         if key_bytes:
@@ -540,6 +541,11 @@ class SyncEngine:
             lines.append(f'#EXT-X-KEY:METHOD=AES-128,URI="audio.key"{iv}')
             (directory / "audio.key").write_bytes(key_bytes)
         downloads = []
+        if init_url:
+            downloads.append(self._download(
+                init_url, directory / "audio-init.mp4", metadata.get("headers") or {}
+            ))
+            lines.append('#EXT-X-MAP:URI="audio-init.mp4"')
         for number, item in enumerate(selected):
             name = f"audio-{number}.ts"
             downloads.append(self._download(
@@ -885,6 +891,18 @@ class SyncEngine:
 
     async def _measure(self, payload: dict):
         self._downloaded_bytes = 0
+        timing_started = time.monotonic()
+        timing_last = [timing_started]
+
+        def mark(label: str, **extra) -> None:
+            now = time.monotonic()
+            suffix = "".join(f" {key}={value}" for key, value in extra.items())
+            logger.info(
+                "[DUAL] timing %s +%.2fs total=%.2fs%s",
+                label, now - timing_last[0], now - timing_started, suffix,
+            )
+            timing_last[0] = now
+
         media_key = str(payload.get("media_key") or "")
         resolution = int(payload.get("resolution") or 0)
         video_url = str(payload.get("video_url") or "")
@@ -937,6 +955,7 @@ class SyncEngine:
         # stream with a separate audio rendition) would push the audio late.
         if reference_audio_url and not validate_muxed_reference:
             video_start_time = await self._media_start_time(video_url, video_headers)
+        mark("sync.video_entries")
         reference_duration = video_duration
         reference_entries = []
         if reference_audio_url:
@@ -953,6 +972,7 @@ class SyncEngine:
                     video_duration,
                     reference_duration,
                 )
+        mark("sync.reference_entries")
         audio_duration = sum(metadata["durs"])
         reference_matches_video = None
         measurements = []
@@ -1234,6 +1254,7 @@ class SyncEngine:
             )
             constant = await collect_batch(all_positions, "main", accept_early=True)
             logger.info("[DUAL] sync samples complete count=%d", len(measurements))
+            mark("sync.fast_samples", count=len(measurements), accepted=constant is not None)
             if constant is not None:
                 measured, deviation, confidence = constant
                 result = {
@@ -1255,6 +1276,7 @@ class SyncEngine:
                 if validate_muxed_reference:
                     result["reference_matches_video"] = bool(reference_matches_video)
                 result["cache_key"] = cache_key
+                mark("sync.total")
                 return result
 
             result = self._measurement_result(
@@ -1281,6 +1303,7 @@ class SyncEngine:
                     "[DUAL] sync linear samples complete count=%d",
                     len(linear_measurements),
                 )
+                mark("sync.linear_samples", count=len(linear_measurements))
 
             if result["status"] != "ok" and linear_measurements:
                 linear_result = self._measurement_result(
@@ -1317,6 +1340,7 @@ class SyncEngine:
                     # Keep the earlier rejection; a failed last resort is not a new verdict.
                     logger.warning("[DUAL] wide sync failed: %s: %s", type(exc).__name__, str(exc)[:180])
                 logger.info("[DUAL] sync wide samples complete count=%d", len(wide_measurements))
+                mark("sync.wide_samples", count=len(wide_measurements))
                 wide_constant = self._constant_candidate(
                     wide_measurements, minimum=self.SYNC_WIDE_MIN_CORRELATION
                 )
@@ -1363,4 +1387,5 @@ class SyncEngine:
         if reference_audio_url and result.get("status") == "ok":
             result["video_start_time"] = round(video_start_time, 3)
         result["cache_key"] = cache_key
+        mark("sync.total")
         return result

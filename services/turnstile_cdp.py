@@ -42,6 +42,7 @@ _DEFAULT_UA_VERSION = "124.0.0.0"
 _XVFB_LOCK = asyncio.Lock()
 _XVFB_PROCESS: subprocess.Popen | None = None
 _XVFB_DISPLAY: str | None = None
+_XVFB_OWNED = False
 # Chromium needs headroom: on a 1 GB box launching it can trigger the OOM killer.
 _MIN_AVAILABLE_MB = float(os.getenv("TURNSTILE_MIN_AVAILABLE_MB", "400"))
 
@@ -316,7 +317,7 @@ def _chrome_log_tail(path: str, lines: int = 10) -> str:
 
 
 def _stop_xvfb() -> None:
-    global _XVFB_PROCESS
+    global _XVFB_PROCESS, _XVFB_OWNED
     if _XVFB_PROCESS is not None and _XVFB_PROCESS.poll() is None:
         try:
             _XVFB_PROCESS.terminate()
@@ -327,6 +328,7 @@ def _stop_xvfb() -> None:
             except Exception:
                 pass
     _XVFB_PROCESS = None
+    _XVFB_OWNED = False
 
 
 def _display_alive(display: str) -> bool:
@@ -351,7 +353,7 @@ def _display_alive(display: str) -> bool:
 
 async def _ensure_display() -> str | None:
     """Display for headed Chromium: existing X11, or a private Xvfb."""
-    global _XVFB_PROCESS, _XVFB_DISPLAY
+    global _XVFB_PROCESS, _XVFB_DISPLAY, _XVFB_OWNED
     if os.name == "nt":
         return ""
     if sys.platform == "darwin":
@@ -361,15 +363,24 @@ async def _ensure_display() -> str | None:
         return existing
     async with _XVFB_LOCK:
         if _XVFB_DISPLAY:
-            if _XVFB_PROCESS is not None and _XVFB_PROCESS.poll() is None:
+            if _XVFB_OWNED:
+                if _XVFB_PROCESS is not None and _XVFB_PROCESS.poll() is None:
+                    return _XVFB_DISPLAY
+                # Xvfb died: DISPLAY would point at a dead server and Chrome
+                # would exit before writing DevToolsActivePort.
+                logger.warning(
+                    "Turnstile solver: Xvfb on %s is gone, restarting", _XVFB_DISPLAY
+                )
+            elif _display_alive(_XVFB_DISPLAY):
                 return _XVFB_DISPLAY
-            # Xvfb died: DISPLAY would point at a dead server and Chrome would
-            # exit before writing DevToolsActivePort.
-            logger.warning(
-                "Turnstile solver: Xvfb on %s is gone, restarting", _XVFB_DISPLAY
-            )
+            else:
+                logger.warning(
+                    "Turnstile solver: X display %s disappeared, restarting",
+                    _XVFB_DISPLAY,
+                )
             _XVFB_PROCESS = None
             _XVFB_DISPLAY = None
+            _XVFB_OWNED = False
         xvfb = shutil.which("Xvfb")
         if not xvfb:
             return None
@@ -378,6 +389,7 @@ async def _ensure_display() -> str | None:
             if os.path.exists(f"/tmp/.X11-unix/X{number}"):
                 if _display_alive(display):
                     _XVFB_DISPLAY = display
+                    _XVFB_OWNED = False
                     return display
                 logger.debug(
                     "Turnstile solver: stale X socket on %s, skipping", display
@@ -392,6 +404,7 @@ async def _ensure_display() -> str | None:
             if proc.poll() is None and _display_alive(display):
                 _XVFB_PROCESS = proc
                 _XVFB_DISPLAY = display
+                _XVFB_OWNED = True
                 atexit.register(_stop_xvfb)
                 logger.info("Turnstile solver: started Xvfb on %s", display)
                 return display

@@ -23,6 +23,55 @@ from services.proxy_shared import seal_clearkey
 import services.extractor_subtitles as extractor_subtitles
 
 
+# Players retry the same URL in parallel while the registry hands out one
+# shared extractor instance: one extraction, waiter requests join it.
+_EXTRACT_INFLIGHT: dict[tuple, asyncio.Task] = {}
+
+
+def _instance_extract_lock(extractor) -> asyncio.Lock:
+    lock = getattr(extractor, "_extract_lock", None)
+    if lock is None:
+        lock = asyncio.Lock()
+        extractor._extract_lock = lock
+    return lock
+
+
+def _extraction_key(extractor_key, url, kwargs, request) -> tuple:
+    headers = getattr(request, "headers", None) or {}
+    overrides = tuple(
+        sorted(
+            (str(k).lower(), str(v))
+            for k, v in kwargs.items()
+            if str(k).lower().startswith("h_")
+        )
+    )
+    return (
+        extractor_key or "",
+        url,
+        str(kwargs.get("proxy") or ""),
+        bool(kwargs.get("bypass_warp")),
+        str(kwargs.get("warp") or ""),
+        str(kwargs.get("direct") or ""),
+        str(headers.get("User-Agent", "")),
+        str(headers.get("Cookie", "")),
+        overrides,
+    )
+
+
+async def _coalesced_extract(key, factory):
+    task = _EXTRACT_INFLIGHT.get(key)
+    if task is None:
+        task = asyncio.create_task(factory())
+        _EXTRACT_INFLIGHT[key] = task
+
+        def _cleanup(done, key=key):
+            if _EXTRACT_INFLIGHT.get(key) is done:
+                _EXTRACT_INFLIGHT.pop(key, None)
+
+        task.add_done_callback(_cleanup)
+    return await asyncio.shield(task)
+
+
 def _protected_extractor_params(result: dict) -> dict[str, str]:
     params = {
         str(key): str(value)
@@ -246,11 +295,21 @@ class HLSProxyExtractorHandlerMixin:
                         )
 
                 extractor_timeout = getattr(extractor, "REQUEST_TIMEOUT_TOTAL", 30)
-                async with self.hold_extractor(extractor):
-                    result = await asyncio.wait_for(
-                        extractor.extract(url, **extractor_kwargs),
-                        timeout=extractor_timeout,
-                    )
+
+                async def _run_extraction():
+                    # Different URLs can still share one extractor instance:
+                    # serialize them, the instance keeps per-call state.
+                    async with _instance_extract_lock(extractor):
+                        async with self.hold_extractor(extractor):
+                            return await asyncio.wait_for(
+                                extractor.extract(url, **extractor_kwargs),
+                                timeout=extractor_timeout,
+                            )
+
+                result = await _coalesced_extract(
+                    _extraction_key(extractor_key, url, extractor_kwargs, request),
+                    _run_extraction,
+                )
             finally:
                 self._retire_extractors([extractor])
             result_query_params = _protected_extractor_params(result)
