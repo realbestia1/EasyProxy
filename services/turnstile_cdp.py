@@ -44,6 +44,9 @@ _XVFB_LOCK = asyncio.Lock()
 _XVFB_PROCESS: subprocess.Popen | None = None
 _XVFB_DISPLAY: str | None = None
 _XVFB_OWNED = False
+# Xvfb holds ~75 MB forever; stop it after a solve-free idleness window.
+_XVFB_LAST_USE = 0.0
+_ACTIVE_SOLVES = 0
 # Chromium needs headroom: on a 1 GB box launching it can trigger the OOM killer.
 _MIN_AVAILABLE_MB = float(os.getenv("TURNSTILE_MIN_AVAILABLE_MB", "400"))
 
@@ -332,6 +335,21 @@ def _stop_xvfb() -> None:
     _XVFB_OWNED = False
 
 
+def stop_xvfb_if_idle(idle_seconds: float = 300.0) -> bool:
+    """Stop the private Xvfb once no solve ran for `idle_seconds`."""
+    global _XVFB_LAST_USE
+    if _XVFB_PROCESS is None or _XVFB_PROCESS.poll() is not None:
+        return False
+    if _ACTIVE_SOLVES > 0:
+        return False
+    if time.monotonic() - _XVFB_LAST_USE < idle_seconds:
+        return False
+    _stop_xvfb()
+    _XVFB_LAST_USE = 0.0
+    logger.info("Turnstile solver: stopped idle Xvfb after %.0fs", idle_seconds)
+    return True
+
+
 def _display_alive(display: str) -> bool:
     """True when the X socket of ``display`` accepts a connection.
 
@@ -406,6 +424,7 @@ async def _ensure_display() -> str | None:
                 _XVFB_PROCESS = proc
                 _XVFB_DISPLAY = display
                 _XVFB_OWNED = True
+                _XVFB_LAST_USE = time.monotonic()
                 atexit.register(_stop_xvfb)
                 logger.info("Turnstile solver: started Xvfb on %s", display)
                 return display
@@ -656,25 +675,32 @@ async def _solve_once(
     mode: str = "stream",
     parent_url: str | None = None,
 ) -> dict | None:
-    launched = await launch_browser(proxy=proxy)
-    if not launched:
-        return None
-    proc, version, ua = launched
+    global _ACTIVE_SOLVES, _XVFB_LAST_USE
+    _ACTIVE_SOLVES += 1
+    _XVFB_LAST_USE = time.monotonic()
     try:
-        async with aiohttp.ClientSession() as session:
-            async with session.ws_connect(
-                version["webSocketDebuggerUrl"], max_msg_size=0
-            ) as ws:
-                return await _drive(ws, page_url, timeout, ua, mode, parent_url)
-    finally:
+        launched = await launch_browser(proxy=proxy)
+        if not launched:
+            return None
+        proc, version, ua = launched
         try:
-            proc.terminate()
-            proc.wait(timeout=10)
-        except Exception:
+            async with aiohttp.ClientSession() as session:
+                async with session.ws_connect(
+                    version["webSocketDebuggerUrl"], max_msg_size=0
+                ) as ws:
+                    return await _drive(ws, page_url, timeout, ua, mode, parent_url)
+        finally:
             try:
-                proc.kill()
+                proc.terminate()
+                proc.wait(timeout=10)
             except Exception:
-                pass
+                try:
+                    proc.kill()
+                except Exception:
+                    pass
+    finally:
+        _ACTIVE_SOLVES = max(0, _ACTIVE_SOLVES - 1)
+        _XVFB_LAST_USE = time.monotonic()
 
 
 async def _wait_devtools_port(profile: str) -> int | None:

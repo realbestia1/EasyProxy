@@ -286,6 +286,11 @@ class HLSProxyCoreMixin:
                 # health probes do not count as playback activity.
                 await self._recycle_idle_warp(time.monotonic())
 
+                # 6. Stop the private Xvfb (~75 MB) once no Turnstile solve ran
+                # for its idle window.
+                from services import turnstile_cdp
+                turnstile_cdp.stop_xvfb_if_idle()
+
             except Exception as e:
                 logger.error("Cleanup stale sessions error: %s", e)
                 await asyncio.sleep(10)
@@ -1592,6 +1597,21 @@ class HLSProxyCoreMixin:
         )
         async with HLSProxyCoreMixin.hold_extractor(self, extractor):
             yield extractor
+
+    async def _close_extractor_now(self, extractor):
+        """Drop and close an extractor immediately (failed extraction)."""
+        if extractor is None:
+            return
+        for key, value in list(self.extractors.items()):
+            if value is extractor:
+                self.extractors.pop(key, None)
+                getattr(self, "_extractor_atimes", {}).pop(key, None)
+        close = getattr(extractor, "close", None)
+        if close:
+            try:
+                await close()
+            except Exception:
+                pass
 
     def _retire_extractors(self, extractors):
         """Detach extractor instances from the cache and drain their sessions:

@@ -15,6 +15,7 @@ from services.proxy_shared import (
 import config_store
 import asyncio
 import base64
+import time
 import urllib.parse
 import config as _config
 from yarl import URL
@@ -26,6 +27,38 @@ import services.extractor_subtitles as extractor_subtitles
 # Players retry the same URL in parallel while the registry hands out one
 # shared extractor instance: one extraction, waiter requests join it.
 _EXTRACT_INFLIGHT: dict[tuple, asyncio.Task] = {}
+
+# A URL whose extraction keeps failing (e.g. a Turnstile page that launches
+# Chromium and never solves) is not retried for a while, so a player loop
+# cannot keep a browser process alive forever.
+_EXTRACT_FAILS: dict[str, int] = {}
+_EXTRACT_BACKOFF_UNTIL: dict[str, float] = {}
+EXTRACT_FAIL_BACKOFF_SECONDS = 300.0
+_EXTRACT_MAPS_MAX = 512
+
+
+def _trim(map_: dict) -> None:
+    while len(map_) > _EXTRACT_MAPS_MAX:
+        map_.pop(next(iter(map_)), None)
+
+
+def _note_extract_failure(url: str) -> None:
+    count = _EXTRACT_FAILS.get(url, 0) + 1
+    _EXTRACT_FAILS[url] = count
+    if count >= 2:
+        _EXTRACT_BACKOFF_UNTIL[url] = time.monotonic() + EXTRACT_FAIL_BACKOFF_SECONDS
+    _trim(_EXTRACT_FAILS)
+    _trim(_EXTRACT_BACKOFF_UNTIL)
+
+
+def _note_extract_success(url: str) -> None:
+    _EXTRACT_FAILS.pop(url, None)
+    _EXTRACT_BACKOFF_UNTIL.pop(url, None)
+
+
+def _extract_backoff_active(url: str) -> bool:
+    blocked_until = _EXTRACT_BACKOFF_UNTIL.get(url)
+    return bool(blocked_until and time.monotonic() < blocked_until)
 
 
 def _instance_extract_lock(extractor) -> asyncio.Lock:
@@ -138,6 +171,7 @@ class HLSProxyExtractorHandlerMixin:
         url = None
         extractor = None
         extractor_key = None
+        failed = True
 
         try:
             # Supporta sia 'url' che 'd' come parametro
@@ -249,6 +283,13 @@ class HLSProxyExtractorHandlerMixin:
                 pass
 
             host_param = request.query.get("host")
+            if _extract_backoff_active(url):
+                wait = _EXTRACT_BACKOFF_UNTIL[url] - time.monotonic()
+                logger.warning("⏸️ Extractor backoff (%.0fs left) [%s]", wait, url)
+                return web.Response(
+                    status=503,
+                    text="Extractor temporarily unavailable (backoff)",
+                )
             redirect_stream = (
                 request.query.get("redirect_stream", "false").lower() == "true"
             )
@@ -310,8 +351,10 @@ class HLSProxyExtractorHandlerMixin:
                     _extraction_key(extractor_key, url, extractor_kwargs, request),
                     _run_extraction,
                 )
+                failed = False
             finally:
-                self._retire_extractors([extractor])
+                if not failed:
+                    self._retire_extractors([extractor])
             result_query_params = _protected_extractor_params(result)
             extractor_key = getattr(extractor, "extractor_name", None) or self._extractor_key_for_instance(extractor)
             if extractor_key:
@@ -574,6 +617,7 @@ class HLSProxyExtractorHandlerMixin:
                 ),
                 stream_url[:50],
             )
+            _note_extract_success(url)
             return web.json_response(response_data)
 
         except Exception as e:
@@ -611,8 +655,13 @@ class HLSProxyExtractorHandlerMixin:
                 extractor=extractor,
             )
             if isinstance(e, asyncio.CancelledError):
+                # Client disconnected: another waiter may still use the extractor.
+                failed = False
                 logger.info("Extractor request cancelled (client disconnected) [%s]", error_context)
                 raise
+            failed = True
+            if url:
+                _note_extract_failure(url)
             if isinstance(e, RateLimitError):
                 logger.warning(
                     "⏳ Extractor rate limited: %s [%s]",
@@ -656,4 +705,10 @@ class HLSProxyExtractorHandlerMixin:
             SELECTED_PROXY_CONTEXT.reset(proxy_token)
             STRICT_PROXY_CONTEXT.reset(strict_proxy_token)
             # Registry instances are shared. Their owner closes them at shutdown,
-            # not when one of several concurrent requests finishes.
+            # not when one of several concurrent requests finishes. A failed
+            # extraction is the exception: releasing its sockets right away is
+            # what stops the "Unclosed client session" leaks.
+            if failed:
+                await self._close_extractor_now(extractor)
+            else:
+                self._retire_extractors([extractor])
