@@ -590,6 +590,30 @@
                 </table>
             </div>
         </div>
+
+        <!-- Extractor Requests -->
+        <div class="card card-wide">
+            <h2><span class="icon">≡</span> Extractor Requests <span id="extractor-active-count" class="status connected" style="margin:0 0 0 8px;font-size:0.7rem;padding:2px 8px">0 active</span> <span id="extractor-backoff-count" class="status" style="margin:0 0 0 8px;font-size:0.7rem;padding:2px 8px;background:rgba(255,170,0,0.12);color:var(--accent-warning)">0 backoff</span></h2>
+            <p class="help-text">Live extractor requests, recent results and temporary backoffs</p>
+            <div style="margin-top:12px;overflow-x:auto;border:1px solid var(--border-primary);border-radius:10px;background:rgba(255,255,255,0.01)">
+                <table style="width:100%;border-collapse:collapse;text-align:left;font-size:0.8rem">
+                    <thead>
+                        <tr style="border-bottom:1px solid var(--border-primary);color:var(--text-secondary);background:rgba(255,255,255,0.02)">
+                            <th style="padding:12px 16px">Time</th>
+                            <th style="padding:12px 16px">Extractor</th>
+                            <th style="padding:12px 16px">Request</th>
+                            <th style="padding:12px 16px">Status</th>
+                            <th style="padding:12px 16px;text-align:right">Duration</th>
+                        </tr>
+                    </thead>
+                    <tbody id="extractor-activity-list">
+                        <tr>
+                            <td colspan="5" style="padding:24px;text-align:center;color:var(--text-muted)">No extractor requests yet</td>
+                        </tr>
+                    </tbody>
+                </table>
+            </div>
+        </div>
     </div>
 </div>
 
@@ -794,8 +818,30 @@ function renderActiveStreams(streams) {
     }
 }
 
-function setToggle(id, value) {
-    const el = document.getElementById(id);
+function renderExtractorActivity(data) {
+    const list = document.getElementById('extractor-activity-list');
+    const active = document.getElementById('extractor-active-count');
+    const backoff = document.getElementById('extractor-backoff-count');
+    if (!list || !active || !backoff) return;
+    const rows = (data && data.recent) || [];
+    active.textContent = `${(data && data.active) || 0} active`;
+    backoff.textContent = `${(data && data.backoff) || 0} backoff`;
+    if (!rows.length) { list.innerHTML = '<tr><td colspan="5" style="padding:24px;text-align:center;color:var(--text-muted)">No extractor requests yet</td></tr>'; return; }
+    const colors = {ok:'var(--accent-success)', error:'var(--accent-error)', running:'var(--accent-warning)', backoff:'var(--text-muted)', cancelled:'var(--text-muted)'};
+    list.innerHTML = rows.map(r => {
+        const when = new Date((r.time || 0) * 1000).toLocaleTimeString();
+        const dur = r.duration_ms == null ? '—' : (r.duration_ms / 1000).toFixed(1) + 's';
+        return `<tr style="border-bottom:1px solid var(--border-primary)">
+            <td style="padding:10px 16px;color:var(--text-muted)">${escHtml(when)}</td>
+            <td style="padding:10px 16px;font-weight:600">${escHtml(r.extractor || 'auto')}</td>
+            <td style="padding:10px 16px;word-break:break-all;max-width:520px" title="${escHtml(r.url || '')}">${escHtml(r.url || '')}</td>
+            <td style="padding:10px 16px;color:${colors[r.status] || 'var(--text-muted)'};font-weight:600">${escHtml(r.status || '')}</td>
+            <td style="padding:10px 16px;text-align:right;color:var(--text-muted)">${dur}</td>
+          </tr>`;
+    }).join('');
+}
+
+function setToggle(id, value) {    const el = document.getElementById(id);
     const label = document.getElementById(id.replace('-toggle', '-label'));
     el.classList.toggle('active', value);
     if (label) {
@@ -863,6 +909,7 @@ async function loadConfig() {
         }
 
         renderActiveStreams(config.active_streams);
+    renderExtractorActivity(config.extractor_activity);
 
     } catch(e) {
         toast('Error loading config: ' + e.message, 'error');
@@ -1338,6 +1385,7 @@ setInterval(async () => {
                 document.getElementById('net-speed').textContent = formatSpeed(net.recv + net.sent) + ' total';
             }
             renderActiveStreams(tempConfig.active_streams);
+            renderExtractorActivity(tempConfig.extractor_activity);
             updateSpeedtestButtons(tempConfig);
         }
     } catch (e) {

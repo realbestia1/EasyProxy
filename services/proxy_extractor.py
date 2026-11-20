@@ -15,8 +15,10 @@ from services.proxy_shared import (
 import config_store
 import asyncio
 import base64
+import itertools
 import time
 import urllib.parse
+from collections import deque
 import config as _config
 from yarl import URL
 from extractors.base import ExtractorError, RateLimitError
@@ -35,6 +37,79 @@ _EXTRACT_FAILS: dict[str, int] = {}
 _EXTRACT_BACKOFF_UNTIL: dict[str, float] = {}
 EXTRACT_FAIL_BACKOFF_SECONDS = 300.0
 _EXTRACT_MAPS_MAX = 512
+
+# Admin panel: what the extractor endpoint is doing right now and recently.
+_EXTRACT_ACTIVITY: deque[dict] = deque(maxlen=50)
+_EXTRACT_ACTIVE: dict[int, dict] = {}
+_EXTRACT_ACTIVITY_SEQ = itertools.count(1)
+_EXTRACT_HIDDEN_PARAMS = {"api_password", "drm_token", "token", "t", "key", "key_id", "stream_key"}
+
+
+def _redact_extract_url(url: str) -> str:
+    """Extractor URL without secrets, short enough for a table cell."""
+    try:
+        parts = urllib.parse.urlsplit(url or "")
+    except Exception:
+        return (url or "")[:160]
+    pairs = urllib.parse.parse_qsl(parts.query, keep_blank_values=True)
+    kept = [
+        f"{key}={value[:80]}"
+        for key, value in pairs
+        if key not in _EXTRACT_HIDDEN_PARAMS
+    ][:4]
+    text = f"{parts.scheme}://{parts.netloc}{parts.path}"
+    if kept:
+        text += "?" + "&".join(kept)
+    return text[:160]
+
+
+def _activity_start(url, extractor, client):
+    rec = {
+        "id": next(_EXTRACT_ACTIVITY_SEQ),
+        "time": time.time(),
+        "url": _redact_extract_url(url),
+        "extractor": extractor or "auto",
+        "client": client or "",
+        "status": "running",
+        "duration_ms": None,
+        "error": "",
+    }
+    _EXTRACT_ACTIVITY.append(rec)
+    _EXTRACT_ACTIVE[rec["id"]] = rec
+    return rec
+
+
+def _activity_finish(rec, status, error=""):
+    if not rec:
+        return
+    _EXTRACT_ACTIVE.pop(rec["id"], None)
+    rec["status"] = status
+    rec["duration_ms"] = int((time.time() - rec["time"]) * 1000)
+    rec["error"] = (error or "")[:160]
+
+
+def _activity_backoff(url, extractor, client):
+    rec = {
+        "id": next(_EXTRACT_ACTIVITY_SEQ),
+        "time": time.time(),
+        "url": _redact_extract_url(url),
+        "extractor": extractor or "auto",
+        "client": client or "",
+        "status": "backoff",
+        "duration_ms": 0,
+        "error": "temporary backoff",
+    }
+    _EXTRACT_ACTIVITY.append(rec)
+
+
+def extractor_activity():
+    now = time.monotonic()
+    recent = [dict(r) for r in list(_EXTRACT_ACTIVITY)[-20:]][::-1]
+    return {
+        "active": len(_EXTRACT_ACTIVE),
+        "backoff": sum(1 for until in _EXTRACT_BACKOFF_UNTIL.values() if until > now),
+        "recent": recent,
+    }
 
 
 def _trim(map_: dict) -> None:
@@ -172,6 +247,9 @@ class HLSProxyExtractorHandlerMixin:
         extractor = None
         extractor_key = None
         failed = True
+        activity = None
+        cancelled = False
+        error_text = ""
 
         try:
             # Supporta sia 'url' che 'd' come parametro
@@ -286,10 +364,14 @@ class HLSProxyExtractorHandlerMixin:
             if _extract_backoff_active(url):
                 wait = _EXTRACT_BACKOFF_UNTIL[url] - time.monotonic()
                 logger.warning("⏸️ Extractor backoff (%.0fs left) [%s]", wait, url)
+                _activity_backoff(url, host_param, _config.get_client_ip(request))
                 return web.Response(
                     status=503,
                     text="Extractor temporarily unavailable (backoff)",
                 )
+            activity = _activity_start(
+                url, host_param or "auto", _config.get_client_ip(request)
+            )
             redirect_stream = (
                 request.query.get("redirect_stream", "false").lower() == "true"
             )
@@ -359,6 +441,8 @@ class HLSProxyExtractorHandlerMixin:
             extractor_key = getattr(extractor, "extractor_name", None) or self._extractor_key_for_instance(extractor)
             if extractor_key:
                 extractor_key = extractor_key.replace("_direct", "").replace("_noproxy", "")
+            if activity:
+                activity["extractor"] = extractor_key or activity["extractor"]
             stream_key = request.query.get("stream_key")
             if not stream_key:
                 source_key = self._stream_key_for_url(
@@ -642,6 +726,7 @@ class HLSProxyExtractorHandlerMixin:
             ) or isinstance(e, (asyncio.TimeoutError, asyncio.CancelledError, ExtractorError))  # ponytail: expected extractor failures shouldn't print a traceback
 
             error_desc = str(e) or type(e).__name__
+            error_text = error_desc
             log_proxy = selected_proxy or (
                 getattr(extractor, "last_used_proxy", None)
                 or getattr(extractor, "selected_proxy", None)
@@ -657,6 +742,7 @@ class HLSProxyExtractorHandlerMixin:
             if isinstance(e, asyncio.CancelledError):
                 # Client disconnected: another waiter may still use the extractor.
                 failed = False
+                cancelled = True
                 logger.info("Extractor request cancelled (client disconnected) [%s]", error_context)
                 raise
             failed = True
@@ -712,3 +798,8 @@ class HLSProxyExtractorHandlerMixin:
                 await self._close_extractor_now(extractor)
             else:
                 self._retire_extractors([extractor])
+            _activity_finish(
+                activity,
+                "cancelled" if cancelled else ("error" if failed else "ok"),
+                error_text,
+            )

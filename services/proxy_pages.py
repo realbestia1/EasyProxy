@@ -665,6 +665,8 @@ class HLSProxyPagesMixin:
         config["available_extractors"] = self._get_available_extractors()
         config["system_stats"] = get_system_stats()
         config["active_streams"] = _shared.get_active_streams()
+        from services.proxy_extractor import extractor_activity
+        config["extractor_activity"] = extractor_activity()
         return web.json_response(config)
 
     def _get_available_extractors(self):
