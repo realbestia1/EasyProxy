@@ -765,8 +765,8 @@ class DLStreamsExtractor(BaseExtractor):
 
     async def _solve_premium_ticket(
         self, page_url: str, parent_url: str | None = None
-    ) -> str | None:
-        """Solve Turnstile on the premium player and return its ticket."""
+    ) -> tuple[str, str | None] | None:
+        """Solve Turnstile on the premium player and return (ticket, solver UA)."""
         if str(os.getenv("DLSTREAMS_TURNSTILE_SOLVER", "1")).strip().lower() in {"0", "off", "false", "no"}:
             return None
         try:
@@ -774,10 +774,16 @@ class DLStreamsExtractor(BaseExtractor):
         except Exception as e:
             logger.debug("DLStreams: premium solver unavailable: %s", e)
             return None
+        proxy = _cfg.get_solver_proxy_url(getattr(self, "_session_proxy", None))
+        logger.debug(
+            "DLStreams: premium solver via %s (token route %s)",
+            proxy,
+            getattr(self, "_session_proxy", None),
+        )
         try:
             solution = await solve_premium_ticket(
                 page_url,
-                proxy=getattr(self, "_session_proxy", None),
+                proxy=proxy,
                 parent_url=parent_url,
             )
         except Exception as e:
@@ -786,7 +792,7 @@ class DLStreamsExtractor(BaseExtractor):
         if not solution or not solution.get("success") or not solution.get("ticket"):
             return None
         logger.info("DLStreams: premium ticket obtained for %s", page_url)
-        return solution["ticket"]
+        return solution["ticket"], solution.get("_solver_user_agent")
 
     async def _solve_gated_player(
         self, page_url: str, parent_url: str | None = None
@@ -804,10 +810,16 @@ class DLStreamsExtractor(BaseExtractor):
         except Exception as e:
             logger.debug("DLStreams: Turnstile solver unavailable: %s", e)
             return None
+        proxy = _cfg.get_solver_proxy_url(getattr(self, "_session_proxy", None))
+        logger.debug(
+            "DLStreams: player solver via %s (playback route %s)",
+            proxy,
+            getattr(self, "_session_proxy", None),
+        )
         try:
             solution = await solve_player_stream(
                 page_url,
-                proxy=getattr(self, "_session_proxy", None),
+                proxy=proxy,
                 parent_url=parent_url,
             )
         except Exception as e:
@@ -825,6 +837,60 @@ class DLStreamsExtractor(BaseExtractor):
         if not stream_url:
             return None
         return stream_url, solution.get("_solver_user_agent")
+
+    async def _premium_token_or_solver(
+        self,
+        session,
+        stream_url: str,
+        playback_headers: dict,
+        iframe_src: str,
+        parent_url: str | None,
+        deadline: float,
+    ) -> tuple[str, float]:
+        """Token without a ticket first; Turnstile only when the edge asks."""
+        tokenized = await self._with_premium_token(
+            session, stream_url, playback_headers
+        )
+        if tokenized != stream_url and "t=" in tokenized:
+            return tokenized, deadline
+        parts = premium_playlist_parts(stream_url)
+        if not parts:
+            return tokenized, deadline
+        premium_ticket = None
+        ticket_key = (
+            parts[0],
+            parts[1],
+            getattr(self, "last_used_proxy", None) or "direct",
+        )
+        cached_ticket = _premium_tickets.get(ticket_key)
+        if cached_ticket and cached_ticket[1] > time.monotonic():
+            premium_ticket = cached_ticket[0]
+        else:
+            solve_started = time.monotonic()
+            # The embedding player page: loading dembed.st directly serves a
+            # stub without the Turnstile widget.
+            solved_ticket = await self._solve_premium_ticket(
+                iframe_src, parent_url=parent_url
+            )
+            # Chromium runs outside the extraction budget: hand the remaining
+            # work the time the solver consumed.
+            deadline += time.monotonic() - solve_started
+            if solved_ticket:
+                premium_ticket, solver_ua = solved_ticket
+                if solver_ua:
+                    # The ticket is bound to the solver IP and UA: the token
+                    # request must look like that browser.
+                    playback_headers["User-Agent"] = solver_ua
+                _premium_tickets[ticket_key] = (
+                    premium_ticket,
+                    _premium_ticket_deadline(premium_ticket),
+                )
+        return (
+            await self._with_premium_token(
+                session, stream_url, playback_headers, ticket=premium_ticket
+            ),
+            deadline,
+        )
 
     async def _fetch_playlist(
         self, session, url: str, headers: dict, timeout: float
@@ -1227,37 +1293,24 @@ class DLStreamsExtractor(BaseExtractor):
                 # so hand over the tokenized URL (validation bundles it too).
                 # Only the premium player gates that token behind Turnstile;
                 # its ticket lasts hours, so Chrome opens on a cache miss only.
-                premium_ticket = None
                 premium_parts = premium_playlist_parts(stream_url)
                 if premium_parts and (
                     "dembed.st" in iframe_src or "premiumtv" in iframe_src
                 ):
-                    ticket_key = (
-                        premium_parts[0],
-                        premium_parts[1],
-                        getattr(self, "last_used_proxy", None) or "direct",
+                    # Token first: Chromium only starts when the edge asks for a
+                    # ticket, so a valid session never pays the solver cost.
+                    stream_url, deadline = await self._premium_token_or_solver(
+                        session,
+                        stream_url,
+                        playback_headers,
+                        iframe_src,
+                        candidate,
+                        deadline,
                     )
-                    cached_ticket = _premium_tickets.get(ticket_key)
-                    if cached_ticket and cached_ticket[1] > time.monotonic():
-                        premium_ticket = cached_ticket[0]
-                    else:
-                        solve_started = time.monotonic()
-                        # The embedding player page: loading dembed.st directly
-                        # serves a stub without the Turnstile widget.
-                        premium_ticket = await self._solve_premium_ticket(
-                            iframe_src, parent_url=candidate
-                        )
-                        # Chromium runs outside the extraction budget: hand the
-                        # remaining work the time the solver consumed.
-                        deadline += time.monotonic() - solve_started
-                        if premium_ticket:
-                            _premium_tickets[ticket_key] = (
-                                premium_ticket,
-                                _premium_ticket_deadline(premium_ticket),
-                            )
-                stream_url = await self._with_premium_token(
-                    session, stream_url, playback_headers, ticket=premium_ticket
-                )
+                else:
+                    stream_url = await self._with_premium_token(
+                        session, stream_url, playback_headers
+                    )
                 budget = _remaining()
                 if is_pin and not last_pin_try:
                     budget = min(budget, self.PIN_ATTEMPT_BUDGET)
