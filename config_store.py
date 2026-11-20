@@ -1,5 +1,6 @@
 import json
 import os
+import re
 import sys
 import logging
 import threading
@@ -22,6 +23,18 @@ _CONFIG_FILE = os.path.join(_CONFIG_DIR, "config.json")
 # Public alias: tunnel profiles and other persistent files live beside config.json.
 CONFIG_DIR = _CONFIG_DIR
 DEFAULT_RECORDINGS_DIR = os.path.join(_CONFIG_DIR, "recordings")
+
+_WINDOWS_ABS_RE = re.compile(r"^[A-Za-z]:[\\/]")
+
+
+def portable_recordings_dir(value, default=None, os_name=None):
+    """A Windows absolute path is unusable when ./data is mounted in Linux."""
+    os_name = os.name if os_name is None else os_name
+    text = str(value or "").strip()
+    fallback = default or DEFAULT_RECORDINGS_DIR
+    if os_name != "nt" and _WINDOWS_ABS_RE.match(text):
+        return fallback
+    return text or fallback
 
 DEFAULT_CONFIG = {
     "enable_warp": False,
@@ -89,7 +102,7 @@ def _load():
         os.makedirs(_CONFIG_DIR, exist_ok=True)
         if os.path.exists(_CONFIG_FILE):
             try:
-                with open(_CONFIG_FILE, "r", encoding="utf-8") as f:
+                with open(_CONFIG_FILE, "r", encoding="utf-8-sig") as f:
                     data = json.load(f)
                 merged = dict(DEFAULT_CONFIG)
                 merged.update(data)
@@ -100,6 +113,8 @@ def _load():
                         if item not in combined:
                             combined.append(item)
                     merged["warp_exclude_domains"] = combined
+                # Fix the path in memory only: Windows keeps writing its own value.
+                merged["recordings_dir"] = portable_recordings_dir(merged.get("recordings_dir"))
                 _config_data = merged
                 logger.debug("Loaded config from %s", _CONFIG_FILE)
                 return

@@ -20,6 +20,9 @@ class RecordingDB:
         """Get a persistent connection per thread."""
         if not hasattr(self._local, 'conn') or self._local.conn is None:
             self._local.conn = sqlite3.connect(self.db_path)
+            # Docker Desktop bind mounts do not support SQLite's mmap: reopening a WAL
+            # database on ./data raises SIGBUS. Keep every connection mmap-free.
+            self._local.conn.execute("PRAGMA mmap_size=0")
             self._local.conn.row_factory = sqlite3.Row
             self._local.conn.execute("PRAGMA journal_mode=WAL")
             self._local.conn.execute("PRAGMA busy_timeout=5000")
