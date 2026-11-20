@@ -18,6 +18,21 @@ import { Readable } from 'node:stream';
 const DEBUG = process.env.PPV_DEBUG === '1';
 function L(...a) { if (DEBUG) console.error('[ppv-bridge]', ...a); }
 
+// The bridge holds ~60 MB of Node runtime, so it does not outlive playback:
+// 5 min without /m or /s means playback stopped; live segments arrive every few seconds.
+const IDLE_MS = Number(process.env.PPV_BRIDGE_IDLE_MS || 5 * 60 * 1000); // 0 disables
+let idleTimer = null;
+function touch() {
+  if (!IDLE_MS) return;
+  clearTimeout(idleTimer);
+  idleTimer = setTimeout(() => {
+    L('idle shutdown');
+    server.close(() => process.exit(0));
+    setTimeout(() => process.exit(0), 5000).unref();
+  }, IDLE_MS);
+  idleTimer.unref();
+}
+
 const UA = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/147.0.0.0 Safari/537.36';
 const TIMEOUT_MS = 25000;
 const MAX_REDIRECTS = 5;
@@ -225,6 +240,7 @@ const server = http.createServer((req, res) => {
     return res.end('ok');
   }
   if (parsed.pathname !== '/m' && parsed.pathname !== '/s') return sendError(res, 404, 'not found');
+  touch();
 
   const target = parsed.searchParams.get('u') || '';
   const referer = parsed.searchParams.get('r') || '';
@@ -253,4 +269,5 @@ server.listen(Number(process.env.PPV_BRIDGE_PORT) || 0, '127.0.0.1', () => {
   port = server.address().port;
   process.stdout.write(`READY ${port}\n`);
   L('listening on', port);
+  touch();
 });

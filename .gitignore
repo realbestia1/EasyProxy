@@ -30,7 +30,6 @@ config.json
 /recordings/
 /data-test-warp/
 /.pytest_cache/
-/tests
 /output
 /node_modules
 /dist/
@@ -38,3 +37,4 @@ config.json
 /bin/
 /release_assets/
 package-lock.json
+/tests

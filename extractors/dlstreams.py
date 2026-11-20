@@ -65,6 +65,8 @@ PREMIUM_PLAYLIST_RE = re.compile(
 )
 PREMIUM_TOKEN_PATH = "/api/playlist-token"
 PREMIUM_TOKEN_DEFAULT_ORIGIN = "https://dembed.st"
+# The edge answers only these Origins; anything else makes the token request fail.
+PREMIUM_TOKEN_ORIGINS = frozenset({PREMIUM_TOKEN_DEFAULT_ORIGIN, "https://dlive.sx"})
 PREMIUM_TOKEN_DEFAULT_TTL = 120.0
 PREMIUM_TOKEN_MIN_TTL = 20.0
 # Renew early: the edge can reject a token a moment before its nominal expiry.
@@ -157,7 +159,9 @@ def premium_token_origin(headers: dict = None, url: str = "") -> str:
             continue
         parsed = urlparse(str(value))
         if parsed.scheme in ("http", "https") and parsed.netloc:
-            return f"{parsed.scheme}://{parsed.netloc}"
+            origin = f"{parsed.scheme}://{parsed.netloc}"
+            if origin in PREMIUM_TOKEN_ORIGINS:
+                return origin
     return PREMIUM_TOKEN_DEFAULT_ORIGIN
 
 
