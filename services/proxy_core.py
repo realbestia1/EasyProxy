@@ -20,6 +20,7 @@ import psutil
 import config_store
 import config as _config
 import services.wg_tunnels as wg_tunnels
+from services import ram
 from services.session_lifetime import retire_session
 from services.socks_bridge import close_socks_bridges
 
@@ -95,11 +96,76 @@ class SharedSessionWrapper:
         pass
 
 
+class _DrmGate:
+    """Admission control based on the RAM actually available right now."""
+
+    def __init__(self, margin: int):
+        self.margin = margin
+        self.used = 0
+        self._cond = asyncio.Condition()
+
+    def _limit(self) -> int:
+        available = ram.available_bytes()
+        if available:
+            return max(0, available - self.margin)
+        total = ram.total_bytes()
+        return max(64 * 1024 * 1024, int(total * 0.25)) if total else 64 * 1024 * 1024
+
+    async def acquire(self, weight: int) -> int:
+        async with self._cond:
+            while True:
+                limit = self._limit()
+                # A single decrypt must always be able to run, even if its
+                # estimate exceeds the current headroom.
+                if self.used == 0 or self.used + weight <= limit:
+                    self.used += weight
+                    return weight
+                await self._cond.wait()
+
+    async def release(self, weight: int) -> None:
+        async with self._cond:
+            self.used = max(0, self.used - weight)
+            self._cond.notify_all()
+
+
+class _DrmSlot:
+    def __init__(self, limiter, weight):
+        self.limiter = limiter
+        self.weight = weight
+        self.taken = 0
+
+    async def __aenter__(self):
+        self.taken = await self.limiter.acquire(self.weight)
+        return self
+
+    async def __aexit__(self, *exc):
+        await self.limiter.release(self.taken)
+
+
 class HLSProxyCoreMixin:
 
     # Extractor polls for the same source+client reuse one playback namespace
     # for this long (matches the 60s per-stream session idle TTL).
     STREAM_KEY_REUSE_SECONDS = 60.0
+
+    # CENC segments are decrypted in parallel by DASH players; each decrypt can
+    # hold several full copies of the segment. Admission is weighted by the real
+    # segment size and limited by the RAM available right now, so nothing needs
+    # to be tuned per host and 4K chunks queue while 1080p ones still run.
+    @staticmethod
+    def _drm_margin_bytes() -> int:
+        """RAM kept free for everything else while decrypting."""
+        total = ram.total_bytes()
+        if not total:
+            return 128 * 1024 * 1024
+        return max(128 * 1024 * 1024, int(total * 0.25))
+
+    def _drm_slot(self, size_bytes: int = 0):
+        gate = getattr(self, "_drm_gate", None)
+        if gate is None:
+            gate = self._drm_gate = _DrmGate(self._drm_margin_bytes())
+        # The decrypter keeps ~6 full copies of the segment alive at once.
+        return _DrmSlot(gate, max(1, int(size_bytes) * 6))
 
     @staticmethod
     def _pow_search(hmac_hash: str, resource: str, number: str, ts: int, max_iter: int) -> int:

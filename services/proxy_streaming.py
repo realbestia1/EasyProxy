@@ -2886,8 +2886,8 @@ class HLSProxyStreamingMixin:
             fetch_elapsed = time.monotonic() - fetch_started_at
 
             if init_content and init_cache_key and cached_init is None:
-                if len(init_cache) > 50:
-                    init_cache.clear()
+                if len(init_cache) >= 12:
+                    init_cache.pop(next(iter(init_cache)), None)
                 init_cache[init_cache_key] = init_content
 
             if init_content is None and init_url and not skip_init:
@@ -2938,15 +2938,19 @@ class HLSProxyStreamingMixin:
                 # Decrypt in thread pool to avoid blocking event loop
                 loop = asyncio.get_event_loop()
                 decrypt_started_at = time.monotonic()
-                combined_content = await loop.run_in_executor(
-                    _CLEARKEY_EXECUTOR,
-                    decrypt_segment,
-                    init_content,
-                    segment_content,
-                    key_id,
-                    key,
-                    skip_init,
-                )
+                # Weight the budget by the real size: 4K chunks queue while
+                # 1080p ones still run in parallel.
+                size = len(segment_content) + (len(init_content) if init_content else 0)
+                async with self._drm_slot(size):
+                    combined_content = await loop.run_in_executor(
+                        _CLEARKEY_EXECUTOR,
+                        decrypt_segment,
+                        init_content,
+                        segment_content,
+                        key_id,
+                        key,
+                        skip_init,
+                    )
                 decrypt_elapsed = time.monotonic() - decrypt_started_at
 
             # Serve raw decrypted fMP4.  DASH uses `.m4s` for both tracks, so

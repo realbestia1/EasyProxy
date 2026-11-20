@@ -48,6 +48,12 @@ class MP4Atom:
         """
         return struct.pack(">I", self.size) + self.atom_type + self.data
 
+    def pack_into(self, out: bytearray) -> None:
+        """Append the packed atom to `out`, avoiding the extra copy of pack()."""
+        out.extend(struct.pack(">I", self.size))
+        out.extend(self.atom_type)
+        out.extend(self.data)
+
 
 class MP4Parser:
     """
@@ -211,7 +217,7 @@ class MP4Decrypter:
             if init_length > 0 and is_init_atom:
                 continue
             processed_atom = processed_by_index.get(idx, atom)
-            result.extend(processed_atom.pack())
+            processed_atom.pack_into(result)
 
         return bytes(result)
 

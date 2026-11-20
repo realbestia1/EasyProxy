@@ -180,11 +180,52 @@ class HLSProxyDashMixin:
                 if kid and key:
                     if not decrypt_segment:
                         return web.Response(status=502, text="DASH decryption unavailable")
-                    content = await resp.read()
                     resp_content_type = getattr(resp, "content_type", "video/mp4") or "video/mp4"
                     resp_headers = getattr(resp, "headers", {})
+                    decrypted = None
+                    passthrough = None
+                    content = await resp.read()
+                    size = len(content)
                     if is_init:
-                        decrypted = decrypt_segment(content, b"", kid, key)
+                        # The budget is weighted by segment size: 4K chunks queue,
+                        # 1080p ones run in parallel.
+                        async with self._drm_slot(size):
+                            decrypted = decrypt_segment(content, b"", kid, key)
+                    else:
+                        # Non-media chunk (e.g. SIDX index box): pass through untouched
+                        is_sidx = len(content) >= 8 and (content[4:8] == b"sidx" or (len(content) >= 16 and content[8:12] == b"sidx"))
+                        if is_sidx:
+                            passthrough = content
+                        elif init_url:
+                            try:
+                                init_cache_key = f"{init_url}:{init_range}"
+                                init_segment = getattr(self, "_dash_init_cache", {}).get(init_cache_key)
+                                if not init_segment:
+                                    _init_session = _session
+                                    init_headers = dict(headers)
+                                    if init_range:
+                                        init_headers["Range"] = f"bytes={init_range}"
+                                    else:
+                                        init_headers.pop("Range", None)
+                                    async with _init_session.get(init_url, headers=init_headers, allow_redirects=False, timeout=aiohttp.ClientTimeout(total=10)) as init_resp:
+                                        if init_resp.status in [200, 206]:
+                                            init_segment = await init_resp.read()
+                                            if not hasattr(self, "_dash_init_cache"):
+                                                self._dash_init_cache = {}
+                                            if len(self._dash_init_cache) >= 12:
+                                                self._dash_init_cache.pop(next(iter(self._dash_init_cache)), None)
+                                            self._dash_init_cache[init_cache_key] = init_segment
+                                if init_segment:
+                                    size += len(init_segment)
+                                    try:
+                                        async with self._drm_slot(size):
+                                            decrypted = decrypt_segment(init_segment, content, kid, key, skip_init=True)
+                                    except Exception as e:
+                                        logger.warning(f"DASH decryption failed for {path}: {e}")
+                            except Exception as e:
+                                logger.debug(f"DASH init re-fetch failed for {path}: {e}")
+
+                    if is_init:
                         response_headers = {
                             "Content-Type": resp_content_type,
                             "Access-Control-Allow-Origin": "*",
@@ -198,9 +239,7 @@ class HLSProxyDashMixin:
                         return web.Response(body=decrypted, content_type=resp_content_type,
                                             headers={"Access-Control-Allow-Origin": "*"})
 
-                    # Non-media chunk (e.g. SIDX index box): pass through untouched
-                    is_sidx = len(content) >= 8 and (content[4:8] == b"sidx" or (len(content) >= 16 and content[8:12] == b"sidx"))
-                    if is_sidx:
+                    if passthrough is not None:
                         response_headers = {
                             "Content-Type": resp_content_type,
                             "Access-Control-Allow-Origin": "*",
@@ -208,46 +247,21 @@ class HLSProxyDashMixin:
                         }
                         if "Content-Range" in resp_headers:
                             response_headers["Content-Range"] = resp_headers["Content-Range"]
-                        return web.Response(body=content, status=resp.status, headers=response_headers)
+                        return web.Response(body=passthrough, status=resp.status, headers=response_headers)
 
-                    if init_url:
-                        try:
-                            init_cache_key = f"{init_url}:{init_range}"
-                            init_segment = getattr(self, "_dash_init_cache", {}).get(init_cache_key)
-                            if not init_segment:
-                                _init_session = _session
-                                init_headers = dict(headers)
-                                if init_range:
-                                    init_headers["Range"] = f"bytes={init_range}"
-                                else:
-                                    init_headers.pop("Range", None)
-                                async with _init_session.get(init_url, headers=init_headers, allow_redirects=False, timeout=aiohttp.ClientTimeout(total=10)) as init_resp:
-                                    if init_resp.status in [200, 206]:
-                                        init_segment = await init_resp.read()
-                                        if not hasattr(self, "_dash_init_cache"):
-                                            self._dash_init_cache = {}
-                                        if len(self._dash_init_cache) > 50:
-                                            self._dash_init_cache.clear()
-                                        self._dash_init_cache[init_cache_key] = init_segment
-                            if init_segment:
-                                try:
-                                    decrypted = decrypt_segment(init_segment, content, kid, key, skip_init=True)
-                                    response_headers = {
-                                        "Content-Type": resp_content_type,
-                                        "Access-Control-Allow-Origin": "*",
-                                        "Accept-Ranges": "bytes",
-                                    }
-                                    if client_range:
-                                        m = re.search(r"bytes=(\d+)-", client_range)
-                                        start_byte = int(m.group(1)) if m else 0
-                                        response_headers["Content-Range"] = f"bytes {start_byte}-{start_byte + len(decrypted) - 1}/*"
-                                        return web.Response(body=decrypted, status=206, headers=response_headers)
-                                    return web.Response(body=decrypted, content_type=resp_content_type,
-                                                        headers={"Access-Control-Allow-Origin": "*"})
-                                except Exception as e:
-                                    logger.warning(f"DASH decryption failed for {path}: {e}")
-                        except Exception as e:
-                            logger.debug(f"DASH init re-fetch failed for {path}: {e}")
+                    if decrypted is not None:
+                        response_headers = {
+                            "Content-Type": resp_content_type,
+                            "Access-Control-Allow-Origin": "*",
+                            "Accept-Ranges": "bytes",
+                        }
+                        if client_range:
+                            m = re.search(r"bytes=(\d+)-", client_range)
+                            start_byte = int(m.group(1)) if m else 0
+                            response_headers["Content-Range"] = f"bytes {start_byte}-{start_byte + len(decrypted) - 1}/*"
+                            return web.Response(body=decrypted, status=206, headers=response_headers)
+                        return web.Response(body=decrypted, content_type=resp_content_type,
+                                            headers={"Access-Control-Allow-Origin": "*"})
 
                     return web.Response(status=502, text="DASH decryption failed or initialization unavailable")
 
