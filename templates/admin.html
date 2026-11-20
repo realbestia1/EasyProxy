@@ -578,13 +578,14 @@
                     <thead>
                         <tr style="border-bottom:1px solid var(--border-primary);color:var(--text-secondary);background:rgba(255,255,255,0.02)">
                             <th style="padding:12px 16px">Client IP</th>
+                            <th style="padding:12px 16px">User Agent</th>
                             <th style="padding:12px 16px">Active Stream / Manifest URL</th>
                             <th style="padding:12px 16px;text-align:right">Last Request</th>
                         </tr>
                     </thead>
                     <tbody id="active-streams-list">
                         <tr>
-                            <td colspan="3" style="padding:24px;text-align:center;color:var(--text-muted)">No active streams</td>
+                            <td colspan="4" style="padding:24px;text-align:center;color:var(--text-muted)">No active streams</td>
                         </tr>
                     </tbody>
                 </table>
@@ -603,13 +604,14 @@
                             <th style="padding:12px 16px">Client</th>
                             <th style="padding:12px 16px">Extractor</th>
                             <th style="padding:12px 16px">Request</th>
+                            <th style="padding:12px 16px">User Agent</th>
                             <th style="padding:12px 16px">Status</th>
                             <th style="padding:12px 16px;text-align:right">Duration</th>
                         </tr>
                     </thead>
                     <tbody id="extractor-activity-list">
                         <tr>
-                            <td colspan="6" style="padding:24px;text-align:center;color:var(--text-muted)">No extractor requests yet</td>
+                            <td colspan="7" style="padding:24px;text-align:center;color:var(--text-muted)">No extractor requests yet</td>
                         </tr>
                     </tbody>
                 </table>
@@ -805,7 +807,8 @@ function renderActiveStreams(streams) {
             const elapsedText = elapsed <= 0 ? 'just now' : `${elapsed}s ago`;
             return `<tr style="border-bottom: 1px solid var(--border-primary); transition: background 0.15s;" onmouseover="this.style.background='rgba(255,255,255,0.015)'" onmouseout="this.style.background='none'">
                 <td style="padding:12px 16px; font-weight:600; font-family:monospace;">${escHtml(s.ip)}</td>
-                <td style="padding:12px 16px; word-break:break-all;" title="${s.user_agent ? 'UA: ' + escHtml(s.user_agent) : ''}">
+                <td style="padding:12px 16px; max-width:260px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; color:var(--text-muted); font-size:0.7rem;" title="${escHtml(s.user_agent || '')}">${escHtml(s.user_agent || '—')}</td>
+                <td style="padding:12px 16px; word-break:break-all;">
                     <div style="max-height:60px; overflow:hidden; text-overflow:ellipsis;">${escHtml(s.url)}</div>
                 </td>
                 <td style="padding:12px 16px; text-align:right; color:var(--text-muted);">${elapsedText}</td>
@@ -814,7 +817,7 @@ function renderActiveStreams(streams) {
     } else {
         streamsCount.style.display = 'none';
         streamsList.innerHTML = `<tr>
-            <td colspan="3" style="padding:24px;text-align:center;color:var(--text-muted)">No active streams</td>
+            <td colspan="4" style="padding:24px;text-align:center;color:var(--text-muted)">No active streams</td>
         </tr>`;
     }
 }
@@ -827,7 +830,7 @@ function renderExtractorActivity(data) {
     const rows = (data && data.recent) || [];
     active.textContent = `${(data && data.active) || 0} active`;
     backoff.textContent = `${(data && data.backoff) || 0} backoff`;
-    if (!rows.length) { list.innerHTML = '<tr><td colspan="6" style="padding:24px;text-align:center;color:var(--text-muted)">No extractor requests yet</td></tr>'; return; }
+    if (!rows.length) { list.innerHTML = '<tr><td colspan="7" style="padding:24px;text-align:center;color:var(--text-muted)">No extractor requests yet</td></tr>'; return; }
     const colors = {ok:'var(--accent-success)', error:'var(--accent-error)', running:'var(--accent-warning)', backoff:'var(--text-muted)', cancelled:'var(--text-muted)'};
     list.innerHTML = rows.map(r => {
         const when = new Date((r.time || 0) * 1000).toLocaleTimeString();
@@ -837,13 +840,15 @@ function renderExtractorActivity(data) {
             <td style="padding:10px 16px;font-family:monospace;color:var(--text-secondary)">${escHtml(r.client || '—')}</td>
             <td style="padding:10px 16px;font-weight:600">${escHtml(r.extractor || 'auto')}</td>
             <td style="padding:10px 16px;word-break:break-all;max-width:520px" title="${escHtml(r.url || '')}">${escHtml(r.url || '')}</td>
+            <td style="padding:10px 16px;max-width:260px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--text-muted);font-size:0.7rem" title="${escHtml(r.user_agent || '')}">${escHtml(r.user_agent || '—')}</td>
             <td style="padding:10px 16px;color:${colors[r.status] || 'var(--text-muted)'};font-weight:600">${escHtml(r.status || '')}</td>
             <td style="padding:10px 16px;text-align:right;color:var(--text-muted)">${dur}</td>
           </tr>`;
     }).join('');
 }
 
-function setToggle(id, value) {    const el = document.getElementById(id);
+function setToggle(id, value) {
+    const el = document.getElementById(id);
     const label = document.getElementById(id.replace('-toggle', '-label'));
     el.classList.toggle('active', value);
     if (label) {
