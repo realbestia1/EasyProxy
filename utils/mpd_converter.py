@@ -10,6 +10,12 @@ from datetime import datetime, timezone
 
 logger = logging.getLogger(__name__)
 
+# Live playlists only ever serve the last ~30 s, but a SegmentTimeline can
+# declare millions of repeats (or a negative r resolved over the whole
+# availability). Cap the materialized tail: 600 segments cover 30 s even at
+# 50 ms per segment.
+MAX_LIVE_SEGMENTS = 600
+
 class MPDToHLSConverter:
     """Converte manifest MPD (DASH) in playlist HLS (m3u8) on-the-fly."""
     _timeline_sequences = {}
@@ -770,9 +776,19 @@ class MPDToHLSConverter:
                             r = max(0, math.ceil((next_time - current_time) / d)) - 1
                         
                         duration_sec = d / timescale
-                        
-                        # Ripeti per r + 1 volte
-                        for _ in range(r + 1):
+
+                        # Live: never materialize more than the served tail. The
+                        # skipped head is advanced arithmetically, so a huge r
+                        # costs O(MAX_LIVE_SEGMENTS) instead of millions of dicts.
+                        count = r + 1
+                        if is_live and count > MAX_LIVE_SEGMENTS:
+                            skip = count - MAX_LIVE_SEGMENTS
+                            current_time += d * skip
+                            segment_number += skip
+                            count = MAX_LIVE_SEGMENTS
+
+                        # Ripeti per count volte
+                        for _ in range(count):
                             all_segments.append({
                                 'time': current_time,
                                 'number': segment_number,
@@ -781,6 +797,8 @@ class MPDToHLSConverter:
                             })
                             current_time += d
                             segment_number += 1
+                        if is_live and len(all_segments) > MAX_LIVE_SEGMENTS:
+                            del all_segments[:-MAX_LIVE_SEGMENTS]
                     
                     # Per LIVE: FILTRA solo gli ultimi N segmenti per forzare partenza dal live edge
                     # Questo è necessario perché molti player (Stremio, ExoPlayer) ignorano EXT-X-START
