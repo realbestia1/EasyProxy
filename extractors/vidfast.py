@@ -1,8 +1,8 @@
 """VidFast page -> unlocked HLS extractor.
 
-VidFast keeps the playback URL behind its own player bundle.  The extractor
-uses the site's decoder in ``scripts/vidfast_runner.mjs``; it does not open a
-visible browser window.
+VidFast keeps the playback URL behind its own player bundle.  Resolution goes
+through the movy.sx API first (same catalog, plain HTTP); the site's decoder in
+``scripts/vidfast_runner.mjs`` remains the fallback and opens no browser window.
 """
 
 import logging
@@ -13,7 +13,7 @@ from urllib.parse import urlparse
 
 from config import get_preferred_proxy_for_url
 import config as _cfg
-from extractors.base import ExtractorError
+from extractors.base import BaseExtractor, ExtractorError
 from extractors.node_runner import run_node_runner
 from services.socks_bridge import get_http_bridge_for_proxy
 
@@ -51,13 +51,11 @@ def _sanitize_subtitles(value: Any) -> list[dict]:
     return entries
 
 
-class VidFastExtractor:
+class VidFastExtractor(BaseExtractor):
     """Resolve ``vidfast.vc`` movie/TV pages to a playable HLS URL."""
 
     def __init__(self, request_headers: dict | None = None, proxies: list | None = None, bypass_warp: bool = False):
-        self.request_headers = request_headers or {}
-        self.proxies = proxies or []
-        self.extractor_name = "vidfast"
+        super().__init__(request_headers or {}, proxies=proxies, extractor_name="vidfast", bypass_warp=bypass_warp)
         self.mediaflow_endpoint = "hls_proxy"
         self._init_bypass_warp = bool(bypass_warp)
         self.bypass_warp_active = bool(bypass_warp)
@@ -75,6 +73,14 @@ class VidFastExtractor:
 
     async def extract(self, url: str, **kwargs) -> dict[str, Any]:
         self._validate_url(url)
+
+        # vidfast.vc serves the same catalog as movy.sx; its API is cheaper and
+        # more reliable than the runner, which stays as fallback.
+        try:
+            from extractors.movy import resolve_movy_stream
+            return await resolve_movy_stream(self, url, **kwargs)
+        except Exception as exc:
+            logger.info("VidFast: movy API non disponibile (%s), uso il runner", exc)
 
         if self.bypass_warp_active != getattr(self, "_last_computed_bypass_warp", self._init_bypass_warp):
             self._init_bypass_warp = bool(self.bypass_warp_active)

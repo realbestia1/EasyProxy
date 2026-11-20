@@ -45,6 +45,7 @@ _MODULES = (
     ("extractors.vidsonic", ("VidSonicExtractor",)),
     ("extractors.vidlink", ("VidLinkExtractor",)),
     ("extractors.vidfast", ("VidFastExtractor",)),
+    ("extractors.movy", ("MovyExtractor",)),
     ("extractors.mediaset", ("MediasetExtractor", "WittyTVExtractor")),
     ("extractors.raiplay", ("RaiPlayExtractor",)),
     (

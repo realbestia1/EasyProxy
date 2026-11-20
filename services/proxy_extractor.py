@@ -308,6 +308,7 @@ class HLSProxyExtractorHandlerMixin:
                         "wittytv",
                         "raiplay",
                         "cinejoy",
+                        "movy",
                         "fctv33",
                         "scorezone",
                         "matchora",
@@ -333,6 +334,7 @@ class HLSProxyExtractorHandlerMixin:
                         f"{get_public_base_url(request)}/extractor/video?host=ppv&d=https://ppv.st/live/nfl-network",
                         f"{get_public_base_url(request)}/extractor/video?host=ntv&d=https://ntv.cx/watch/raptor/ppv-31956",
                         f"{get_public_base_url(request)}/extractor/video.m3u8?host=streamcorner&d=https://streamcorner.foo/stream/channels/cnn",
+                        f"{get_public_base_url(request)}/extractor/video.m3u8?host=movy&d=https://www.movy.sx/movie/27205",
                         f"{get_public_base_url(request)}/extractor/video?d=BASE64_STRING",
                     ],
                 }
