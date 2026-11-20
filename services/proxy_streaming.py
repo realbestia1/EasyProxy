@@ -989,6 +989,7 @@ class HLSProxyStreamingMixin:
                 raise ValueError()
         except ValueError:
             return web.Response(status=400, text="Invalid DUAL video track")
+        prefetch_stream = stream_key or request.query.get("stream_key", "")
         is_dual_prefetch = request.headers.get(dual_prefetch.PREFETCH_HEADER) == "1"
         if dual_video_track and is_hls_segment_request and not is_dual_prefetch:
             segment_key = request.query.get("d", "")
@@ -1007,7 +1008,7 @@ class HLSProxyStreamingMixin:
                 }
                 if content_range:
                     cached_headers["Content-Range"] = content_range
-                dual_prefetch.schedule_after(segment_key, dual_video_track, self._loopback_base(request))
+                dual_prefetch.schedule_after(segment_key, dual_video_track, self._loopback_base(request), stream=prefetch_stream)
                 return web.Response(body=body, status=status, headers=cached_headers)
         if bypass_warp is None:
             bypass_warp = request.query.get("warp", "").lower() == "off"
@@ -2082,9 +2083,9 @@ class HLSProxyStreamingMixin:
                         return web.Response(status=502, text="Invalid DUAL fMP4 segment", headers={"Access-Control-Allow-Origin": "*"})
                     if is_hls_segment_request and response_status == 200:
                         segment_key = request.query.get("d", "")
-                        dual_prefetch.store(segment_key, dual_video_track, content_bytes)
+                        dual_prefetch.store(segment_key, dual_video_track, content_bytes, stream=prefetch_stream)
                         if not is_dual_prefetch:
-                            dual_prefetch.schedule_after(segment_key, dual_video_track, self._loopback_base(request))
+                            dual_prefetch.schedule_after(segment_key, dual_video_track, self._loopback_base(request), stream=prefetch_stream)
 
                 response_headers = {}
 

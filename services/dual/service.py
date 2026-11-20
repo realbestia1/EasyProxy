@@ -23,6 +23,7 @@ from .routing import as_payload, from_values
 from .security import SessionManager, request_token, resolves_publicly
 from .subtitles import SubtitleStore
 from .sync import SyncEngine
+from . import prefetch as prefetch_cache
 import config as _config_mod
 from config import check_password
 
@@ -573,6 +574,7 @@ async def _cleanup_loop(app: web.Application) -> None:
             sessions.cleanup()
             audio.cleanup_idle()
             subtitles.cleanup_idle()
+            prefetch_cache.evict()
     except asyncio.CancelledError:
         raise
 
@@ -644,6 +646,7 @@ def memory_stats() -> dict:
         "subtitle_tracks": len(getattr(subtitles, "_tracks", {})) if subtitles is not None else 0,
         "audio_cache": "memory_only",
         "offset_cache": "mongodb_shared",
+        "prefetch": prefetch_cache.stats(),
     }
 
 
