@@ -12,9 +12,10 @@ import logging
 import time
 import urllib.parse
 from collections import OrderedDict
-from pathlib import Path
 
 import aiohttp
+
+from services import ram
 
 logger = logging.getLogger(__name__)
 
@@ -27,21 +28,7 @@ PREFETCH_HEADER = "X-EP-Prefetch"
 
 
 def _total_ram_bytes() -> int:
-    # cgroup limit first: psutil reports the host RAM inside containers.
-    for path in ("/sys/fs/cgroup/memory.max",
-                 "/sys/fs/cgroup/memory/memory.limit_in_bytes"):
-        try:
-            raw = Path(path).read_text().strip()
-        except OSError:
-            continue
-        if raw.isdigit() and int(raw) < (1 << 60):
-            return int(raw)
-    try:
-        import psutil
-
-        return int(psutil.virtual_memory().total)
-    except Exception:
-        return 0
+    return ram.total_bytes()
 
 
 def _budget_bytes() -> int:

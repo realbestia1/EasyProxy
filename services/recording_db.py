@@ -1,5 +1,7 @@
 import sqlite3
 import os
+import shutil
+import tempfile
 import threading
 import logging
 from datetime import datetime
@@ -14,7 +16,46 @@ class RecordingDB:
     def __init__(self, recordings_dir: str):
         self.db_path = os.path.join(recordings_dir, "recordings.db")
         self._local = threading.local()
+        self._migrate_wal()
         self._init_db()
+
+    def _migrate_wal(self):
+        """Turn a leftover WAL database back into a plain rollback-journal one.
+
+        Docker Desktop bind mounts do not support SQLite's -shm mmap, so a WAL
+        DB left in ./data gives SIGBUS on close. Checkpoint and switch journal
+        mode on a local copy, then move it back over the bind-mounted file.
+        """
+        wal_path = self.db_path + "-wal"
+        shm_path = self.db_path + "-shm"
+        if not os.path.exists(wal_path):
+            return
+        tmp_dir = tempfile.mkdtemp(prefix="ep-sqlite-")
+        try:
+            copy = os.path.join(tmp_dir, "db")
+            shutil.copy2(self.db_path, copy)
+            for suffix in ("-wal", "-shm"):
+                if os.path.exists(self.db_path + suffix):
+                    shutil.copy2(self.db_path + suffix, copy + suffix)
+            conn = sqlite3.connect(copy)
+            try:
+                conn.execute("PRAGMA wal_checkpoint(TRUNCATE)")
+                conn.execute("PRAGMA journal_mode=DELETE")
+            finally:
+                conn.close()
+            staged = self.db_path + ".migrate.tmp"
+            shutil.copy2(copy, staged)
+            os.replace(staged, self.db_path)
+            for suffix in ("-wal", "-shm"):
+                try:
+                    os.remove(self.db_path + suffix)
+                except OSError:
+                    pass
+            logger.info("Migrated WAL recording database to DELETE journal: %s", self.db_path)
+        except Exception as exc:
+            logger.warning("SQLite WAL migration failed: %s", exc)
+        finally:
+            shutil.rmtree(tmp_dir, ignore_errors=True)
 
     def _get_connection(self):
         """Get a persistent connection per thread."""
@@ -24,7 +65,9 @@ class RecordingDB:
             # database on ./data raises SIGBUS. Keep every connection mmap-free.
             self._local.conn.execute("PRAGMA mmap_size=0")
             self._local.conn.row_factory = sqlite3.Row
-            self._local.conn.execute("PRAGMA journal_mode=WAL")
+            # WAL's -shm mmap crashes on Docker Desktop bind mounts; recordings
+            # metadata does not need WAL.
+            self._local.conn.execute("PRAGMA journal_mode=DELETE")
             self._local.conn.execute("PRAGMA busy_timeout=5000")
         return self._local.conn
 

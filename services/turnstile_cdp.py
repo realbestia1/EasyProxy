@@ -32,6 +32,7 @@ from urllib.parse import urlparse
 import aiohttp
 
 import config_store
+from services import ram
 
 logger = logging.getLogger(__name__)
 
@@ -536,8 +537,7 @@ async def launch_browser(
         return None
 
     try:
-        import psutil
-        available_mb = psutil.virtual_memory().available / (1024 ** 2)
+        available_mb = ram.available_bytes() / (1024 ** 2)
         if available_mb < _MIN_AVAILABLE_MB:
             logger.warning(
                 "%s: only %.0f MB RAM available (need %.0f MB), skipping browser solve",

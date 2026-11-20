@@ -47,6 +47,8 @@ import aiohttp
 
 import psutil
 
+from services import ram
+
 
 
 
@@ -775,9 +777,7 @@ class FlareSolverrManager:
 
         try:
 
-            import psutil
-
-            available_mb = psutil.virtual_memory().available / (1024 ** 2)
+            available_mb = ram.available_bytes() / (1024 ** 2)
 
         except Exception:
 
