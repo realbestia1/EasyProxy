@@ -600,6 +600,7 @@
                     <thead>
                         <tr style="border-bottom:1px solid var(--border-primary);color:var(--text-secondary);background:rgba(255,255,255,0.02)">
                             <th style="padding:12px 16px">Time</th>
+                            <th style="padding:12px 16px">Client</th>
                             <th style="padding:12px 16px">Extractor</th>
                             <th style="padding:12px 16px">Request</th>
                             <th style="padding:12px 16px">Status</th>
@@ -608,7 +609,7 @@
                     </thead>
                     <tbody id="extractor-activity-list">
                         <tr>
-                            <td colspan="5" style="padding:24px;text-align:center;color:var(--text-muted)">No extractor requests yet</td>
+                            <td colspan="6" style="padding:24px;text-align:center;color:var(--text-muted)">No extractor requests yet</td>
                         </tr>
                     </tbody>
                 </table>
@@ -826,13 +827,14 @@ function renderExtractorActivity(data) {
     const rows = (data && data.recent) || [];
     active.textContent = `${(data && data.active) || 0} active`;
     backoff.textContent = `${(data && data.backoff) || 0} backoff`;
-    if (!rows.length) { list.innerHTML = '<tr><td colspan="5" style="padding:24px;text-align:center;color:var(--text-muted)">No extractor requests yet</td></tr>'; return; }
+    if (!rows.length) { list.innerHTML = '<tr><td colspan="6" style="padding:24px;text-align:center;color:var(--text-muted)">No extractor requests yet</td></tr>'; return; }
     const colors = {ok:'var(--accent-success)', error:'var(--accent-error)', running:'var(--accent-warning)', backoff:'var(--text-muted)', cancelled:'var(--text-muted)'};
     list.innerHTML = rows.map(r => {
         const when = new Date((r.time || 0) * 1000).toLocaleTimeString();
         const dur = r.duration_ms == null ? '—' : (r.duration_ms / 1000).toFixed(1) + 's';
         return `<tr style="border-bottom:1px solid var(--border-primary)">
             <td style="padding:10px 16px;color:var(--text-muted)">${escHtml(when)}</td>
+            <td style="padding:10px 16px;font-family:monospace;color:var(--text-secondary)">${escHtml(r.client || '—')}</td>
             <td style="padding:10px 16px;font-weight:600">${escHtml(r.extractor || 'auto')}</td>
             <td style="padding:10px 16px;word-break:break-all;max-width:520px" title="${escHtml(r.url || '')}">${escHtml(r.url || '')}</td>
             <td style="padding:10px 16px;color:${colors[r.status] || 'var(--text-muted)'};font-weight:600">${escHtml(r.status || '')}</td>
