@@ -18,9 +18,9 @@ import { Readable } from 'node:stream';
 const DEBUG = process.env.PPV_DEBUG === '1';
 function L(...a) { if (DEBUG) console.error('[ppv-bridge]', ...a); }
 
-// The bridge holds ~60 MB of Node runtime, so it does not outlive playback:
-// 5 min without /m or /s means playback stopped; live segments arrive every few seconds.
-const IDLE_MS = Number(process.env.PPV_BRIDGE_IDLE_MS || 5 * 60 * 1000); // 0 disables
+// PPV is live-only: 5 min without /m or /s means playback stopped, and EasyProxy
+// kills the bridge process as soon as the app exits. No knob, no disable value.
+const IDLE_MS = 5 * 60 * 1000;
 let idleTimer = null;
 function touch() {
   if (!IDLE_MS) return;
