@@ -62,6 +62,13 @@ HEALTH_FAILURES_BEFORE_RESTART = 2
 # tunnel, restart it at most once per this window so a burst of failing
 # segment requests triggers a single restart.
 RECONNECT_COOLDOWN = 20.0
+# Idle recycle: wireproxy (Go) keeps the heap of its peak RSS. When no TCP
+# connection has been established on the SOCKS bind for this long and RSS is
+# still high, restart it so the heap goes back to the OS. Never during playback
+# (an active stream keeps established connections).
+RECYCLE_IDLE_SECONDS = 120.0
+RECYCLE_RSS_MB = 60.0
+_last_connection_seen: dict[str, float] = {}
 API_TIMEOUT = 25
 
 SLOTS = ("nordvpn", "custom")
@@ -1007,6 +1014,69 @@ async def reconnect(slot: str) -> bool:
         return True
 
 
+def _established_connections(bind: str) -> int | None:
+    """Established TCP connections accepted on the tunnel's SOCKS bind."""
+    host, _, port_text = (bind or "").rpartition(":")
+    if not port_text.isdigit():
+        return None
+    try:
+        import psutil
+        port = int(port_text)
+        count = 0
+        for conn in psutil.net_connections(kind="tcp"):
+            laddr = conn.laddr
+            if laddr and laddr.port == port and conn.status == psutil.CONN_ESTABLISHED:
+                count += 1
+        return count
+    except Exception:
+        return None
+
+
+def _process_rss_mb(pid: int | None) -> float | None:
+    if not pid:
+        return None
+    try:
+        import psutil
+        return psutil.Process(pid).memory_info().rss / (1024 ** 2)
+    except Exception:
+        return None
+
+
+async def recycle_idle(slot: str, now: float | None = None) -> bool:
+    """Restart a bloated WireProxy after 120s without established connections."""
+    if not is_enabled(slot) or not process_running(slot):
+        _last_connection_seen.pop(slot, None)
+        return False
+    now = time.monotonic() if now is None else now
+    connections = _established_connections(get_bind(slot))
+    if connections is None:
+        return False
+    if connections > 0:
+        _last_connection_seen[slot] = now
+        return False
+    last_seen = _last_connection_seen.setdefault(slot, now)
+    if now - last_seen < RECYCLE_IDLE_SECONDS:
+        return False
+    rss = _process_rss_mb(_read_pid(slot))
+    if rss is None or rss < RECYCLE_RSS_MB:
+        return False
+    connections = _established_connections(get_bind(slot))
+    if connections != 0:
+        return False
+    try:
+        await restart(slot)
+        _last_connection_seen[slot] = now
+        logger.info(
+            "Tunnel %s recycled after %.0fs idle (wireproxy RSS %.0f MB)",
+            slot, RECYCLE_IDLE_SECONDS, rss,
+        )
+        return True
+    except TunnelError as exc:
+        _last_connection_seen[slot] = now
+        logger.warning("Tunnel %s idle recycle failed: %s", slot, exc)
+        return False
+
+
 async def keepalive_loop(interval: float = 30.0) -> None:
     tick = 0
     while True:
@@ -1014,6 +1084,7 @@ async def keepalive_loop(interval: float = 30.0) -> None:
             purge_idle_cache()
             for slot in SLOTS:
                 await ensure_running(slot)
+                await recycle_idle(slot)
             tick += 1
             if tick % HEALTH_CHECK_EVERY == 0:
                 for slot in SLOTS:
