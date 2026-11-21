@@ -181,8 +181,10 @@ class HLSProxyStreamingMixin:
 
     @staticmethod
     def _is_valid_ts(data: bytes) -> bool:
-        """Unwrapped payload is usable only with a TS sync byte."""
-        return bool(data) and len(data) > 188 and data[0] == 0x47
+        """Unwrapped payload is usable only with repeated TS sync bytes."""
+        if not data or len(data) <= 188 * 2:
+            return False
+        return data[0] == 0x47 and data[188] == 0x47 and data[376] == 0x47
 
     async def handle_ts_segment(self, request):
         """Gestisce richieste per segmenti .ts"""

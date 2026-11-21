@@ -917,6 +917,37 @@ class HLSProxyCoreMixin:
         return None
 
     @staticmethod
+    def _ts_payload_offset(data: bytes | None, packets: int = 5) -> int | None:
+        """First offset whose 0x47 sync repeats for `packets` 188-byte packets."""
+        if not data or len(data) < 188 * packets:
+            return None
+        limit = len(data) - 188 * (packets - 1)
+        pos = data.find(b"\x47")
+        while pos != -1 and pos < limit:
+            if all(data[pos + 188 * k] == 0x47 for k in range(1, packets)):
+                return pos
+            pos = data.find(b"\x47", pos + 1)
+        return None
+
+    @classmethod
+    def _extract_ts_blocks(cls, data: bytes, start: int) -> bytes:
+        """Concatenate 188-byte packets, skipping provider block separators."""
+        out = bytearray()
+        pos = start
+        size = len(data)
+        while pos is not None and pos + 188 <= size:
+            while pos + 188 <= size and data[pos] == 0x47:
+                out += data[pos:pos + 188]
+                pos += 188
+            if pos + 188 > size:
+                break
+            nxt = cls._ts_payload_offset(data[pos:], packets=5)
+            if nxt is None:
+                break
+            pos += nxt
+        return bytes(out)
+
+    @staticmethod
     def _unwrap_image_ts_payload(content: bytes) -> bytes | None:
         """Recover raw MPEG-TS wrapped in an image container.
 
@@ -960,6 +991,15 @@ class HLSProxyCoreMixin:
                                 ts = None
                             if ts is not None and len(ts) > 188 and ts[0] == 0x47 and ts[188] == 0x47:
                                 return ts
+                offset = HLSProxyCoreMixin._ts_payload_offset(raw)
+                if offset is not None:
+                    ts = HLSProxyCoreMixin._extract_ts_blocks(raw, offset)
+                    if len(ts) > 188 * 4:
+                        logger.debug(
+                            "Unwrapped %d TS bytes from PNG pixels at offset %d (%d -> %d bytes)",
+                            len(ts), offset, len(content), len(ts),
+                        )
+                        return ts
             # PNG without a recognized payload: fall through to the raw
             # magic / generic sync scan below (mirrors the JS unwrapper,
             # which keeps searching TRAW/TSGZ/0x47 on the raw file bytes).
@@ -982,17 +1022,12 @@ class HLSProxyCoreMixin:
             if ts is not None and len(ts) > 188 and ts[0] == 0x47 and ts[188] == 0x47:
                 return ts
 
-        # Generic fallback (JS: first 0x47 with another 0x47 at +188).
-        # Use find() iteration (C speed) and require a third sync at +376
-        # when available to avoid false positives inside PNG bytes.
-        pos = content.find(b"\x47")
-        end = len(content) - 188
-        while pos != -1 and pos <= end:
-            if content[pos + 188] == 0x47 and (
-                len(content) <= pos + 376 or content[pos + 376] == 0x47
-            ):
-                return bytes(content[pos:])
-            pos = content.find(b"\x47", pos + 1, end + 1)
+        # Generic fallback (JS: first 0x47 with more sync bytes at +188).
+        offset = HLSProxyCoreMixin._ts_payload_offset(content)
+        if offset is not None:
+            ts = HLSProxyCoreMixin._extract_ts_blocks(content, offset)
+            if len(ts) > 188 * 4:
+                return ts
         return None
 
     @staticmethod
