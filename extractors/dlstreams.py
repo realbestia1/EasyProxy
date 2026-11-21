@@ -346,6 +346,14 @@ def _decode_barecrop_econfig(enc: str) -> str | None:
     except Exception:
         return None
 
+async def _fetch_stream_page(session, url: str, headers: dict, timeout: float) -> tuple[int, str]:
+    """Fetch one player page; return (status, html) without raising on 4xx/5xx."""
+    async with session.get(url, headers=headers, timeout=timeout) as resp:
+        if resp.status != 200:
+            return resp.status, ""
+        return resp.status, await resp.text()
+
+
 class DLStreamsExtractor(BaseExtractor):
     """Extractor for daddy live / dlstreams streams."""
 
@@ -1118,11 +1126,24 @@ class DLStreamsExtractor(BaseExtractor):
                 }
                 
                 logger.debug("DLStreams: GET stream page %s", candidate)
-                async with session.get(candidate, headers=headers, timeout=_timeout(self.CANDIDATE_TIMEOUT_SECONDS)) as resp:
-                    if resp.status != 200:
-                        logger.debug("DLStreams: candidate %s returned status %s", candidate, resp.status)
-                        continue
-                    html = await resp.text()
+                try:
+                    status, html = await _fetch_stream_page(
+                        session, candidate, headers,
+                        _timeout(self.CANDIDATE_TIMEOUT_SECONDS),
+                    )
+                except asyncio.TimeoutError:
+                    # The first page is the origin probe; retry once before
+                    # aborting, every candidate shares the same origin.
+                    if candidate_index or _remaining() < 8.0:
+                        raise
+                    logger.info("DLStreams: %s timed out, retrying once", candidate)
+                    status, html = await _fetch_stream_page(
+                        session, candidate, headers,
+                        _timeout(self.CANDIDATE_TIMEOUT_SECONDS),
+                    )
+                if status != 200:
+                    logger.debug("DLStreams: candidate %s returned status %s", candidate, status)
+                    continue
                 
                 # Extract player iframe src (support absolute, protocol-relative and relative URLs)
                 iframe_src = None
