@@ -70,6 +70,11 @@ class SportsonlineExtractor(BaseExtractor):
     STREAM_CACHE_STALE_SECONDS = 900.0
     STREAM_CACHE_FAIL_BACKOFF_SECONDS = 15.0
     MAX_HOST_BACKOFF_SECONDS = 3600.0
+    # The registry retires the instance after each request: state kept on
+    # `self` would die with it. Share the resolved URLs and the per-host
+    # rate-limit cooldown across instances (both keyed by URL/route).
+    _shared_stream_cache: dict = {}
+    _shared_host_backoff: dict[str, float] = {}
 
     def __init__(self, request_headers: dict, proxies: list = None, bypass_warp: bool = False):
         super().__init__(request_headers or {}, proxies, extractor_name="sportsonline", bypass_warp=bypass_warp)
@@ -83,8 +88,8 @@ class SportsonlineExtractor(BaseExtractor):
         self.proxies = proxies or _cfg.GLOBAL_PROXIES
         self._session_proxy = None
         self._inflight_extract_tasks: dict = {}
-        self._stream_cache: dict = {}
-        self._host_backoff: dict[str, float] = {}
+        self._stream_cache = SportsonlineExtractor._shared_stream_cache
+        self._host_backoff = SportsonlineExtractor._shared_host_backoff
 
     @staticmethod
     def _host_of(url: str) -> str:
