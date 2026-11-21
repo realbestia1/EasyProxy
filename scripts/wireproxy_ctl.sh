@@ -107,6 +107,12 @@ stop_wireproxy() {
     done
 
     if pid_is_wireproxy "$pid"; then
+        echo "wireproxy still alive after TERM; killing it." >&2
+        kill -KILL "$pid" 2>/dev/null || true
+        sleep 1
+    fi
+
+    if pid_is_wireproxy "$pid"; then
         echo "wireproxy did not stop within 10 seconds." >&2
         return 1
     fi
@@ -193,7 +199,7 @@ case "${1:-status}" in
         stop_wireproxy
         ;;
     restart)
-        stop_wireproxy
+        stop_wireproxy || true
         start_wireproxy
         ;;
     probe)

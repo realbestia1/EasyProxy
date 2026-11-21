@@ -45,7 +45,7 @@ _SOCKET_CHECK_EXECUTOR = ThreadPoolExecutor(
 )
 
 
-APP_VERSION = "2.14.30"
+APP_VERSION = "2.14.31"
 
 
 def get_extractor_proxies(extractor_name: str) -> list:
@@ -705,14 +705,18 @@ def get_connector_for_proxy(proxy_url: str, **kwargs):
 
 
 def get_curl_ipv4_options(proxy_url: str | None) -> dict:
-    """Return curl_cffi options for IPv4-only WARP upstream requests."""
-    if not proxy_url or not is_warp_proxy_url(proxy_url):
-        return {}
+    """curl_cffi options: Cloudflare DNS unless disabled, IPv4-only for WARP."""
     try:
         from curl_cffi import CurlOpt
     except ImportError:
         return {}
-    return {"curl_options": {CurlOpt.IPRESOLVE: 1}}
+    options = {}
+    servers = get_dns_servers()
+    if servers:
+        options[CurlOpt.DNS_SERVERS] = ",".join(servers)
+    if proxy_url and is_warp_proxy_url(proxy_url):
+        options[CurlOpt.IPRESOLVE] = 1
+    return {"curl_options": options} if options else {}
 
 
 class _IPv4ProxyConnector(ProxyConnector):
@@ -793,6 +797,26 @@ def is_managed_tunnel_proxy_url(proxy_url: str | None) -> bool:
         return False
 
 
+def get_curl_proxy_url(proxy_url: str | None) -> str | None:
+    """Proxy URL for curl_cffi: managed SOCKS tunnels resolve DNS remotely.
+
+    libcurl resolves hostnames locally for ``socks5://`` (container resolver).
+    WARP/Tor/WireGuard must resolve inside the tunnel, so upgrade the scheme.
+    """
+    if not proxy_url:
+        return None
+    value = str(proxy_url).strip()
+    if value.startswith("socks5://") and is_managed_tunnel_proxy_url(value):
+        value = "socks5h://" + value[len("socks5://") :]
+    return value
+
+
+def get_curl_proxy_map(proxy_url: str | None) -> dict[str, str] | None:
+    """curl_cffi ``proxies`` mapping for one route."""
+    value = get_curl_proxy_url(proxy_url)
+    return {"http": value, "https": value} if value else None
+
+
 def get_solver_proxy_url(proxy_url: str | None) -> str | None:
     """Return a browser-safe proxy while preserving the selected route."""
     if not proxy_url:
@@ -836,6 +860,16 @@ def get_ssl_setting_for_url(url: str, transport_routes: list = None) -> bool:
 API_PASSWORD = os.environ.get("API_PASSWORD")
 ADMIN_PASSWORD = os.environ.get("ADMIN_PASSWORD")
 PORT = int(os.environ.get("PORT", 7860))
+
+
+def get_dns_servers() -> tuple[str, ...]:
+    """DNS resolvers for direct traffic: Cloudflare unless overridden."""
+    raw = os.environ.get("EASYPROXY_DNS_SERVERS", "").strip()
+    if raw.lower() in {"system", "off", "0", "false"}:
+        return ()
+    if raw:
+        return tuple(part.strip() for part in raw.split(",") if part.strip())
+    return ("1.1.1.1", "1.0.0.1")
 
 
 def _password_matches(value, expected):

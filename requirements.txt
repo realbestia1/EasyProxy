@@ -12,3 +12,4 @@ Pillow
 curl_cffi
 psutil
 pywidevine
+dnspython

@@ -691,19 +691,26 @@ class HLSProxyCoreMixin:
                 "/bin/sh",
                 WARP_CTL_SCRIPT,
                 action,
-                stdout=asyncio.subprocess.DEVNULL,
-                stderr=asyncio.subprocess.DEVNULL,
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE,
             )
-            return await asyncio.wait_for(proc.wait(), timeout=20)
-        except asyncio.TimeoutError:
-            if proc and proc.returncode is None:
-                try:
-                    proc.kill()
-                    await proc.wait()
-                except Exception:
-                    pass
-            logger.warning("WARP control %s timed out", action)
-            return 124
+            try:
+                stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=20)
+            except asyncio.TimeoutError:
+                proc.kill()
+                await proc.wait()
+                logger.warning("WARP control %s timed out", action)
+                return 124
+            rc = proc.returncode
+            if rc != 0:
+                detail = (stderr or stdout or b"").decode("utf-8", "replace").strip()
+                logger.warning(
+                    "WARP control %s failed (rc=%s): %s",
+                    action,
+                    rc,
+                    detail[-500:] or "no output",
+                )
+            return rc
         except asyncio.CancelledError:
             if proc and proc.returncode is None:
                 try:

@@ -10,6 +10,27 @@ WARP_GENERATOR="/usr/local/bin/warp-register"
 WARPCTL="/app/scripts/wireproxy_ctl.sh"
 export WARP_CONFIG_FILE
 
+# Force Cloudflare DNS for every process unless the operator opted out
+# (same EASYPROXY_DNS_SERVERS=system|off|0|false switch Python reads).
+dns_choice="$(printf '%s' "${EASYPROXY_DNS_SERVERS:-}" | tr '[:upper:]' '[:lower:]')"
+if [ "$dns_choice" != "system" ] && [ "$dns_choice" != "off" ] && \
+   [ "$dns_choice" != "0" ] && [ "$dns_choice" != "false" ] && \
+   [ -w /etc/resolv.conf ]; then
+  if python3 - <<'PY' >/dev/null 2>&1
+import dns.resolver
+r = dns.resolver.Resolver(configure=False)
+r.nameservers = ["1.1.1.1"]
+r.lifetime = 3
+r.resolve("cloudflare.com", "A")
+PY
+  then
+    printf 'nameserver 1.1.1.1\nnameserver 1.0.0.1\noptions timeout:2 attempts:2\n' > /etc/resolv.conf
+    echo "DNS: Cloudflare (1.1.1.1, 1.0.0.1)."
+  else
+    echo "DNS: Cloudflare unreachable from this network; keeping the container resolver."
+  fi
+fi
+
 start_userspace_warp() {
     echo "Starting Cloudflare WARP via saved config + wireproxy userspace SOCKS5..."
 

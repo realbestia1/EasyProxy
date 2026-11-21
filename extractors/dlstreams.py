@@ -191,7 +191,8 @@ async def _premium_curl_get(
 
     kwargs = {"impersonate": "chrome", "timeout": timeout}
     if proxy:
-        kwargs["proxy"] = str(proxy).replace("socks5h://", "socks5://")
+        kwargs["proxy"] = _cfg.get_curl_proxy_url(proxy) or str(proxy)
+    kwargs.update(_cfg.get_curl_ipv4_options(None))
     try:
         from curl_cffi.requests import AsyncSession
 

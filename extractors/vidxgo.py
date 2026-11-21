@@ -112,7 +112,9 @@ class VidXgoExtractor(BaseExtractor):
         proxy = _cfg.resolve_proxy_alias(str(proxy).strip()) or str(proxy).strip()
         if "://" not in proxy:
             proxy = f"socks5://{proxy}"
-        return proxy.replace("socks5h://", "socks5://", 1)
+        if proxy.startswith("socks5://") and _cfg.is_managed_tunnel_proxy_url(proxy):
+            proxy = "socks5h://" + proxy[len("socks5://") :]
+        return proxy
 
     @staticmethod
     def _token_endpoint(embed_url: str) -> str:
@@ -180,7 +182,7 @@ class VidXgoExtractor(BaseExtractor):
         session_cls = _curl_session_cls()
         if session_cls is None:
             raise ExtractorError("VidXgo: curl_cffi is required")
-        session = session_cls(impersonate="firefox133")
+        session = session_cls(impersonate="firefox133", **(_cfg.get_curl_ipv4_options(None) or {}))
         expires_at = time.monotonic() + RESULT_TTL
         try:
             token_response = await session.get(

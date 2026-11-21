@@ -19,12 +19,15 @@ from services.dual import service as dual_service
 from services import extractor_subtitles
 from services import wg_tunnels
 from services import tor_proxy
+from services import cloudflare_dns
 from services.recording_manager import RecordingManager
 from routes.recordings import setup_recording_routes
 from routes.wg_tunnels import setup_wg_tunnel_routes
 from routes.tor_proxy import setup_tor_proxy_routes
 
 logger = logging.getLogger(__name__)
+
+cloudflare_dns.install()
 
 EXPOSED_HEADERS = "Content-Length, Content-Range, Accept-Ranges"
 
