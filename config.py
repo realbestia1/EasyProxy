@@ -704,6 +704,27 @@ def get_connector_for_proxy(proxy_url: str, **kwargs):
     return connector_cls.from_url(connector_url, rdns=rdns, **kwargs)
 
 
+_CURL_SUPPORTS_DNS_SERVERS: bool | None = None
+
+
+def _check_curl_dns_servers() -> bool:
+    global _CURL_SUPPORTS_DNS_SERVERS
+    if _CURL_SUPPORTS_DNS_SERVERS is None:
+        try:
+            from curl_cffi import Curl, CurlOpt
+            c = Curl()
+            try:
+                c.setopt(CurlOpt.DNS_SERVERS, "1.1.1.1")
+                _CURL_SUPPORTS_DNS_SERVERS = True
+            except Exception:
+                _CURL_SUPPORTS_DNS_SERVERS = False
+            finally:
+                c.close()
+        except Exception:
+            _CURL_SUPPORTS_DNS_SERVERS = False
+    return _CURL_SUPPORTS_DNS_SERVERS
+
+
 def get_curl_ipv4_options(proxy_url: str | None) -> dict:
     """curl_cffi options: Cloudflare DNS unless disabled, IPv4-only for WARP."""
     try:
@@ -712,7 +733,7 @@ def get_curl_ipv4_options(proxy_url: str | None) -> dict:
         return {}
     options = {}
     servers = get_dns_servers()
-    if servers:
+    if servers and _check_curl_dns_servers():
         options[CurlOpt.DNS_SERVERS] = ",".join(servers)
     if proxy_url and is_warp_proxy_url(proxy_url):
         options[CurlOpt.IPRESOLVE] = 1

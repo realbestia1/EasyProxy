@@ -41,7 +41,7 @@ _VIDEO_PROBE_TIMEOUT = 6.0
 # Player health (see _player_rank). A live player that downloads its segment
 # in most of its duration stutters; a delayed one is still watchable.
 MAX_LIVE_LAG_SECONDS = 120.0
-MAX_SEGMENT_LOAD_RATIO = 0.75
+MAX_SEGMENT_LOAD_RATIO = 1.5
 _VIDEO_PROBE_MARKERS = (
     "error while decoding",
     "top block unavailable",
@@ -200,7 +200,7 @@ async def _premium_curl_get(
             resp = await curl_session.get(url, headers=headers)
             return resp.status_code, resp.text or ""
     except Exception as exc:
-        logger.debug("DLStreams: curl_cffi fetch of %s failed: %s", url, exc)
+        logger.warning("DLStreams: curl_cffi fetch of %s failed: %s", url, exc)
         return 0, ""
 
 
@@ -363,7 +363,7 @@ class DLStreamsExtractor(BaseExtractor):
     EXTRACT_BUDGET_SECONDS = 40.0
     # The Turnstile solver may cold-start Chromium (up to ~60s for two attempts).
     REQUEST_TIMEOUT_TOTAL = 120
-    CANDIDATE_TIMEOUT_SECONDS = 6
+    CANDIDATE_TIMEOUT_SECONDS = 12
     # No resolved-URL cache and no host backoff: the extractor endpoint answers
     # with a redirect to the stable /proxy manifest URL, so manifest reloads go
     # to the proxy and the extractor runs once per playback (plus 403 re-extracts).
@@ -380,7 +380,7 @@ class DLStreamsExtractor(BaseExtractor):
     # of a few seconds (WARP/CDN hiccup) must not move playback to another player.
     PIN_RETRIES = 2
     PIN_RETRY_DELAY = 2.0
-    PIN_ATTEMPT_BUDGET = 6.0
+    PIN_ATTEMPT_BUDGET = 15.0
 
     def __init__(self, request_headers: dict = None, proxies: list = None, bypass_warp: bool = False):
         super().__init__(request_headers or {}, proxies, extractor_name="dlstreams", bypass_warp=bypass_warp)
@@ -397,8 +397,9 @@ class DLStreamsExtractor(BaseExtractor):
         self.bypass_warp_active = bypass_warp
         self._inflight_extract_tasks: dict = {}
 
-    def _pin_player(self, channel_id: str, candidate: str) -> None:
-        self._player_preference[(channel_id, self._route_key())] = (candidate, time.monotonic())
+    def _pin_player(self, channel_id: str, candidate: str, requested_player: str = "") -> None:
+        key = (channel_id, requested_player or "", self._route_key())
+        self._player_preference[key] = (candidate, time.monotonic())
 
     def _route_key(self) -> tuple:
         return (self._forced_proxy, self._force_direct, self.bypass_warp_active)
@@ -417,7 +418,9 @@ class DLStreamsExtractor(BaseExtractor):
         # mid-playback changes the media sequence, the PIDs and the parameter
         # sets, which players report as "media sequence changed unexpectedly"
         # plus "non-existing SPS/PPS" and a frozen/green picture.
-        pinned = (self._player_preference.get((channel_id, self._route_key())) or (None,))[0]
+        pinned = (self._player_preference.get((channel_id, requested_player, self._route_key())) or (None,))[0]
+        if not pinned and not requested_player:
+            pinned = (self._player_preference.get((channel_id, "", self._route_key())) or (None,))[0]
         if (
             pinned in players
             and players[0] != pinned
@@ -484,10 +487,8 @@ class DLStreamsExtractor(BaseExtractor):
 
     def _build_player_urls(self, channel_id: str) -> list[str]:
         origin = self.entry_origin.rstrip("/")
-        # The xstream player ("cast") is tried first: it is plain HTTP and works
-        # on datacenter IPs, while the premium player ("stream") rejects them
-        # with 403. The decode probe still validates every candidate and the
-        # caller tries the next player when the pinned one is dead.
+        # /stream/stream-... serves 403 on datacenter IPs; probe /cast/ first by default.
+        # Explicit requests (e.g. Player 1) are re-prioritized in _prioritize_player_urls.
         return [
             f"{origin}/cast/stream-{channel_id}.php",
             f"{origin}/stream/stream-{channel_id}.php",
@@ -774,8 +775,8 @@ class DLStreamsExtractor(BaseExtractor):
 
     async def _solve_premium_ticket(
         self, page_url: str, parent_url: str | None = None
-    ) -> tuple[str, str | None] | None:
-        """Solve Turnstile on the premium player and return (ticket, solver UA)."""
+    ) -> dict | None:
+        """Solve Turnstile on the premium player and return the full solution dict."""
         if str(os.getenv("DLSTREAMS_TURNSTILE_SOLVER", "1")).strip().lower() in {"0", "off", "false", "no"}:
             return None
         try:
@@ -801,7 +802,7 @@ class DLStreamsExtractor(BaseExtractor):
         if not solution or not solution.get("success") or not solution.get("ticket"):
             return None
         logger.info("DLStreams: premium ticket obtained for %s", page_url)
-        return solution["ticket"], solution.get("_solver_user_agent")
+        return solution
 
     async def _solve_gated_player(
         self, page_url: str, parent_url: str | None = None
@@ -866,10 +867,11 @@ class DLStreamsExtractor(BaseExtractor):
         if not parts:
             return tokenized, deadline
         premium_ticket = None
+        route = getattr(self, "last_used_proxy", None) or "direct"
         ticket_key = (
             parts[0],
             parts[1],
-            getattr(self, "last_used_proxy", None) or "direct",
+            route,
         )
         cached_ticket = _premium_tickets.get(ticket_key)
         if cached_ticket and cached_ticket[1] > time.monotonic():
@@ -878,22 +880,37 @@ class DLStreamsExtractor(BaseExtractor):
             solve_started = time.monotonic()
             # The embedding player page: loading dembed.st directly serves a
             # stub without the Turnstile widget.
-            solved_ticket = await self._solve_premium_ticket(
+            solution = await self._solve_premium_ticket(
                 iframe_src, parent_url=parent_url
             )
             # Chromium runs outside the extraction budget: hand the remaining
             # work the time the solver consumed.
             deadline += time.monotonic() - solve_started
-            if solved_ticket:
-                premium_ticket, solver_ua = solved_ticket
+            if solution:
+                premium_ticket = solution.get("ticket")
+                solver_ua = solution.get("_solver_user_agent")
                 if solver_ua:
-                    # The ticket is bound to the solver IP and UA: the token
-                    # request must look like that browser.
                     playback_headers["User-Agent"] = solver_ua
-                _premium_tickets[ticket_key] = (
-                    premium_ticket,
-                    _premium_ticket_deadline(premium_ticket),
-                )
+                if premium_ticket:
+                    _premium_tickets[ticket_key] = (
+                        premium_ticket,
+                        _premium_ticket_deadline(premium_ticket),
+                    )
+                token = solution.get("token")
+                k = solution.get("k")
+                ttl = float(solution.get("ttl") or 0) or PREMIUM_TOKEN_DEFAULT_TTL
+                if token:
+                    _premium_tokens[ticket_key] = (
+                        token,
+                        time.monotonic() + max(PREMIUM_TOKEN_MIN_TTL, ttl) * PREMIUM_TOKEN_RENEW_FRACTION,
+                    )
+                    if k:
+                        try:
+                            if len(_premium_segment_keys) >= _PREMIUM_SEGMENT_KEYS_MAX:
+                                _premium_segment_keys.pop(next(iter(_premium_segment_keys)))
+                            _premium_segment_keys[token] = _b64url_decode(k)
+                        except Exception as e:
+                            logger.debug("DLStreams: failed decoding segment key: %s", e)
         return (
             await self._with_premium_token(
                 session, stream_url, playback_headers, ticket=premium_ticket
@@ -928,10 +945,11 @@ class DLStreamsExtractor(BaseExtractor):
         status, body = await _premium_curl_get(
             url, curl_headers, timeout, getattr(self, "_session_proxy", None)
         )
+        logger.info("DLStreams: _fetch_playlist %s -> status=%s body_len=%d", url, status, len(body or ""))
         return status, (body if status == 200 else "")
 
     async def _is_stream_alive(
-        self, session, stream_url: str, headers: dict, budget: float | None = None
+        self, session, stream_url: str, headers: dict, budget: float | None = None, is_requested: bool = False
     ) -> bool:
         """Validate the full chain: master -> variant -> first segment (+ AES key).
 
@@ -965,42 +983,44 @@ class DLStreamsExtractor(BaseExtractor):
                 session, stream_url, headers, _timeout(10)
             )
             if status != 200:
-                logger.debug("DLStreams: validation of %s -> HTTP %s", stream_url, status)
+                logger.info("DLStreams: validation of %s -> HTTP %s (headers: %s)", stream_url, status, headers)
                 return False
             if "#EXTM3U" not in master[:8000] and "#EXT-X-" not in master[:8000]:
-                logger.debug("DLStreams: validation of %s -> not a playlist", stream_url)
+                logger.info("DLStreams: validation of %s -> not a playlist (%s)", stream_url, master[:200])
                 return False
             current_url, current_body = stream_url, master
             # Master -> variant (media playlists contain #EXTINF, masters don't)
             if "#EXTINF" not in master:
                 variant = self._first_media_uri(master, stream_url, want_playlist=True)
                 if not variant:
-                    logger.debug("DLStreams: validation of %s -> no variant found", stream_url)
+                    logger.info("DLStreams: validation of %s -> no variant found", stream_url)
                     return False
                 variant = await self._with_premium_token(session, variant, headers)
                 status, current_body = await self._fetch_playlist(
                     session, variant, headers, _timeout(8)
                 )
                 if status != 200:
-                    logger.debug("DLStreams: validation variant %s -> HTTP %s", variant, status)
+                    logger.info("DLStreams: validation variant %s -> HTTP %s", variant, status)
                     return False
                 current_url = variant
                 if "#EXTM3U" not in current_body[:8000]:
+                    logger.info("DLStreams: validation variant %s not m3u", variant)
                     return False
             current_body = decrypt_premium_playlist(current_body, current_url)
             # Variant -> segment. Do not use Range for a TS video probe: an
             # audio-only prefix cannot establish whether video exists later.
             segment = self._first_media_uri(current_body, current_url, want_playlist=False)
             if not segment:
-                logger.debug("DLStreams: validation of %s -> no segments listed", stream_url)
+                logger.info("DLStreams: validation of %s -> no segments listed in %s", stream_url, current_body[:200])
                 return False
             encrypted = bool(re.search(r'#EXT-X-KEY:[^\n]*METHOD=(?!NONE\b)', current_body))
             probe_headers = {k: v for k, v in headers.items() if k.lower() != "range"}
             if encrypted:
                 probe_headers["Range"] = "bytes=0-4095"
             try:
+                probe_timeout = _timeout(4 if premium_playlist_parts(stream_url) is not None else 12)
                 segment_ok = await self._segment_carries_video(
-                    session, segment, probe_headers, _timeout(12), encrypted=encrypted
+                    session, segment, probe_headers, probe_timeout, encrypted=encrypted
                 )
             except asyncio.TimeoutError:
                 # Premium segments live on the TikTok CDN: a slow probe is
@@ -1012,6 +1032,7 @@ class DLStreamsExtractor(BaseExtractor):
                 )
                 segment_ok = True
             if not segment_ok:
+                logger.info("DLStreams: validation of %s -> segment not ok", stream_url)
                 return False
             # AES key, if the variant uses one
             key_match = re.search(r'#EXT-X-KEY:[^\n]*URI="([^"]+)"', current_body)
@@ -1038,7 +1059,7 @@ class DLStreamsExtractor(BaseExtractor):
             self._last_validated_manifest = current_body or master
             return True
         except Exception as e:
-            logger.debug("DLStreams: validation of %s failed: %s", stream_url, e)
+            logger.warning("DLStreams: validation of %s failed: %s", stream_url, e, exc_info=True)
             return False
 
     def _build_result(self, stream_url: str, playback_headers: dict) -> Dict[str, Any]:
@@ -1064,10 +1085,14 @@ class DLStreamsExtractor(BaseExtractor):
 
     async def _extract_directly(self, url: str, channel_id: str) -> Dict[str, Any] | None:
         """Fast path direct HTTP M3U8 extraction."""
+        self._sync_entry_origin_from_url(url)
         session = await self._get_session(url)
         seen_iframes: set[str] = set()
         
-        pin = self._player_preference.get((channel_id, self._route_key()))
+        requested_player = urlparse(url)._replace(query="", fragment="").geturl()
+        pin = self._player_preference.get((channel_id, requested_player, self._route_key()))
+        if not pin and not requested_player:
+            pin = self._player_preference.get((channel_id, "", self._route_key()))
         sticky = (
             pin[0] if pin and time.monotonic() - pin[1] <= self.PIN_STICKY_SECONDS else None
         )
@@ -1336,17 +1361,26 @@ class DLStreamsExtractor(BaseExtractor):
                 budget = _remaining()
                 if is_pin and not last_pin_try:
                     budget = min(budget, self.PIN_ATTEMPT_BUDGET)
+                is_requested = bool(requested_player and candidate == requested_player)
                 if not await self._is_stream_alive(
-                    session, stream_url, playback_headers, budget=budget
+                    session, stream_url, playback_headers, budget=budget, is_requested=is_requested
                 ):
                     logger.info("DLStreams: stream from %s is dead, trying next player", candidate)
                     pin_broken = is_pin and getattr(self, "_content_broken", False)
                     continue
                 lag, load_ratio = self._last_health
                 rank = self._player_rank(lag, load_ratio)
-                if candidate == sticky or (not rank[0] and rank[1] <= MAX_LIVE_LAG_SECONDS):
-                    logger.info("DLStreams: working stream found via %s", candidate)
-                    self._pin_player(channel_id, candidate)
+                is_requested = bool(requested_player and candidate == requested_player)
+                if (
+                    candidate == sticky
+                    or is_requested
+                    or (not rank[0] and rank[1] <= MAX_LIVE_LAG_SECONDS)
+                ):
+                    logger.info(
+                        "DLStreams: working stream found via %s (requested=%s, rank=%s)",
+                        candidate, is_requested, rank,
+                    )
+                    self._pin_player(channel_id, candidate, requested_player=requested_player)
                     return self._build_result(stream_url, playback_headers)
                 logger.info(
                     "DLStreams: %s alive but lag=%s load=%s, trying next player",
@@ -1379,7 +1413,7 @@ class DLStreamsExtractor(BaseExtractor):
         if fallback:
             _, candidate, stream_url, playback_headers, manifest = fallback
             logger.info("DLStreams: no ideal player, using best available %s", candidate)
-            self._pin_player(channel_id, candidate)
+            self._pin_player(channel_id, candidate, requested_player=requested_player)
             self._last_validated_manifest = manifest
             return self._build_result(stream_url, playback_headers)
         return None
