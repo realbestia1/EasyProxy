@@ -35,7 +35,7 @@ import services.extractor_subtitles as extractor_subtitles
 
 
 _LEGACY_REDIRECT_CACHE: dict = {}
-_LEGACY_REDIRECT_TTL = 14400.0  # 4 hours: keep stream redirect stable during continuous playback
+_LEGACY_REDIRECT_TTL = 900.0  # 15 minutes: keep redirect stable during playback without stale tokens after idle
 
 
 class HLSProxyManifestHandlerMixin:

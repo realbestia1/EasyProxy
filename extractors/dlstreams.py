@@ -41,7 +41,7 @@ _VIDEO_PROBE_TIMEOUT = 6.0
 # Player health (see _player_rank). A live player that downloads its segment
 # in most of its duration stutters; a delayed one is still watchable.
 MAX_LIVE_LAG_SECONDS = 120.0
-MAX_SEGMENT_LOAD_RATIO = 2.5
+MAX_SEGMENT_LOAD_RATIO = 1.5
 _VIDEO_PROBE_MARKERS = (
     "error while decoding",
     "top block unavailable",
@@ -487,11 +487,11 @@ class DLStreamsExtractor(BaseExtractor):
 
     def _build_player_urls(self, channel_id: str) -> list[str]:
         origin = self.entry_origin.rstrip("/")
-        # The premium player ("stream") is tried first for full quality (1080p/720p).
-        # Fallback players ("cast", "watch", etc.) are tried next if premium fails.
+        # /stream/stream-... serves 403 on datacenter IPs; probe /cast/ first by default.
+        # Explicit requests (e.g. Player 1) are re-prioritized in _prioritize_player_urls.
         return [
-            f"{origin}/stream/stream-{channel_id}.php",
             f"{origin}/cast/stream-{channel_id}.php",
+            f"{origin}/stream/stream-{channel_id}.php",
             f"{origin}/watch/stream-{channel_id}.php",
             f"{origin}/plus/stream-{channel_id}.php",
             f"{origin}/casting/stream-{channel_id}.php",
@@ -1032,12 +1032,8 @@ class DLStreamsExtractor(BaseExtractor):
                 )
                 segment_ok = True
             if not segment_ok:
-                if premium_playlist_parts(stream_url) is not None and is_requested:
-                    logger.info("DLStreams: requested premium segment probe failed transiently, accepting active playlist")
-                    segment_ok = True
-                else:
-                    logger.info("DLStreams: validation of %s -> segment not ok", stream_url)
-                    return False
+                logger.info("DLStreams: validation of %s -> segment not ok", stream_url)
+                return False
             # AES key, if the variant uses one
             key_match = re.search(r'#EXT-X-KEY:[^\n]*URI="([^"]+)"', current_body)
             if key_match:
@@ -1375,16 +1371,14 @@ class DLStreamsExtractor(BaseExtractor):
                 lag, load_ratio = self._last_health
                 rank = self._player_rank(lag, load_ratio)
                 is_requested = bool(requested_player and candidate == requested_player)
-                is_premium = ("/stream/stream-" in candidate or "/watch/stream-" in candidate)
                 if (
                     candidate == sticky
                     or is_requested
-                    or (is_premium and (load_ratio is None or load_ratio <= 3.0))
                     or (not rank[0] and rank[1] <= MAX_LIVE_LAG_SECONDS)
                 ):
                     logger.info(
-                        "DLStreams: working stream found via %s (requested=%s, premium=%s, rank=%s)",
-                        candidate, is_requested, is_premium, rank,
+                        "DLStreams: working stream found via %s (requested=%s, rank=%s)",
+                        candidate, is_requested, rank,
                     )
                     self._pin_player(channel_id, candidate, requested_player=requested_player)
                     return self._build_result(stream_url, playback_headers)
