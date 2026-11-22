@@ -1349,9 +1349,8 @@ class HLSProxyStreamingMixin:
                 is_special_cdn,
                 HAS_CURL_CFFI,
             )
-            # Bounded read gap: a stalled CDN connection aborts in 10s instead
-            # of hanging until the total timeout (players retry well before).
-            segment_timeout = ClientTimeout(total=30, connect=10, sock_connect=10, sock_read=10)
+            # Bounded read gap: 20s allows high-bitrate 1080p50 segments (~8MB) to complete without premature timeouts.
+            segment_timeout = ClientTimeout(total=45, connect=10, sock_connect=10, sock_read=20)
 
             if use_curl_cffi:
                 logger.info(

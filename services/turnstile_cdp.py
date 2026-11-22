@@ -877,10 +877,32 @@ async def _drive(
                 elif method == "Target.targetInfoChanged":
                     # The OOPIF often attaches before its URL is known.
                     info = params.get("targetInfo", {})
-                    new_sid = child_sessions.get(info.get("targetId") or "")
-                    if new_sid and _is_player_target(info, iframe_host):
-                        iframe_sid = new_sid
-                        player_seen = True
+                    tid = info.get("targetId") or ""
+                    if tid and tid not in child_sessions and _is_player_target(info, iframe_host):
+                        try:
+                            attached_child = await cdp.send(
+                                "Target.attachToTarget",
+                                {"targetId": tid, "flatten": True},
+                            )
+                            new_sid = attached_child.get("sessionId")
+                            if new_sid:
+                                child_sessions[tid] = new_sid
+                                await _enable_child(new_sid)
+                                iframe_sid = new_sid
+                                player_seen = True
+                                logger.info(
+                                    "Turnstile solver: attached to player iframe on targetInfoChanged (%s)",
+                                    info.get("url"),
+                                )
+                        except Exception as e:
+                            logger.debug(
+                                "Turnstile solver: player target attach on targetInfoChanged failed: %r", e
+                            )
+                    else:
+                        new_sid = child_sessions.get(tid)
+                        if new_sid and _is_player_target(info, iframe_host):
+                            iframe_sid = new_sid
+                            player_seen = True
                 elif method == "Network.responseReceived":
                     url = params.get("response", {}).get("url", "")
                     if esid == sid and server_date is None:
