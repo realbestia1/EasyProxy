@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 // Headless Cinejoy stream resolver.
-// Uses Node's native WebAssembly and webcrypto to call Cinejoy's gateway (api.wing.st).
+// Uses Node's native WebAssembly and webcrypto to call Cinejoy's gateway (api2.wing.st).
 
 import { webcrypto } from "node:crypto";
 
@@ -30,7 +30,8 @@ if (!input) {
   process.exit(2);
 }
 
-const API_URL = "https://api.wing.st";
+const API_URL = "https://api2.wing.st";
+const SUBS_URL = "https://subs2.wing.st";
 const WASM_URL = `${API_URL}/crush.wasm`;
 const BASE_URL = (() => {
   try {
@@ -249,6 +250,61 @@ function sanitizeSubtitles(entry) {
   return entries;
 }
 
+// Cinejoy's subtitle index (subs2.wing.st) is separate from the gateway:
+// {total, subtitles:[{language, url, ...}]}, one SRT per release. Keep the
+// first entry per language, the API order is the only signal we have.
+async function fetchSubtitleList(target) {
+  const params = new URLSearchParams({ type: target.type === "movie" ? "movie" : "tv", tmdb: String(target.tmdbId) });
+  if (target.type !== "movie") {
+    params.set("season", String(target.season || 1));
+    params.set("episode", String(target.episode || 1));
+  }
+  try {
+    const res = await fetchImpl(`${SUBS_URL}/subtitles?${params}`, fetchOptions({
+      headers: { "User-Agent": UA, Referer: `${BASE_URL}/`, Origin: BASE_URL, Accept: "application/json" },
+      signal: AbortSignal.timeout(15000),
+    }));
+    if (!res.ok) {
+      log(`Subtitles HTTP ${res.status}`);
+      return [];
+    }
+    const payload = await res.json();
+    const items = Array.isArray(payload?.subtitles) ? payload.subtitles : [];
+    const entries = [];
+    const seenUrls = new Set();
+    const seenLanguages = new Set();
+    for (const item of items) {
+      if (!item || typeof item !== "object") continue;
+      const url = typeof item.url === "string" ? item.url.trim() : "";
+      if (!/^https?:\/\//i.test(url)) continue;
+      const language = String(item.language || "").trim().slice(0, 16);
+      if (!language || seenLanguages.has(language) || seenUrls.has(url)) continue;
+      seenLanguages.add(language);
+      seenUrls.add(url);
+      entries.push({ display: language, language, url });
+      if (entries.length >= 80) break;
+    }
+    return entries;
+  } catch (err) {
+    log("Subtitles fetch error:", describeError(err));
+    return [];
+  }
+}
+
+async function mergeSubtitles(entry, target) {
+  const entries = sanitizeSubtitles(entry);
+  const seenUrls = new Set(entries.map((e) => e.url));
+  const seenLanguages = new Set(entries.map((e) => e.language).filter(Boolean));
+  for (const item of await fetchSubtitleList(target)) {
+    if (seenUrls.has(item.url) || seenLanguages.has(item.language)) continue;
+    seenUrls.add(item.url);
+    seenLanguages.add(item.language);
+    entries.push(item);
+    if (entries.length >= 80) break;
+  }
+  return entries;
+}
+
 async function getServers() {
   const res = await fetchImpl(`${API_URL}/servers`, fetchOptions({
     headers: { "User-Agent": UA, Referer: `${BASE_URL}/`, Origin: BASE_URL },
@@ -360,7 +416,7 @@ async function resolve() {
         },
         server: server.name,
         target,
-        subtitles: sanitizeSubtitles(primaryEntry),
+        subtitles: await mergeSubtitles(primaryEntry, target),
       };
     } catch (err) {
       log(`Server ${server.name} error:`, err.message);
