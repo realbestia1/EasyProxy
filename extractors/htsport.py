@@ -1,6 +1,6 @@
-"""HTSport extractor (htsport.info / htsport.cc).
+"""HTSport extractor (htsport.me / htsport.info / htsport.cc).
 
-Parses channel and event pages on htsport.info (e.g. sportunohd.htm, calciohd.htm),
+Parses channel and event pages on htsport.me (e.g. sportunohd.htm, calciohd.htm),
 extracts the embedded player iframe and delegates resolution to the appropriate
 extractor (Matchora, DLStreams, Freeshot/WideIPTV, etc.).
 """
@@ -24,12 +24,12 @@ from extractors.matchora import MatchoraExtractor
 
 logger = logging.getLogger(__name__)
 
-SITE_URL = "https://htsport.info"
+SITE_URL = "https://htsport.me"
 PAGE_CACHE_TTL = 180  # 3 minuti di cache
 
 
 class HTSportExtractor(BaseExtractor):
-    """Extractor per pagine ed eventi di htsport.info."""
+    """Extractor per pagine ed eventi di htsport.me."""
 
     # DLStreams delegation can take up to 120s; give the whole chain headroom.
     REQUEST_TIMEOUT_TOTAL = 130
@@ -39,7 +39,7 @@ class HTSportExtractor(BaseExtractor):
         self.base_headers = {
             "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
             "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
-            "Referer": "https://htsport.info/",
+            "Referer": "https://htsport.me/",
         }
         self.proxies = proxies or _cfg.GLOBAL_PROXIES
         self._cache: Dict[str, tuple[float, dict]] = {}

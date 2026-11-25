@@ -33,7 +33,7 @@ class MatchoraExtractor(BaseExtractor):
         self.base_headers = {
             "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
             "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
-            "Referer": "https://htsport.info/",
+            "Referer": "https://htsport.me/",
         }
         self.mediaflow_endpoint = "hls_manifest_proxy"
         self.proxies = proxies or _cfg.GLOBAL_PROXIES
@@ -81,7 +81,7 @@ class MatchoraExtractor(BaseExtractor):
         session = await self._get_session(embed_url)
 
         headers = dict(self.base_headers)
-        headers["Referer"] = kwargs.get("referer") or "https://htsport.info/"
+        headers["Referer"] = kwargs.get("referer") or "https://htsport.me/"
 
         logger.debug("Matchora: fetch embed page %s (ch=%s)", embed_url, ch_id)
         try:

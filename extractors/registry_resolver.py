@@ -305,7 +305,7 @@ _ENTRIES = (
            url_proxy="url", host_proxy="url", key_name="matchora",
            host_build_name="matchora", proxy_extractor_name="matchora"),
     _Entry("htsport", HTSportExtractor, hosts=("htsport", "hattrick"),
-           match=_any_of(_sub("htsport.info", "htsport.cc", "htsport.org", lower=True),
+           match=_any_of(_sub("htsport.me", "htsport.info", "htsport.cc", "htsport.org", lower=True),
                          lambda url, parsed: url.lower().startswith("htsport://")),
            url_proxy="url", host_proxy="url", key_name="htsport",
            host_build_name="htsport", proxy_extractor_name="htsport"),

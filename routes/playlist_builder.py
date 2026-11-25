@@ -149,7 +149,7 @@ class PlaylistBuilder:
                 elif ('scorezonetv.live' in logical_line or logical_line.startswith('scorezone://')) and '/extractor/' not in logical_line:
                     encoded_url = urllib.parse.quote(logical_line, safe='')
                     processed_url_content = f"{base_url}/extractor/video.m3u8?host=scorezone&redirect_stream=true&d={encoded_url}"
-                elif ('htsport.info' in logical_line or 'htsport.cc' in logical_line or logical_line.startswith('htsport://')) and '/extractor/' not in logical_line:
+                elif ('htsport.me' in logical_line or 'htsport.info' in logical_line or 'htsport.cc' in logical_line or logical_line.startswith('htsport://')) and '/extractor/' not in logical_line:
                     encoded_url = urllib.parse.quote(logical_line, safe='')
                     processed_url_content = f"{base_url}/extractor/video.m3u8?host=htsport&redirect_stream=true&d={encoded_url}"
                 elif ('matchora.pro' in logical_line or 'matchora.to' in logical_line or logical_line.startswith('matchora://')) and '/extractor/' not in logical_line:
