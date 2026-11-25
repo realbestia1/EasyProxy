@@ -527,6 +527,18 @@
 
 
 
+        <!-- Home Page -->
+        <div class="card">
+            <h2><span class="icon">🏠</span> Home Page</h2>
+            <div class="row">
+                <label>Return 404 for home page</label>
+                <div id="home-toggle" class="toggle" onclick="toggleHomePage()"></div>
+                <span id="home-label" class="badge badge-off">OFF</span>
+            </div>
+            <p class="help-text">When ON, <code>/</code> returns 404 Not Found. The admin panel (<code>/admin</code>) and all API/proxy routes stay available.</p>
+            <p class="help-text" id="home-env-note" style="display:none">Env default from <code>DISABLE_HOME_PAGE</code>. Saving this toggle overrides it.</p>
+        </div>
+
         <!-- DVR -->
         <div class="card">
             <h2><span class="icon">📹</span> DVR Recording</h2>
@@ -885,6 +897,8 @@ async function loadConfig() {
 
 
         setToggle('dvr-toggle', config.dvr_enabled || false);
+        setToggle('home-toggle', config.disable_home_page_effective ?? false);
+        document.getElementById('home-env-note').style.display = config.disable_home_page_env ? '' : 'none';
         document.getElementById('dvr-max').value = config.max_recording_duration || 28800;
         document.getElementById('dvr-retention').value = config.recordings_retention_days || 7;
         document.getElementById('proxy-test-timeout').value = config.proxy_test_timeout || 10;
@@ -1278,6 +1292,13 @@ async function toggleDvr() {
     const newVal = !config.dvr_enabled;
     await saveField('dvr_enabled', newVal);
     setToggle('dvr-toggle', newVal);
+}
+
+async function toggleHomePage() {
+    const newVal = !(config.disable_home_page_effective ?? false);
+    await saveField('disable_home_page', newVal);
+    config.disable_home_page_effective = newVal;
+    setToggle('home-toggle', newVal);
 }
 
 </script>

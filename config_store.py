@@ -83,6 +83,7 @@ DEFAULT_CONFIG = {
     "max_res_extractors": [],
     "max_res_mpd": False,
     "max_res_hls": False,
+    "disable_home_page": None,
     "dvr_enabled": False,
     "recordings_dir": DEFAULT_RECORDINGS_DIR,
     "max_recording_duration": 28800,
@@ -159,6 +160,18 @@ def set(key, value):
             _load()
         _config_data[key] = value
         _save()
+
+
+def home_page_disabled() -> bool:
+    """Public home page 404 switch: the admin value wins, DISABLE_HOME_PAGE is
+    only the default while the stored admin value is unset (None)."""
+    stored = get("disable_home_page", None)
+    if stored is not None:
+        return bool(stored)
+    raw = os.environ.get("DISABLE_HOME_PAGE")
+    if raw is not None and raw.strip():
+        return raw.strip().lower() in {"1", "true", "yes", "on"}
+    return False
 
 
 def get_all():

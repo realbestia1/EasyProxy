@@ -153,6 +153,8 @@ class HLSProxyPagesMixin:
 
     async def handle_root(self, request):
         """Serve la pagina principale index.html."""
+        if config_store.home_page_disabled():
+            return web.Response(status=404, text="404: Not Found", headers={"Cache-Control": "no-store"})
         try:
             # Refresh version on each page load
             await self._refresh_latest_version()
@@ -659,6 +661,9 @@ class HLSProxyPagesMixin:
         config = config_store.get_all()
         config["api_password_configured"] = bool(API_PASSWORD)
         config["admin_password_configured"] = bool(ADMIN_PASSWORD)
+        raw_home_env = os.environ.get("DISABLE_HOME_PAGE")
+        config["disable_home_page_env"] = bool(raw_home_env is not None and raw_home_env.strip())
+        config["disable_home_page_effective"] = config_store.home_page_disabled()
         config["app_version"] = APP_VERSION
         config["warp_status"] = await self.get_warp_status()
         config["warp_ip"] = getattr(self, '_warp_ip', '')
@@ -693,6 +698,7 @@ class HLSProxyPagesMixin:
             "global_proxies", "transport_routes", "extractor_proxies",
             "warp_off_extractors", "proxy_off_extractors", "warp_exclude_domains_custom", "proxy_exclude_domains",
             "max_res_extractors", "max_res_mpd", "max_res_hls",
+            "disable_home_page",
             "dvr_enabled",
             "max_recording_duration", "recordings_retention_days",
             "proxy_test_timeout", "proxy_test_concurrency",
