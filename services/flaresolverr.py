@@ -688,6 +688,11 @@ class FlareSolverrManager:
         # FlareSolverr can leave Chromium, chromedriver, or Xvfb outside its
 
         # process group (or reparented after a cancelled solve).
+        # The Turnstile solver's private Xvfb is ours, not an orphan: killing it
+        # mid-solve crashes its Chromium and breaks DLStreams extractions.
+        from services import turnstile_cdp
+
+        solver_xvfb_pid = getattr(turnstile_cdp._XVFB_PROCESS, "pid", None)
 
         for candidate in psutil.process_iter(["pid", "name", "cmdline"]):
 
@@ -695,7 +700,7 @@ class FlareSolverrManager:
 
                 pid = candidate.info.get("pid")
 
-                if not pid or pid == os.getpid() or pid in tracked_procs:
+                if not pid or pid in (os.getpid(), solver_xvfb_pid) or pid in tracked_procs:
 
                     continue
 
