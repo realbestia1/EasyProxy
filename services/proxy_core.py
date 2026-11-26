@@ -534,6 +534,47 @@ class HLSProxyCoreMixin:
                 f"error={type(exc).__name__}{suffix}{down_log}"
             )
 
+    async def _probe_warp_external(self, timeout_sec: float = 3.0) -> tuple[bool, str]:
+        """Reach a non-Cloudflare host through WARP.
+
+        A degraded wireproxy keeps answering cdn-cgi/trace quickly while every
+        other new connection stalls ~12s in the handshake, so the trace probe
+        alone never triggers a reconnect.
+        """
+        url = "https://www.google.com/generate_204"
+        started = time.monotonic()
+
+        async def fetch():
+            connector = get_connector_for_proxy(
+                _shared.WARP_PROXY_URL, limit=0, health_check=True
+            )
+            async with ClientSession(
+                connector=connector, timeout=ClientTimeout(total=timeout_sec)
+            ) as session:
+                async with session.get(url) as resp:
+                    await resp.read()
+
+        task = asyncio.ensure_future(fetch())
+        # A stalled SOCKS handshake ignores both ClientTimeout and cancellation
+        # until python-socks' own 60s timeout: stop waiting, let it expire alone.
+        done, _ = await asyncio.wait({task}, timeout=timeout_sec)
+        if not done:
+            task.add_done_callback(lambda t: t.cancelled() or t.exception())
+            task.cancel()
+            return False, (
+                f"component=warp_tunnel external={url} error=TimeoutError "
+                f"after {timeout_sec:.0f}s"
+            )
+        try:
+            task.result()
+            # Any HTTP answer proves the tunnel carries external traffic.
+            return True, f"external=ok {time.monotonic() - started:.1f}s"
+        except Exception as exc:
+            return False, (
+                f"component=warp_tunnel external={url} error={type(exc).__name__} "
+                f"after {time.monotonic() - started:.1f}s"
+            )
+
     async def _warp_keepalive(self):
         """Probe WARP periodically and reconnect after consecutive failures."""
         consecutive_failures = 0
@@ -545,6 +586,8 @@ class HLSProxyCoreMixin:
                     continue
 
                 healthy, reason = await self._probe_warp(timeout_sec=12)
+                if healthy:
+                    healthy, reason = await self._probe_warp_external()
                 if healthy:
                     if consecutive_failures:
                         logger.warning(
@@ -561,6 +604,11 @@ class HLSProxyCoreMixin:
                     reason,
                 )
                 if consecutive_failures < 2:
+                    continue
+                # A slow-but-working tunnel must not be restarted every minute.
+                if "external=" in reason and time.time() - getattr(
+                    self, "_last_warp_reconnect_time", 0
+                ) < 600:
                     continue
 
                 result = await self.reconnect_warp()
