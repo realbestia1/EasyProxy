@@ -1456,6 +1456,10 @@ class HLSProxyDualMixin:
                     # HLS allows exactly one #EXTM3U, already sent above.
                     lines = lines[1:]
                 text = "\n".join(lines)
+                if request.get("sealed"):
+                    # Streamed bodies skip the sealing middleware: seal child URLs here.
+                    from services.sealed_urls import seal_urls_in_text
+                    text = seal_urls_in_text(text)
                 if text:
                     await response.write((text + "\n").encode("utf-8"))
             await response.write_eof()

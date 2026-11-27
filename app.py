@@ -16,6 +16,7 @@ sys.path.insert(0, getattr(sys, '_MEIPASS', os.path.dirname(os.path.abspath(__fi
 from services.proxy import HLSProxy
 from config import PORT, RECORDINGS_DIR, APP_VERSION
 from services.dual import service as dual_service
+from services.sealed_urls import sealed_url_middleware
 from services import extractor_subtitles
 from services import wg_tunnels
 from services import tor_proxy
@@ -45,7 +46,7 @@ def create_app():
 
     # DUAL is part of the main EasyProxy process; there is no child aiohttp app.
     app = web.Application(
-        middlewares=[dual_service.dual_middleware],
+        middlewares=[sealed_url_middleware, dual_service.dual_middleware],
         client_max_size=4 * 1024 * 1024,
     )
     app.on_response_prepare.append(expose_range_headers)

@@ -900,6 +900,15 @@ def _password_matches(value, expected):
     )
 
 
+def _cookie_scope(request):
+    token = request.cookies.get("admin_token")
+    if not token:
+        return ""
+    from services.secure_state import open_state  # lazy: secure_state imports config
+    data = open_state(token, "admin-cookie")
+    return str(data.get("scope") or "") if isinstance(data, dict) else ""
+
+
 def check_password(request):
     """Verifica la password API se impostata."""
     if not API_PASSWORD:
@@ -920,7 +929,7 @@ def check_password(request):
     if ADMIN_PASSWORD and _password_matches(token, ADMIN_PASSWORD):
         return True
 
-    return False
+    return _cookie_scope(request) in ("admin", "api")
 
 
 def check_admin_password(request):
@@ -938,7 +947,7 @@ def check_admin_password(request):
             request.headers.get("x-api-password"),
             request.cookies.get("admin_token"),
         )
-    )
+    ) or _cookie_scope(request) == "admin"
 
 
 def get_client_ip(request):

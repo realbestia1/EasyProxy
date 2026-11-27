@@ -645,10 +645,11 @@ class HLSProxyPagesMixin:
             return web.json_response({"error": "Invalid password"}, status=401)
 
         resp = web.json_response({"ok": True, "scope": scope})
-        if scope == "admin":
-            resp.set_cookie("admin_token", admin_pw.decode(), httponly=True, samesite="lax", max_age=86400 * 30, path="/")
-        elif scope == "api":
-            resp.set_cookie("admin_token", api_pw.decode(), httponly=True, samesite="lax", max_age=86400 * 30, path="/")
+        if scope in ("admin", "api"):
+            # Signed session instead of the password itself, so a stolen cookie never reveals it.
+            from services.secure_state import seal_state
+            token = seal_state({"scope": scope}, "admin-cookie", 86400 * 30)
+            resp.set_cookie("admin_token", token, httponly=True, secure=True, samesite="lax", max_age=86400 * 30, path="/")
         return resp
 
     async def handle_admin_logout(self, request):
