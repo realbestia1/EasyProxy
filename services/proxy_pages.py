@@ -649,7 +649,9 @@ class HLSProxyPagesMixin:
             # Signed session instead of the password itself, so a stolen cookie never reveals it.
             from services.secure_state import seal_state
             token = seal_state({"scope": scope}, "admin-cookie", 86400 * 30)
-            resp.set_cookie("admin_token", token, httponly=True, secure=True, samesite="lax", max_age=86400 * 30, path="/")
+            # `secure` only over https: self-hosted installs open the admin at http://localhost.
+            https = request.secure or request.headers.get("X-Forwarded-Proto", "").lower() == "https"
+            resp.set_cookie("admin_token", token, httponly=True, secure=https, samesite="lax", max_age=86400 * 30, path="/")
         return resp
 
     async def handle_admin_logout(self, request):

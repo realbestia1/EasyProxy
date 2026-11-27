@@ -7,6 +7,10 @@ that one destination. Responses to sealed requests have every child URL that
 carries `api_password=` sealed the same way, so segments never show it either.
 """
 
+import base64
+import hashlib
+import hmac
+import json
 import logging
 import re
 import time
@@ -17,7 +21,8 @@ from multidict import MultiDict
 
 import config as _config
 from config import get_client_ip
-from services.secure_state import open_state, seal_state
+from Crypto.Cipher import AES
+from services.secure_state import open_state
 
 logger = logging.getLogger(__name__)
 
@@ -28,7 +33,7 @@ CHILD_MAX_AGE = 24 * 60 * 60
 # A 7-8 character password is brute-forceable without a limit.
 FAIL_WINDOW = 10 * 60
 FAIL_LIMIT = 30
-_failures: dict[str, list] = {}
+_failures: dict[str, dict] = {}
 
 _TEXT_TYPES = ("mpegurl", "dash+xml", "json", "text/", "xml")
 # The query of any URL that carries api_password, up to a delimiter that cannot be in a URL.
@@ -36,8 +41,26 @@ _QUERY_WITH_PASSWORD = re.compile(r"\?([^\s\"'<>#]*?\bapi_password=[^\s\"'<>#]*)
 _warned_paths: set[str] = set()
 
 
+def _child_key() -> bytes:
+    # Same key as secure_state for this purpose, so open_state reads these links too.
+    return hashlib.sha256(
+        b"easyproxy-state-v1:" + PURPOSE.encode("utf-8") + b":" + str(_config.API_PASSWORD or "").encode("utf-8")
+    ).digest()
+
+
 def seal_query(pairs, max_age: int = CHILD_MAX_AGE) -> str:
-    return seal_state({"q": [[str(k), str(v)] for k, v in pairs]}, PURPOSE, max_age)
+    """Deterministic for the same pairs within a day: live playlists refresh every
+    few seconds and players restart the decoder when a segment/init URI changes."""
+    now = int(time.time())
+    exp = (now // 86400 + 1) * 86400 + max(60, int(max_age))
+    plaintext = json.dumps({"q": [[str(k), str(v)] for k, v in pairs], "exp": exp},
+                           separators=(",", ":"), ensure_ascii=False).encode("utf-8")
+    key = _child_key()
+    # Nonce derived from the plaintext (SIV-style): equal links stay equal, different ones never share a nonce.
+    nonce = hmac.new(key, plaintext, hashlib.sha256).digest()[:16]
+    cipher = AES.new(key, AES.MODE_GCM, nonce=nonce)
+    ciphertext, tag = cipher.encrypt_and_digest(plaintext)
+    return base64.urlsafe_b64encode(nonce + tag + ciphertext).decode("ascii").rstrip("=")
 
 
 def open_query(token: str):
@@ -61,7 +84,7 @@ def seal_urls_in_text(text: str) -> str:
 
 
 def _is_throttled(ip: str, now: float) -> bool:
-    hits = [t for t in _failures.get(ip, ()) if now - t < FAIL_WINDOW]
+    hits = {fp: t for fp, t in _failures.get(ip, {}).items() if now - t < FAIL_WINDOW}
     if hits:
         _failures[ip] = hits
     else:
@@ -69,8 +92,18 @@ def _is_throttled(ip: str, now: float) -> bool:
     return len(hits) >= FAIL_LIMIT
 
 
-def _record_failure(ip: str, now: float) -> None:
-    _failures.setdefault(ip, []).append(now)
+def _attempt_fingerprint(request: web.Request) -> str:
+    value = (
+        request.query.get(PARAM) or request.query.get("api_password")
+        or request.headers.get("x-api-password") or request.cookies.get("admin_token") or ""
+    )
+    return hashlib.sha256(str(value).encode("utf-8")).hexdigest()[:16]
+
+
+def _record_failure(ip: str, now: float, fingerprint: str) -> None:
+    # Counts distinct wrong secrets: a brute force tries many, while a user (or our
+    # addon server) with one stale password repeats the same one and is never blocked.
+    _failures.setdefault(ip, {})[fingerprint] = now
     if len(_failures) > 50000:  # bound memory under a distributed scan
         for key in list(_failures)[:10000]:
             _failures.pop(key, None)
@@ -108,15 +141,13 @@ async def sealed_url_middleware(request: web.Request, handler):
     if sealed:
         pairs = open_query(request.query.get(PARAM, ""))
         if pairs is None:
-            _record_failure(ip, now)
+            _record_failure(ip, now, _attempt_fingerprint(request))
             return web.json_response({"detail": "Invalid or expired link"}, status=403)
-        sealed_keys = {k for k, _ in pairs}
-        # The sealed values win; the client may only add parameters the seal does not set.
-        query = MultiDict(
-            (k, v) for k, v in request.query.items()
-            if k not in sealed_keys and k not in (PARAM, "api_password", "d", "url")
-        )
-        query.extend(pairs)
+        # Only the sealed parameters count: an added `redirect_stream=false` or
+        # similar would otherwise turn a sealed link into a way to read the source.
+        query = MultiDict(pairs)
+        if request.path.startswith("/extractor"):
+            query["redirect_stream"] = "true"
         if _config.API_PASSWORD:
             # Internal only: handlers authorise and build child URLs from it,
             # and _seal_response removes it from everything sent back.
@@ -127,7 +158,12 @@ async def sealed_url_middleware(request: web.Request, handler):
     response = await handler(request)
 
     if response.status == 401:
-        _record_failure(ip, now)
+        _record_failure(ip, now, _attempt_fingerprint(request))
     if sealed:
+        if response.status >= 400 and isinstance(response, web.Response) and not response.prepared:
+            # Error bodies may echo the upstream URL: keep them generic on sealed links.
+            headers = {k: v for k, v in response.headers.items()
+                       if k.lower() not in ("content-length", "content-type", "content-encoding")}
+            return web.json_response({"detail": "Stream unavailable"}, status=response.status, headers=headers)
         _seal_response(request, response)
     return response
