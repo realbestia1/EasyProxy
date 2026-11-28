@@ -334,6 +334,15 @@ _ENTRIES = (
                          _host_endswith("streamcorner.fun"),
                          _host_endswith("strmcrnr.st")),
            url_proxy="url", key_name="streamcorner"),
+    _Entry("abyss", AbyssExtractor,
+           hosts=("abyss", "abysscdn", "hydrax", "hydraxcdn", "short.icu", "embedplayabyss", "abyssplayer", "mload"),
+           match=_rex(
+               r"(?://|\.)(?:abysscdn\.com|hydraxcdn\.biz|short\.icu|embedplayabyss\.top|abyssplayer\.com|mload\.cam)"
+               r"(?:/\?v=|/player\.html\?v=|/)[0-9a-zA-Z_-]+",
+               re.IGNORECASE,
+           ),
+           url_proxy="url", host_proxy="url", key_name="abyss",
+           host_build_name="abyss", proxy_extractor_name="abyss"),
 )
 
 _BY_NAME = {entry.name: entry for entry in _ENTRIES}

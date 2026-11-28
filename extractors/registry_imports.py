@@ -64,6 +64,7 @@ _MODULES = (
     ("extractors.ppv", ("PPVExtractor",)),
     ("extractors.ntv", ("NTVExtractor",)),
     ("extractors.streamcorner", ("StreamcornerExtractor",)),
+    ("extractors.abyss", ("AbyssExtractor",)),
 )
 
 # Stand-ins used when extractors.ads is unavailable, so the ADS pattern users
